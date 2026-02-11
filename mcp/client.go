@@ -119,11 +119,16 @@ func NewClient(config ServerConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to start server: %w", err)
 	}
 
+	scanner := bufio.NewScanner(stdout)
+	// Increase buffer size for large responses (1MB)
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	c := &Client{
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  stdout,
-		scanner: bufio.NewScanner(stdout),
+		scanner: scanner,
 		pending: make(map[int64]chan *Response),
 	}
 
@@ -278,9 +283,19 @@ func (c *Client) readResponses() {
 			continue
 		}
 
+		// Skip lines that don't look like JSON-RPC (e.g., log output from mcp-remote)
+		if len(line) < 2 || line[0] != '{' {
+			continue
+		}
+
 		var resp Response
 		if err := json.Unmarshal(line, &resp); err != nil {
 			continue // Skip malformed responses
+		}
+
+		// Only process responses with an ID (skip notifications)
+		if resp.ID == 0 && resp.Result == nil && resp.Error == nil {
+			continue
 		}
 
 		c.pendMu.Lock()
