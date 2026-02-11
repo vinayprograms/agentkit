@@ -181,6 +181,24 @@ func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 	r.Register(&memoryRecallTool{memory: mem})
 }
 
+// SetBashChecker sets the bash security checker for the bash tool.
+// The checker performs two-step verification: deterministic denylist + LLM policy check.
+func (r *Registry) SetBashChecker(checker *policy.BashChecker) {
+	if bt, ok := r.tools["bash"].(*bashTool); ok {
+		bt.checker = checker
+	}
+}
+
+// SetBashLLMChecker sets the LLM-based policy checker for directory access.
+// This enables Step 2 of bash security checking.
+func (r *Registry) SetBashLLMChecker(llmChecker policy.LLMPolicyChecker) {
+	if bt, ok := r.tools["bash"].(*bashTool); ok {
+		if bt.checker != nil {
+			bt.checker.SetLLMChecker(llmChecker)
+		}
+	}
+}
+
 // Register adds a tool to the registry.
 func (r *Registry) Register(t Tool) {
 	r.tools[t.Name()] = t
@@ -664,7 +682,8 @@ func (t *lsTool) Execute(ctx context.Context, args map[string]interface{}) (inte
 
 // bashTool implements the bash tool (R5.3.1).
 type bashTool struct {
-	policy *policy.Policy
+	policy  *policy.Policy
+	checker *policy.BashChecker
 }
 
 func (t *bashTool) Name() string { return "bash" }
@@ -692,7 +711,18 @@ func (t *bashTool) Execute(ctx context.Context, args map[string]interface{}) (in
 		return nil, fmt.Errorf("command is required")
 	}
 
-	// Check policy
+	// Step 1: BashChecker - deterministic denylist + LLM policy check
+	if t.checker != nil {
+		allowed, reason, err := t.checker.Check(ctx, command)
+		if err != nil {
+			return nil, fmt.Errorf("bash security check error: %w", err)
+		}
+		if !allowed {
+			return nil, fmt.Errorf("command blocked: %s", reason)
+		}
+	}
+
+	// Step 2: Legacy policy check (path-based, workspace escape detection)
 	allowed, reason := t.policy.CheckCommand(t.Name(), command)
 	if !allowed {
 		return nil, fmt.Errorf("policy denied: %s", reason)
