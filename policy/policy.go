@@ -33,8 +33,9 @@ type ToolPolicy struct {
 	Enabled      bool
 	Allow        []string
 	Deny         []string
-	Allowlist    []string // for bash
-	Denylist     []string // for bash
+	Allowlist    []string // for bash: legacy command allowlist
+	Denylist     []string // for bash: additional commands to block
+	AllowedDirs  []string // for bash: directories agent can access
 	AllowDomains []string // for web tools
 	RateLimit    int      // requests per minute
 	Sandbox      string   // for bash: "none", "bwrap", "docker" (default: none)
@@ -70,6 +71,7 @@ type tomlTool struct {
 	Deny         []string `toml:"deny"`
 	Allowlist    []string `toml:"allowlist"`
 	Denylist     []string `toml:"denylist"`
+	AllowedDirs  []string `toml:"allowed_dirs"`
 	AllowDomains []string `toml:"allow_domains"`
 	RateLimit    int      `toml:"rate_limit"`
 	Sandbox      string   `toml:"sandbox"` // "none", "bwrap", "docker"
@@ -164,6 +166,9 @@ func Parse(content string) (*Policy, error) {
 		}
 		if v, ok := toolMap["denylist"].([]interface{}); ok {
 			tp.Denylist = toStringSlice(v)
+		}
+		if v, ok := toolMap["allowed_dirs"].([]interface{}); ok {
+			tp.AllowedDirs = toStringSlice(v)
 		}
 		if v, ok := toolMap["allow_domains"].([]interface{}); ok {
 			tp.AllowDomains = toStringSlice(v)
