@@ -320,6 +320,29 @@ func (p *Policy) CheckCommand(tool, cmd string) (bool, string) {
 		return false, fmt.Sprintf("tool %s is disabled", tool)
 	}
 
+	// Check for workspace escape attempts
+	if p.Workspace != "" && p.Workspace != "." {
+		// Detect absolute paths outside workspace
+		if strings.Contains(cmd, " /") && !strings.Contains(cmd, " "+p.Workspace) {
+			// Allow common system paths that are read-only
+			allowedPaths := []string{"/dev/null", "/tmp", "/usr/bin", "/bin"}
+			hasAllowed := false
+			for _, allowed := range allowedPaths {
+				if strings.Contains(cmd, allowed) {
+					hasAllowed = true
+					break
+				}
+			}
+			if !hasAllowed {
+				return false, "command contains absolute path outside workspace"
+			}
+		}
+		// Detect parent directory traversal
+		if strings.Contains(cmd, "../") {
+			return false, "command contains parent directory traversal (../)"
+		}
+	}
+
 	// Check denylist first (deny wins)
 	for _, pattern := range tp.Denylist {
 		if matchCommand(pattern, cmd) {
