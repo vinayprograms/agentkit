@@ -37,6 +37,7 @@ type ToolPolicy struct {
 	Denylist     []string // for bash
 	AllowDomains []string // for web tools
 	RateLimit    int      // requests per minute
+	Sandbox      string   // for bash: "none", "bwrap", "docker" (default: none)
 }
 
 // MCPPolicy controls MCP tool access.
@@ -71,6 +72,7 @@ type tomlTool struct {
 	Denylist     []string `toml:"denylist"`
 	AllowDomains []string `toml:"allow_domains"`
 	RateLimit    int      `toml:"rate_limit"`
+	Sandbox      string   `toml:"sandbox"` // "none", "bwrap", "docker"
 }
 
 // New creates a new policy with defaults.
@@ -168,6 +170,9 @@ func Parse(content string) (*Policy, error) {
 		}
 		if v, ok := toolMap["rate_limit"].(int64); ok {
 			tp.RateLimit = int(v)
+		}
+		if v, ok := toolMap["sandbox"].(string); ok {
+			tp.Sandbox = v
 		}
 
 		pol.Tools[key] = tp

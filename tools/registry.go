@@ -705,8 +705,48 @@ func (t *bashTool) Execute(ctx context.Context, args map[string]interface{}) (in
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	cmd.Dir = t.policy.Workspace
+	// Get sandbox mode from policy
+	bashPolicy := t.policy.GetToolPolicy(t.Name())
+	sandbox := bashPolicy.Sandbox
+
+	var cmd *exec.Cmd
+	switch sandbox {
+	case "bwrap":
+		// bubblewrap sandbox - restrict filesystem access to workspace only
+		cmd = exec.CommandContext(ctx, "bwrap",
+			"--ro-bind", "/usr", "/usr",
+			"--ro-bind", "/lib", "/lib",
+			"--ro-bind", "/lib64", "/lib64",
+			"--ro-bind", "/bin", "/bin",
+			"--ro-bind", "/etc/alternatives", "/etc/alternatives",
+			"--symlink", "usr/lib", "/lib",
+			"--symlink", "usr/lib64", "/lib64",
+			"--proc", "/proc",
+			"--dev", "/dev",
+			"--tmpfs", "/tmp",
+			"--bind", t.policy.Workspace, t.policy.Workspace,
+			"--chdir", t.policy.Workspace,
+			"--unshare-all",
+			"--die-with-parent",
+			"bash", "-c", command,
+		)
+	case "docker":
+		// Docker sandbox - run in minimal container
+		cmd = exec.CommandContext(ctx, "docker", "run",
+			"--rm",
+			"--network", "none",
+			"--read-only",
+			"--tmpfs", "/tmp",
+			"-v", t.policy.Workspace+":"+"/workspace",
+			"-w", "/workspace",
+			"alpine:latest",
+			"/bin/sh", "-c", command,
+		)
+	default:
+		// No sandbox - run directly (with workspace as cwd)
+		cmd = exec.CommandContext(ctx, "bash", "-c", command)
+		cmd.Dir = t.policy.Workspace
+	}
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
