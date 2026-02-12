@@ -197,6 +197,12 @@ type BashChecker struct {
 
 	// Workspace is the base working directory
 	Workspace string
+
+	// OnDecision is called after each security decision for logging/auditing.
+	// step: "deterministic" or "llm"
+	// allowed: whether the command was allowed
+	// reason: explanation (especially for blocks)
+	OnDecision func(command, step string, allowed bool, reason string)
 }
 
 // NewBashChecker creates a new bash security checker.
@@ -229,14 +235,26 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 	// Step 1: Deterministic checks
 	allowed, reason := c.checkDeterministic(command)
 	if !allowed {
+		if c.OnDecision != nil {
+			c.OnDecision(command, "deterministic", false, reason)
+		}
 		return false, reason, nil
+	}
+	if c.OnDecision != nil {
+		c.OnDecision(command, "deterministic", true, "")
 	}
 
 	// Step 2: LLM policy check (if configured)
 	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
 		allowed, reason, err := c.LLMChecker(ctx, command, c.AllowedDirs)
 		if err != nil {
+			if c.OnDecision != nil {
+				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err))
+			}
 			return false, fmt.Sprintf("LLM policy check failed: %v", err), err
+		}
+		if c.OnDecision != nil {
+			c.OnDecision(command, "llm", allowed, reason)
 		}
 		if !allowed {
 			return false, reason, nil
