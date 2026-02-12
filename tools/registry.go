@@ -1872,14 +1872,15 @@ type memoryRememberTool struct {
 func (t *memoryRememberTool) Name() string { return "memory_remember" }
 
 func (t *memoryRememberTool) Description() string {
-	return `Store observations for semantic retrieval in future sessions.
+	return `🧠 SAVE TO PERSISTENT KNOWLEDGE BASE — survives across sessions!
 
-Accepts findings, insights, and lessons in a single call:
-- findings: Raw facts discovered (e.g., "API rate limit is 100/min")
-- insights: Conclusions drawn from findings (e.g., "Should batch requests")
-- lessons: Actionable rules for future (e.g., "Always check rate limits first")
+Store important discoveries for future recall. This is NOT scratch space.
+Use for knowledge worth keeping long-term.
 
-Returns array of IDs for all stored observations.
+Categories:
+- findings: Facts discovered (e.g., "API rate limit is 100/min")
+- insights: Conclusions/decisions (e.g., "Chose PostgreSQL for JSON support")
+- lessons: Rules for future (e.g., "Always check rate limits first")
 
 Example:
   memory_remember({
@@ -1887,7 +1888,8 @@ Example:
     "insights": ["PostgreSQL chosen for JSON support"],
     "lessons": ["Always check rate limits before integration"]
   })
-  → ["obs_abc123", "obs_def456", "obs_ghi789", "obs_jkl012"]`
+
+Returns array of IDs for stored observations.`
 }
 
 func (t *memoryRememberTool) Parameters() map[string]interface{} {
@@ -2009,10 +2011,14 @@ type memoryRecallTool struct {
 func (t *memoryRecallTool) Name() string { return "memory_recall" }
 
 func (t *memoryRecallTool) Description() string {
-	return `Semantic search for relevant knowledge from past sessions.
+	return `🧠 SEARCH YOUR PERSISTENT KNOWLEDGE BASE — use BEFORE external searches!
 
-Use for: finding context, decisions, insights - search by MEANING.
-Examples: "database choice", "user's preferences", "auth architecture"
+This searches your accumulated knowledge from ALL past sessions.
+Check here FIRST before web search, file reading, or MCP calls.
+
+Search by MEANING (semantic), not exact keywords:
+- "database choice" finds "We chose PostgreSQL for JSON support"
+- "auth" finds "OAuth 2.0 with refresh tokens"
 
 Returns categorized results:
 {
