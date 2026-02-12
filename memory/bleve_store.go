@@ -582,6 +582,50 @@ func (s *BleveStore) saveKV() error {
 	return os.WriteFile(s.kvPath, data, 0644)
 }
 
+// ListAll returns all observations, optionally filtered by category.
+// If category is empty, returns all observations.
+func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) ([]ObservationItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	// Build query: MatchAll optionally filtered by category
+	var searchQuery query.Query
+	if category != "" {
+		categoryQuery := bleve.NewTermQuery(category)
+		categoryQuery.SetField("category")
+		searchQuery = categoryQuery
+	} else {
+		searchQuery = bleve.NewMatchAllQuery()
+	}
+
+	searchReq := bleve.NewSearchRequest(searchQuery)
+	searchReq.Size = limit
+	searchReq.Fields = []string{"content", "category", "source", "created_at"}
+
+	result, err := s.index.Search(searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+
+	items := make([]ObservationItem, 0, len(result.Hits))
+	for _, hit := range result.Hits {
+		item := ObservationItem{ID: hit.ID}
+		if v, ok := hit.Fields["content"].(string); ok {
+			item.Content = v
+		}
+		if v, ok := hit.Fields["category"].(string); ok {
+			item.Category = v
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
 // RebuildSemanticGraph rebuilds the semantic graph from all indexed documents.
 func (s *BleveStore) RebuildSemanticGraph(ctx context.Context) error {
 	s.mu.Lock()
