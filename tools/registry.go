@@ -1411,21 +1411,22 @@ func (t *scratchpadListTool) Description() string {
 	if t.persisted {
 		persistence = "PERSISTENT (survives runs)"
 	}
-	return fmt.Sprintf(`List keys in scratchpad, optionally filtered by prefix.
+	return fmt.Sprintf(`List keys in scratchpad, optionally filtered by substring.
 
 ⚠️ %s
 
 Use for: discovering what's stored in scratchpad.
-Example: scratchpad_list("step") → ["step1_output", "step2_output"]`, persistence)
+Example: scratchpad_list("") → all keys
+Example: scratchpad_list("api") → ["api_endpoint", "user_api_key"]`, persistence)
 }
 
 func (t *scratchpadListTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"prefix": map[string]interface{}{
+			"filter": map[string]interface{}{
 				"type":        "string",
-				"description": "Optional prefix to filter keys",
+				"description": "Optional substring to filter keys (case-insensitive)",
 			},
 		},
 		"required": []string{},
@@ -1433,12 +1434,18 @@ func (t *scratchpadListTool) Parameters() map[string]interface{} {
 }
 
 func (t *scratchpadListTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	prefix := ""
-	if p, ok := args["prefix"].(string); ok {
-		prefix = p
+	filter := ""
+	if f, ok := args["filter"].(string); ok {
+		filter = f
+	}
+	// Also accept "prefix" for backward compatibility
+	if filter == "" {
+		if p, ok := args["prefix"].(string); ok {
+			filter = p
+		}
 	}
 
-	keys, err := t.store.List(prefix)
+	keys, err := t.store.List(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,10 +1554,11 @@ func (s *FileMemoryStore) Set(key, value string) error {
 	return os.WriteFile(s.path, data, 0644)
 }
 
-func (s *FileMemoryStore) List(prefix string) ([]string, error) {
+func (s *FileMemoryStore) List(filter string) ([]string, error) {
 	var keys []string
+	filterLower := strings.ToLower(filter)
 	for k := range s.data {
-		if prefix == "" || strings.HasPrefix(k, prefix) {
+		if filter == "" || strings.Contains(strings.ToLower(k), filterLower) {
 			keys = append(keys, k)
 		}
 	}
@@ -1593,10 +1601,11 @@ func (s *InMemoryStore) Set(key, value string) error {
 	return nil
 }
 
-func (s *InMemoryStore) List(prefix string) ([]string, error) {
+func (s *InMemoryStore) List(filter string) ([]string, error) {
 	var keys []string
+	filterLower := strings.ToLower(filter)
 	for k := range s.data {
-		if prefix == "" || strings.HasPrefix(k, prefix) {
+		if filter == "" || strings.Contains(strings.ToLower(k), filterLower) {
 			keys = append(keys, k)
 		}
 	}
