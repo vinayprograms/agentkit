@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
@@ -29,6 +30,7 @@ type TriageRequest struct {
 type TriageResult struct {
 	Suspicious bool
 	Reason     string
+	LatencyMs  int64 // Time taken for triage LLM call
 }
 
 // Evaluate asks the cheap model whether the tool call appears influenced by injection.
@@ -40,18 +42,24 @@ func (t *Triage) Evaluate(ctx context.Context, req TriageRequest) (*TriageResult
 		{Role: "user", Content: prompt},
 	}
 
+	start := time.Now()
 	resp, err := t.provider.Chat(ctx, llm.ChatRequest{
 		Messages: messages,
 	})
+	latencyMs := time.Since(start).Milliseconds()
+	
 	if err != nil {
 		// Fail-safe: if triage fails, assume suspicious
 		return &TriageResult{
 			Suspicious: true,
 			Reason:     fmt.Sprintf("triage error: %v", err),
+			LatencyMs:  latencyMs,
 		}, nil
 	}
 
-	return t.parseResponse(resp.Content), nil
+	result := t.parseResponse(resp.Content)
+	result.LatencyMs = latencyMs
+	return result, nil
 }
 
 func (t *Triage) buildPrompt(req TriageRequest) string {

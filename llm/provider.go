@@ -45,6 +45,7 @@ type ChatResponse struct {
 	InputTokens  int                `json:"input_tokens"`
 	OutputTokens int                `json:"output_tokens"`
 	Model        string             `json:"model"`
+	TTFTMs       int64              `json:"ttft_ms,omitempty"` // Time to first token in milliseconds
 }
 
 // Provider is the interface for LLM providers.

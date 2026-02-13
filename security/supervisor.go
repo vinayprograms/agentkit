@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
@@ -39,6 +40,7 @@ type SupervisionResult struct {
 	Verdict    Verdict
 	Reason     string
 	Correction string
+	LatencyMs  int64 // Time taken for supervisor LLM call
 }
 
 // Verdict is the security supervisor's decision.
@@ -65,18 +67,24 @@ func (s *SecuritySupervisor) Evaluate(ctx context.Context, req SupervisionReques
 		{Role: "user", Content: prompt},
 	}
 
+	start := time.Now()
 	resp, err := s.provider.Chat(ctx, llm.ChatRequest{
 		Messages: messages,
 	})
+	latencyMs := time.Since(start).Milliseconds()
+	
 	if err != nil {
 		// Fail-safe: if supervision fails, deny
 		return &SupervisionResult{
-			Verdict: VerdictDeny,
-			Reason:  fmt.Sprintf("supervision error: %v", err),
+			Verdict:   VerdictDeny,
+			Reason:    fmt.Sprintf("supervision error: %v", err),
+			LatencyMs: latencyMs,
 		}, nil
 	}
 
-	return s.parseResponse(resp.Content), nil
+	result := s.parseResponse(resp.Content)
+	result.LatencyMs = latencyMs
+	return result, nil
 }
 
 // buildResearchSystemPrompt creates a system prompt appropriate for security research mode.

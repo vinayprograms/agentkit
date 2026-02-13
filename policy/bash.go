@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // BannedCommands is the hardcoded list of commands that are always blocked.
@@ -202,7 +203,8 @@ type BashChecker struct {
 	// step: "deterministic" or "llm"
 	// allowed: whether the command was allowed
 	// reason: explanation (especially for blocks)
-	OnDecision func(command, step string, allowed bool, reason string)
+	// durationMs: time taken for the check (0 for deterministic, >0 for LLM)
+	OnDecision func(command, step string, allowed bool, reason string, durationMs int64)
 }
 
 // NewBashChecker creates a new bash security checker.
@@ -236,25 +238,27 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 	allowed, reason := c.checkDeterministic(command)
 	if !allowed {
 		if c.OnDecision != nil {
-			c.OnDecision(command, "deterministic", false, reason)
+			c.OnDecision(command, "deterministic", false, reason, 0)
 		}
 		return false, reason, nil
 	}
 	if c.OnDecision != nil {
-		c.OnDecision(command, "deterministic", true, "")
+		c.OnDecision(command, "deterministic", true, "", 0)
 	}
 
 	// Step 2: LLM policy check (if configured)
 	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
+		start := time.Now()
 		allowed, reason, err := c.LLMChecker(ctx, command, c.AllowedDirs)
+		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
 			if c.OnDecision != nil {
-				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err))
+				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs)
 			}
 			return false, fmt.Sprintf("LLM policy check failed: %v", err), err
 		}
 		if c.OnDecision != nil {
-			c.OnDecision(command, "llm", allowed, reason)
+			c.OnDecision(command, "llm", allowed, reason, durationMs)
 		}
 		if !allowed {
 			return false, reason, nil
