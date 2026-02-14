@@ -191,3 +191,17 @@ func (a Args) Has(key string) bool {
 func (a Args) Raw(key string) interface{} {
 	return a[key]
 }
+
+// filterNonEmpty returns a slice with empty strings removed.
+func filterNonEmpty(slice []string) []string {
+	if slice == nil {
+		return nil
+	}
+	result := make([]string, 0, len(slice))
+	for _, s := range slice {
+		if s != "" {
+			result = append(result, s)
+		}
+	}
+	return result
+}

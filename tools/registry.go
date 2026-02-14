@@ -542,10 +542,11 @@ func (t *globTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *globTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok {
-		return nil, fmt.Errorf("pattern is required")
+func (t *globTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	pattern, err := args.String("pattern")
+	if err != nil {
+		return nil, err
 	}
 
 	matches, err := filepath.Glob(pattern)
@@ -600,14 +601,15 @@ type GrepMatch struct {
 	Content string `json:"content"`
 }
 
-func (t *grepTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok {
-		return nil, fmt.Errorf("pattern is required")
+func (t *grepTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	pattern, err := args.String("pattern")
+	if err != nil {
+		return nil, err
 	}
-	path, ok := args["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("path is required")
+	path, err := args.String("path")
+	if err != nil {
+		return nil, err
 	}
 
 	// Check policy for the root path
@@ -701,10 +703,11 @@ func (t *lsTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *lsTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	path, ok := args["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("path is required")
+func (t *lsTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	path, err := args.String("path")
+	if err != nil {
+		return nil, err
 	}
 
 	entries, err := os.ReadDir(path)
@@ -882,15 +885,16 @@ func (t *webFetchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *webFetchTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	url, ok := args["url"].(string)
-	if !ok {
-		return nil, fmt.Errorf("url is required")
+func (t *webFetchTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	url, err := args.String("url")
+	if err != nil {
+		return nil, err
 	}
 
-	question, ok := args["question"].(string)
-	if !ok {
-		return nil, fmt.Errorf("question is required")
+	question, err := args.String("question")
+	if err != nil {
+		return nil, err
 	}
 
 	// Extract domain from URL for policy check
@@ -1361,10 +1365,11 @@ func (t *scratchpadReadTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *scratchpadReadTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	key, ok := args["key"].(string)
-	if !ok {
-		return nil, fmt.Errorf("key is required")
+func (t *scratchpadReadTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	key, err := args.String("key")
+	if err != nil {
+		return nil, err
 	}
 
 	value, err := t.store.Get(key)
@@ -1420,14 +1425,15 @@ func (t *scratchpadWriteTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *scratchpadWriteTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	key, ok := args["key"].(string)
-	if !ok {
-		return nil, fmt.Errorf("key is required")
+func (t *scratchpadWriteTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	key, err := args.String("key")
+	if err != nil {
+		return nil, err
 	}
-	value, ok := args["value"].(string)
-	if !ok {
-		return nil, fmt.Errorf("value is required")
+	value, err := args.String("value")
+	if err != nil {
+		return nil, err
 	}
 
 	if err := t.store.Set(key, value); err != nil {
@@ -1471,16 +1477,12 @@ func (t *scratchpadListTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *scratchpadListTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	filter := ""
-	if f, ok := args["filter"].(string); ok {
-		filter = f
-	}
+func (t *scratchpadListTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	filter := args.StringOr("filter", "")
 	// Also accept "prefix" for backward compatibility
 	if filter == "" {
-		if p, ok := args["prefix"].(string); ok {
-			filter = p
-		}
+		filter = args.StringOr("prefix", "")
 	}
 
 	keys, err := t.store.List(filter)
@@ -1527,10 +1529,11 @@ func (t *scratchpadSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *scratchpadSearchTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	query, ok := args["query"].(string)
-	if !ok {
-		return nil, fmt.Errorf("query is required")
+func (t *scratchpadSearchTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	query, err := args.String("query")
+	if err != nil {
+		return nil, err
 	}
 
 	results, err := t.store.Search(query)
@@ -1721,27 +1724,19 @@ func (t *spawnAgentTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *spawnAgentTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	role, ok := args["role"].(string)
-	if !ok {
-		return nil, fmt.Errorf("role is required")
+func (t *spawnAgentTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	role, err := args.String("role")
+	if err != nil {
+		return nil, err
 	}
-	task, ok := args["task"].(string)
-	if !ok {
-		return nil, fmt.Errorf("task is required")
+	task, err := args.String("task")
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse optional outputs
-	var outputs []string
-	if outputsRaw, ok := args["outputs"]; ok {
-		if outputsList, ok := outputsRaw.([]interface{}); ok {
-			for _, o := range outputsList {
-				if s, ok := o.(string); ok {
-					outputs = append(outputs, s)
-				}
-			}
-		}
-	}
+	outputs := args.StringSliceOr("outputs", nil)
 
 	if t.spawner == nil {
 		return nil, fmt.Errorf("spawn_agent not available (no spawner configured)")
@@ -1816,12 +1811,12 @@ type agentResult struct {
 	err    error
 }
 
-func (t *spawnAgentsTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+func (t *spawnAgentsTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
 	if t.spawner == nil {
 		return nil, fmt.Errorf("spawn_agents not available (no spawner configured)")
 	}
 
-	agentsRaw, ok := args["agents"].([]interface{})
+	agentsRaw, ok := rawArgs["agents"].([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("agents array is required")
 	}
@@ -1838,28 +1833,20 @@ func (t *spawnAgentsTool) Execute(ctx context.Context, args map[string]interface
 	}
 	specs := make([]agentSpec, 0, len(agentsRaw))
 	for i, a := range agentsRaw {
-		agent, ok := a.(map[string]interface{})
+		agentMap, ok := a.(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("agent[%d]: invalid format", i)
 		}
-		role, ok := agent["role"].(string)
-		if !ok {
-			return nil, fmt.Errorf("agent[%d]: role is required", i)
+		agent := Args(agentMap)
+		role, err := agent.String("role")
+		if err != nil {
+			return nil, fmt.Errorf("agent[%d]: %w", i, err)
 		}
-		task, ok := agent["task"].(string)
-		if !ok {
-			return nil, fmt.Errorf("agent[%d]: task is required", i)
+		task, err := agent.String("task")
+		if err != nil {
+			return nil, fmt.Errorf("agent[%d]: %w", i, err)
 		}
-		var outputs []string
-		if outputsRaw, ok := agent["outputs"]; ok {
-			if outputsList, ok := outputsRaw.([]interface{}); ok {
-				for _, o := range outputsList {
-					if s, ok := o.(string); ok {
-						outputs = append(outputs, s)
-					}
-				}
-			}
-		}
+		outputs := agent.StringSliceOr("outputs", nil)
 		specs = append(specs, agentSpec{role: role, task: task, outputs: outputs})
 	}
 
@@ -1954,30 +1941,16 @@ func (t *memoryRememberTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRememberTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	var findings, insights, lessons []string
+func (t *memoryRememberTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	findings := args.StringSliceOr("findings", nil)
+	insights := args.StringSliceOr("insights", nil)
+	lessons := args.StringSliceOr("lessons", nil)
 
-	if f, ok := args["findings"].([]interface{}); ok {
-		for _, item := range f {
-			if s, ok := item.(string); ok && s != "" {
-				findings = append(findings, s)
-			}
-		}
-	}
-	if i, ok := args["insights"].([]interface{}); ok {
-		for _, item := range i {
-			if s, ok := item.(string); ok && s != "" {
-				insights = append(insights, s)
-			}
-		}
-	}
-	if l, ok := args["lessons"].([]interface{}); ok {
-		for _, item := range l {
-			if s, ok := item.(string); ok && s != "" {
-				lessons = append(lessons, s)
-			}
-		}
-	}
+	// Filter out empty strings
+	findings = filterNonEmpty(findings)
+	insights = filterNonEmpty(insights)
+	lessons = filterNonEmpty(lessons)
 
 	if len(findings) == 0 && len(insights) == 0 && len(lessons) == 0 {
 		return nil, fmt.Errorf("at least one finding, insight, or lesson is required")
@@ -2023,10 +1996,11 @@ func (t *memoryRetrieveTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRetrieveTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	id, ok := args["id"].(string)
-	if !ok || id == "" {
-		return nil, fmt.Errorf("id is required")
+func (t *memoryRetrieveTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	id, err := args.String("id")
+	if err != nil {
+		return nil, err
 	}
 
 	item, err := t.memory.RetrieveByID(ctx, id)
@@ -2087,16 +2061,14 @@ func (t *memoryRecallTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRecallTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	query, ok := args["query"].(string)
-	if !ok || query == "" {
-		return nil, fmt.Errorf("query is required")
+func (t *memoryRecallTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	query, err := args.String("query")
+	if err != nil {
+		return nil, err
 	}
 
-	limit := 5
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
+	limit := args.IntOr("limit", 5)
 
 	results, err := t.memory.RecallFIL(ctx, query, limit)
 	if err != nil {
