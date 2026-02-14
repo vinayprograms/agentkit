@@ -34,9 +34,11 @@ type TriageRequest struct {
 
 // TriageResult contains the triage decision.
 type TriageResult struct {
-	Suspicious bool
-	Reason     string
-	LatencyMs  int64 // Time taken for triage LLM call
+	Suspicious   bool
+	Reason       string
+	LatencyMs    int64 // Time taken for triage LLM call
+	InputTokens  int   // Input tokens used
+	OutputTokens int   // Output tokens used
 }
 
 // Evaluate asks the cheap model whether the tool call appears influenced by injection.
@@ -65,6 +67,8 @@ func (t *Triage) Evaluate(ctx context.Context, req TriageRequest) (*TriageResult
 
 	result := t.parseResponse(resp.Content)
 	result.LatencyMs = latencyMs
+	result.InputTokens = resp.InputTokens
+	result.OutputTokens = resp.OutputTokens
 	return result, nil
 }
 

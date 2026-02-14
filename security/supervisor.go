@@ -37,10 +37,12 @@ type SupervisionRequest struct {
 
 // SupervisionResult contains the supervision verdict.
 type SupervisionResult struct {
-	Verdict    Verdict
-	Reason     string
-	Correction string
-	LatencyMs  int64 // Time taken for supervisor LLM call
+	Verdict      Verdict
+	Reason       string
+	Correction   string
+	LatencyMs    int64 // Time taken for supervisor LLM call
+	InputTokens  int   // Input tokens used
+	OutputTokens int   // Output tokens used
 }
 
 // Verdict is the security supervisor's decision.
@@ -84,6 +86,8 @@ func (s *SecuritySupervisor) Evaluate(ctx context.Context, req SupervisionReques
 
 	result := s.parseResponse(resp.Content)
 	result.LatencyMs = latencyMs
+	result.InputTokens = resp.InputTokens
+	result.OutputTokens = resp.OutputTokens
 	return result, nil
 }
 

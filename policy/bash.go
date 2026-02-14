@@ -193,8 +193,8 @@ type BashChecker struct {
 
 	// LLMChecker is called for step 2 (semantic check) if step 1 passes
 	// Takes: command string, allowed_dirs []string
-	// Returns: (allowed bool, reason string, error)
-	LLMChecker func(ctx context.Context, command string, allowedDirs []string) (bool, string, error)
+	// Returns: (*BashCheckResult, error)
+	LLMChecker func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error)
 
 	// Workspace is the base working directory
 	Workspace string
@@ -204,7 +204,8 @@ type BashChecker struct {
 	// allowed: whether the command was allowed
 	// reason: explanation (especially for blocks)
 	// durationMs: time taken for the check (0 for deterministic, >0 for LLM)
-	OnDecision func(command, step string, allowed bool, reason string, durationMs int64)
+	// inputTokens, outputTokens: token counts (0 for deterministic)
+	OnDecision func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)
 }
 
 // NewBashChecker creates a new bash security checker.
@@ -219,13 +220,13 @@ func NewBashChecker(workspace string, allowedDirs, userDeniedCommands []string) 
 // LLMPolicyChecker is an interface for LLM-based policy checking.
 type LLMPolicyChecker interface {
 	// CheckBashCommand asks the LLM if a bash command violates directory policy.
-	// Returns (allowed, reason, error)
-	CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (bool, string, error)
+	// Returns (*BashCheckResult, error)
+	CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error)
 }
 
 // SetLLMChecker sets the LLM checker for directory policy verification.
 func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
-	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (bool, string, error) {
+	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
 		return checker.CheckBashCommand(ctx, command, allowedDirs)
 	}
 }
@@ -238,30 +239,30 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 	allowed, reason := c.checkDeterministic(command)
 	if !allowed {
 		if c.OnDecision != nil {
-			c.OnDecision(command, "deterministic", false, reason, 0)
+			c.OnDecision(command, "deterministic", false, reason, 0, 0, 0)
 		}
 		return false, reason, nil
 	}
 	if c.OnDecision != nil {
-		c.OnDecision(command, "deterministic", true, "", 0)
+		c.OnDecision(command, "deterministic", true, "", 0, 0, 0)
 	}
 
 	// Step 2: LLM policy check (if configured)
 	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
 		start := time.Now()
-		allowed, reason, err := c.LLMChecker(ctx, command, c.AllowedDirs)
+		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
 			if c.OnDecision != nil {
-				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs)
+				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
 			}
 			return false, fmt.Sprintf("LLM policy check failed: %v", err), err
 		}
 		if c.OnDecision != nil {
-			c.OnDecision(command, "llm", allowed, reason, durationMs)
+			c.OnDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
 		}
-		if !allowed {
-			return false, reason, nil
+		if !result.Allowed {
+			return false, result.Reason, nil
 		}
 	}
 

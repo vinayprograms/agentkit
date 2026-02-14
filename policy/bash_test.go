@@ -211,12 +211,12 @@ func TestBashChecker_PathStripping(t *testing.T) {
 
 func TestBashChecker_WithLLMChecker(t *testing.T) {
 	// Mock LLM checker that blocks access outside allowed dirs
-	mockLLMChecker := func(ctx context.Context, command string, allowedDirs []string) (bool, string, error) {
+	mockLLMChecker := func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
 		// Simple mock: block if command contains /etc or /root
 		// Allow if command contains any of the allowed dirs, or has no absolute paths
 		hasAbsPath := strings.Contains(command, " /")
 		if !hasAbsPath {
-			return true, "", nil // No absolute paths, allow
+			return &BashCheckResult{Allowed: true}, nil // No absolute paths, allow
 		}
 		
 		// Check for blocked paths
@@ -224,20 +224,20 @@ func TestBashChecker_WithLLMChecker(t *testing.T) {
 			// Make sure it's not in allowed dirs
 			for _, dir := range allowedDirs {
 				if strings.Contains(command, dir) {
-					return true, "", nil
+					return &BashCheckResult{Allowed: true}, nil
 				}
 			}
-			return false, "path outside allowed directories", nil
+			return &BashCheckResult{Allowed: false, Reason: "path outside allowed directories"}, nil
 		}
 		
 		// Check if path is in allowed dirs
 		for _, dir := range allowedDirs {
 			if strings.Contains(command, dir) {
-				return true, "", nil
+				return &BashCheckResult{Allowed: true}, nil
 			}
 		}
 		
-		return false, "path outside allowed directories", nil
+		return &BashCheckResult{Allowed: false, Reason: "path outside allowed directories"}, nil
 	}
 
 	checker := NewBashChecker("/workspace", []string{"/workspace", "/tmp"}, nil)

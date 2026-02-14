@@ -200,7 +200,7 @@ func (r *Registry) SetBashLLMChecker(llmChecker policy.LLMPolicyChecker) {
 }
 
 // SetBashSecurityCallback sets a callback for bash security decisions (for logging/auditing).
-func (r *Registry) SetBashSecurityCallback(fn func(command, step string, allowed bool, reason string, durationMs int64)) {
+func (r *Registry) SetBashSecurityCallback(fn func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
 		if bt.checker != nil {
 			bt.checker.OnDecision = fn

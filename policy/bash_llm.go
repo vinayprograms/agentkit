@@ -6,16 +6,31 @@ import (
 	"strings"
 )
 
+// GenerateResult contains the LLM response with token counts.
+type GenerateResult struct {
+	Content      string
+	InputTokens  int
+	OutputTokens int
+}
+
 // LLMProvider is the minimal interface needed for policy checking.
 type LLMProvider interface {
-	// Generate returns the LLM's response to a prompt.
-	Generate(ctx context.Context, prompt string) (string, error)
+	// Generate returns the LLM's response to a prompt with token counts.
+	Generate(ctx context.Context, prompt string) (*GenerateResult, error)
 }
 
 // SmallLLMChecker implements LLMPolicyChecker using a fast/cheap LLM.
 type SmallLLMChecker struct {
 	provider      LLMProvider
 	securityScope string
+}
+
+// BashCheckResult contains the result of a bash command check.
+type BashCheckResult struct {
+	Allowed      bool
+	Reason       string
+	InputTokens  int
+	OutputTokens int
 }
 
 // NewSmallLLMChecker creates a new LLM-based policy checker.
@@ -30,9 +45,10 @@ func (c *SmallLLMChecker) SetSecurityScope(scope string) {
 }
 
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
-func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (bool, string, error) {
+// Returns a BashCheckResult with the decision and token usage.
+func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
 	if c.provider == nil {
-		return true, "", nil // No LLM configured, allow
+		return &BashCheckResult{Allowed: true}, nil // No LLM configured, allow
 	}
 
 	// Build the prompt
@@ -93,23 +109,35 @@ Your answer:`,
 		command,
 	)
 
-	response, err := c.provider.Generate(ctx, prompt)
+	result, err := c.provider.Generate(ctx, prompt)
 	if err != nil {
-		return false, fmt.Sprintf("LLM check failed: %v", err), err
+		return &BashCheckResult{
+			Allowed: false,
+			Reason:  fmt.Sprintf("LLM check failed: %v", err),
+		}, err
 	}
 
 	// Parse response
-	response = strings.TrimSpace(response)
-	lines := strings.SplitN(response, "\n", 2)
+	content := strings.TrimSpace(result.Content)
+	lines := strings.SplitN(content, "\n", 2)
 	if len(lines) == 0 {
-		return false, "LLM returned empty response", nil
+		return &BashCheckResult{
+			Allowed:      false,
+			Reason:       "LLM returned empty response",
+			InputTokens:  result.InputTokens,
+			OutputTokens: result.OutputTokens,
+		}, nil
 	}
 
 	verdict := strings.ToUpper(strings.TrimSpace(lines[0]))
 
 	switch verdict {
 	case "ALLOW":
-		return true, "", nil
+		return &BashCheckResult{
+			Allowed:      true,
+			InputTokens:  result.InputTokens,
+			OutputTokens: result.OutputTokens,
+		}, nil
 	case "BLOCK":
 		reason := "blocked by LLM policy check"
 		if len(lines) > 1 {
@@ -121,9 +149,19 @@ Your answer:`,
 				reason = reasonLine
 			}
 		}
-		return false, reason, nil
+		return &BashCheckResult{
+			Allowed:      false,
+			Reason:       reason,
+			InputTokens:  result.InputTokens,
+			OutputTokens: result.OutputTokens,
+		}, nil
 	default:
 		// Unclear response - fail safe (block)
-		return false, fmt.Sprintf("unclear LLM response: %s", lines[0]), nil
+		return &BashCheckResult{
+			Allowed:      false,
+			Reason:       fmt.Sprintf("unclear LLM response: %s", lines[0]),
+			InputTokens:  result.InputTokens,
+			OutputTokens: result.OutputTokens,
+		}, nil
 	}
 }
