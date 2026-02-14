@@ -155,6 +155,13 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	if thinkingLevel != ThinkingOff {
 		budget := ThinkingLevelToAnthropicBudget(thinkingLevel, p.thinking.BudgetTokens)
 		if budget > 0 {
+			// Anthropic requires max_tokens > thinking.budget_tokens
+			// Add minimum 1024 for response beyond thinking
+			minMaxTokens := budget + 1024
+			if maxTokens < minMaxTokens {
+				maxTokens = minMaxTokens
+				params.MaxTokens = maxTokens
+			}
 			params.Thinking = anthropic.ThinkingConfigParamUnion{
 				OfEnabled: &anthropic.ThinkingConfigEnabledParam{
 					BudgetTokens: int64(budget),
