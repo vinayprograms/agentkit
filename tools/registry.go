@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/vinayprograms/agentkit/policy"
+	"github.com/vinayprograms/agentkit/telemetry"
 )
 
 // Tool represents an executable tool.
@@ -225,6 +226,41 @@ func (r *Registry) Has(name string) bool {
 	}
 	_, ok := r.tools[name]
 	return ok
+}
+
+// Execute executes a tool by name with tracing instrumentation.
+// Returns the result and any error from execution.
+func (r *Registry) Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
+	tool := r.Get(name)
+	if tool == nil {
+		return nil, fmt.Errorf("tool not found: %s", name)
+	}
+
+	tracer := telemetry.GetTracer()
+	ctx, span := tracer.StartToolSpan(ctx, name)
+
+	result, err := tool.Execute(ctx, args)
+
+	// Convert result to string for tracing (only used if debug enabled)
+	var resultStr string
+	if result != nil {
+		switch v := result.(type) {
+		case string:
+			resultStr = v
+		case []byte:
+			resultStr = string(v)
+		default:
+			resultStr = fmt.Sprintf("%v", v)
+		}
+	}
+
+	tracer.EndToolSpan(span, telemetry.ToolSpanOptions{
+		Tool:   name,
+		Args:   args,
+		Result: resultStr,
+	}, err)
+
+	return result, err
 }
 
 // Definitions returns LLM-facing definitions for enabled tools.

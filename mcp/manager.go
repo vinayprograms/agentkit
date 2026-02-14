@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/vinayprograms/agentkit/telemetry"
 )
 
 // Manager manages multiple MCP server connections.
@@ -116,7 +118,26 @@ func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[st
 		return nil, fmt.Errorf("server %q not connected", server)
 	}
 
-	return client.CallTool(ctx, tool, args)
+	// Add tracing
+	tracer := telemetry.GetTracer()
+	ctx, span := tracer.StartMCPSpan(ctx, server, tool)
+
+	result, err := client.CallTool(ctx, tool, args)
+
+	// Build result string for tracing
+	var resultStr string
+	if result != nil && len(result.Content) > 0 {
+		resultStr = result.Content[0].Text
+	}
+
+	tracer.EndMCPSpan(span, telemetry.MCPSpanOptions{
+		Server: server,
+		Tool:   tool,
+		Args:   args,
+		Result: resultStr,
+	}, err)
+
+	return result, err
 }
 
 // FindTool finds which server has a tool, excluding denied tools.
