@@ -356,10 +356,11 @@ func (t *readTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *readTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	path, ok := args["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("path is required")
+func (t *readTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	path, err := args.String("path")
+	if err != nil {
+		return nil, err
 	}
 
 	// Check policy
@@ -404,14 +405,15 @@ func (t *writeTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *writeTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	path, ok := args["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("path is required")
+func (t *writeTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	path, err := args.String("path")
+	if err != nil {
+		return nil, err
 	}
-	content, ok := args["content"].(string)
-	if !ok {
-		return nil, fmt.Errorf("content is required")
+	content, err := args.String("content")
+	if err != nil {
+		return nil, err
 	}
 
 	// Sanitize path to prevent traversal attacks
@@ -471,18 +473,19 @@ func (t *editTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *editTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	path, ok := args["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("path is required")
+func (t *editTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	path, err := args.String("path")
+	if err != nil {
+		return nil, err
 	}
-	old, ok := args["old"].(string)
-	if !ok {
-		return nil, fmt.Errorf("old is required")
+	old, err := args.String("old")
+	if err != nil {
+		return nil, err
 	}
-	new, ok := args["new"].(string)
-	if !ok {
-		return nil, fmt.Errorf("new is required")
+	newText, err := args.String("new")
+	if err != nil {
+		return nil, err
 	}
 
 	// Sanitize path to prevent traversal attacks
@@ -507,7 +510,7 @@ func (t *editTool) Execute(ctx context.Context, args map[string]interface{}) (in
 		return nil, fmt.Errorf("pattern not found in file")
 	}
 
-	newContent := strings.Replace(oldContent, old, new, 1)
+	newContent := strings.Replace(oldContent, old, newText, 1)
 	if err := os.WriteFile(safePath, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
@@ -750,10 +753,11 @@ func (t *bashTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *bashTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	command, ok := args["command"].(string)
-	if !ok {
-		return nil, fmt.Errorf("command is required")
+func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	command, err := args.String("command")
+	if err != nil {
+		return nil, err
 	}
 
 	// Step 1: BashChecker - deterministic denylist + LLM policy check
@@ -827,7 +831,7 @@ func (t *bashTool) Execute(ctx context.Context, args map[string]interface{}) (in
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -1023,20 +1027,18 @@ func (t *webSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *webSearchTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	query, ok := args["query"].(string)
-	if !ok {
-		return nil, fmt.Errorf("query is required")
+func (t *webSearchTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	query, err := args.String("query")
+	if err != nil {
+		return nil, err
 	}
 
-	count := 5
-	if c, ok := args["count"].(float64); ok {
-		count = int(c)
-		if count < 1 {
-			count = 1
-		} else if count > 10 {
-			count = 10
-		}
+	count := args.IntOr("count", 5)
+	if count < 1 {
+		count = 1
+	} else if count > 10 {
+		count = 10
 	}
 
 	// Rate limiting: serialize requests with cooldown to avoid hammering APIs

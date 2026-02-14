@@ -22,6 +22,10 @@ const (
 	LevelError Level = "ERROR"
 )
 
+// Fields is a map of structured log fields.
+// Type alias provides semantic clarity over raw map[string]interface{}.
+type Fields = map[string]interface{}
+
 // Logger provides structured logging to stdout.
 // This is for real-time monitoring only - forensic analysis uses session JSON.
 type Logger struct {
