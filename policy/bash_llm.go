@@ -14,12 +14,19 @@ type LLMProvider interface {
 
 // SmallLLMChecker implements LLMPolicyChecker using a fast/cheap LLM.
 type SmallLLMChecker struct {
-	provider LLMProvider
+	provider      LLMProvider
+	securityScope string
 }
 
 // NewSmallLLMChecker creates a new LLM-based policy checker.
 func NewSmallLLMChecker(provider LLMProvider) *SmallLLMChecker {
 	return &SmallLLMChecker{provider: provider}
+}
+
+// SetSecurityScope sets the security research scope for exception handling.
+// When set, the LLM is told about authorized security research activities.
+func (c *SmallLLMChecker) SetSecurityScope(scope string) {
+	c.securityScope = scope
 }
 
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
@@ -29,8 +36,22 @@ func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, 
 	}
 
 	// Build the prompt
-	prompt := fmt.Sprintf(`Analyze this bash command for directory access violations.
+	var securityContext string
+	if c.securityScope != "" {
+		securityContext = fmt.Sprintf(`
+SECURITY RESEARCH CONTEXT:
+This agent is conducting authorized security research within scope:
+"%s"
 
+Commands that fall within this research scope should be ALLOWED even if they
+access paths outside the normal allowed directories. Use judgment to determine
+if the command is part of legitimate security research.
+
+`, c.securityScope)
+	}
+
+	prompt := fmt.Sprintf(`Analyze this bash command for directory access violations.
+%s
 ALLOWED DIRECTORIES (agent can access these):
 %s
 
@@ -44,9 +65,10 @@ RULES:
 4. Commands with no file paths are OK
 5. Reading from /dev/null, /proc, /sys is OK
 6. Commands that could write, delete, or modify files outside allowed dirs are BLOCKED
+7. If a security research context is provided, commands within that scope are OK
 
 Answer with exactly one word on the first line:
-- ALLOW - if the command only accesses allowed directories
+- ALLOW - if the command only accesses allowed directories (or is within security research scope)
 - BLOCK - if the command accesses paths outside allowed directories
 
 If BLOCK, add a brief reason on the second line.
@@ -66,6 +88,7 @@ Answer: BLOCK
 Reason: Attempts to delete files in root directory
 
 Your answer:`,
+		securityContext,
 		strings.Join(allowedDirs, "\n"),
 		command,
 	)

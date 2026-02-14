@@ -11,12 +11,18 @@ import (
 
 // Triage performs Tier 2 cheap model triage on a potentially suspicious action.
 type Triage struct {
-	provider llm.Provider
+	provider      llm.Provider
+	researchScope string
 }
 
 // NewTriage creates a new triage instance with the given LLM provider.
 func NewTriage(provider llm.Provider) *Triage {
 	return &Triage{provider: provider}
+}
+
+// SetResearchScope sets the security research scope for exception handling.
+func (t *Triage) SetResearchScope(scope string) {
+	t.researchScope = scope
 }
 
 // TriageRequest contains the information needed for triage.
@@ -64,6 +70,14 @@ func (t *Triage) Evaluate(ctx context.Context, req TriageRequest) (*TriageResult
 
 func (t *Triage) buildPrompt(req TriageRequest) string {
 	var sb strings.Builder
+
+	// Add security research context if present
+	if t.researchScope != "" {
+		sb.WriteString("SECURITY RESEARCH CONTEXT:\n")
+		sb.WriteString("This agent is conducting authorized security research within scope:\n")
+		sb.WriteString(fmt.Sprintf("\"%s\"\n\n", t.researchScope))
+		sb.WriteString("Tool calls that fall within this research scope are expected and should be treated as legitimate.\n\n")
+	}
 
 	sb.WriteString("TOOL CALL:\n")
 	sb.WriteString(fmt.Sprintf("Tool: %s\n", req.ToolName))

@@ -82,6 +82,9 @@ func NewVerifier(cfg Config, sessionID string) (*Verifier, error) {
 
 	if cfg.TriageProvider != nil {
 		v.triage = NewTriage(cfg.TriageProvider)
+		if cfg.Mode == ModeResearch && cfg.ResearchScope != "" {
+			v.triage.SetResearchScope(cfg.ResearchScope)
+		}
 	}
 
 	if cfg.SupervisorProvider != nil {
