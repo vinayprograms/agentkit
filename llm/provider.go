@@ -80,13 +80,24 @@ func (c *ProviderConfig) Validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	if c.APIKey == "" {
+	// Ollama local and LM Studio don't require API keys
+	if c.APIKey == "" && !isLocalProvider(c.Provider) {
 		return fmt.Errorf("api key is required")
 	}
 	if c.MaxTokens == 0 {
 		return fmt.Errorf("max_tokens is required")
 	}
 	return nil
+}
+
+// isLocalProvider returns true if the provider is a local server that doesn't need an API key.
+func isLocalProvider(provider string) bool {
+	switch provider {
+	case "ollama", "ollama-local", "lmstudio":
+		return true
+	default:
+		return false
+	}
 }
 
 // ApplyDefaults applies default values.
