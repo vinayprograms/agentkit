@@ -5,35 +5,8 @@ import (
 	"testing"
 )
 
-func TestMockEmbedder(t *testing.T) {
-	embedder := NewMockEmbedder(384)
-
-	embeddings, err := embedder.Embed(context.Background(), []string{"hello", "world"})
-	if err != nil {
-		t.Fatalf("embed failed: %v", err)
-	}
-
-	if len(embeddings) != 2 {
-		t.Errorf("expected 2 embeddings, got %d", len(embeddings))
-	}
-
-	if len(embeddings[0]) != 384 {
-		t.Errorf("expected dimension 384, got %d", len(embeddings[0]))
-	}
-
-	// Same input should produce same embedding (deterministic)
-	embeddings2, _ := embedder.Embed(context.Background(), []string{"hello"})
-	for i := 0; i < len(embeddings[0]); i++ {
-		if embeddings[0][i] != embeddings2[0][i] {
-			t.Error("mock embedder should be deterministic")
-			break
-		}
-	}
-}
-
 func TestInMemoryStore_RememberObservation(t *testing.T) {
-	embedder := NewMockEmbedder(128)
-	store := NewInMemoryStore(embedder)
+	store := NewInMemoryStore()
 
 	ctx := context.Background()
 
@@ -84,8 +57,7 @@ func TestInMemoryStore_RememberObservation(t *testing.T) {
 }
 
 func TestInMemoryStore_RememberFIL(t *testing.T) {
-	embedder := NewMockEmbedder(128)
-	store := NewInMemoryStore(embedder)
+	store := NewInMemoryStore()
 
 	ctx := context.Background()
 
@@ -125,8 +97,7 @@ func TestInMemoryStore_RememberFIL(t *testing.T) {
 }
 
 func TestInMemoryStore_RetrieveByID(t *testing.T) {
-	embedder := NewMockEmbedder(128)
-	store := NewInMemoryStore(embedder)
+	store := NewInMemoryStore()
 
 	ctx := context.Background()
 
@@ -166,8 +137,7 @@ func TestInMemoryStore_RetrieveByID(t *testing.T) {
 }
 
 func TestInMemoryStore_RecallByCategory(t *testing.T) {
-	embedder := NewMockEmbedder(128)
-	store := NewInMemoryStore(embedder)
+	store := NewInMemoryStore()
 
 	ctx := context.Background()
 
@@ -198,8 +168,7 @@ func TestInMemoryStore_RecallByCategory(t *testing.T) {
 }
 
 func TestInMemoryStore_KeyValue(t *testing.T) {
-	embedder := NewMockEmbedder(128)
-	store := NewInMemoryStore(embedder)
+	store := NewInMemoryStore()
 
 	// Set and get
 	err := store.Set("user.name", "Alice")
@@ -234,31 +203,5 @@ func TestInMemoryStore_KeyValue(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Errorf("expected 1 result, got %d", len(results))
-	}
-}
-
-func TestCosineSimilarity(t *testing.T) {
-	// Test identical vectors
-	a := []float32{1, 0, 0}
-	b := []float32{1, 0, 0}
-	sim := cosineSimilarity(a, b)
-	if sim < 0.999 {
-		t.Errorf("identical vectors should have similarity ~1, got %f", sim)
-	}
-
-	// Test orthogonal vectors
-	a = []float32{1, 0, 0}
-	b = []float32{0, 1, 0}
-	sim = cosineSimilarity(a, b)
-	if sim > 0.001 {
-		t.Errorf("orthogonal vectors should have similarity ~0, got %f", sim)
-	}
-
-	// Test opposite vectors
-	a = []float32{1, 0, 0}
-	b = []float32{-1, 0, 0}
-	sim = cosineSimilarity(a, b)
-	if sim > -0.999 {
-		t.Errorf("opposite vectors should have similarity ~-1, got %f", sim)
 	}
 }

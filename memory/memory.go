@@ -1,4 +1,4 @@
-// Package memory provides semantic memory storage with vector embeddings.
+// Package memory provides persistent knowledge storage with BM25 text search.
 package memory
 
 import (
@@ -18,7 +18,7 @@ type Memory struct {
 // MemoryResult is a memory with relevance score from search.
 type MemoryResult struct {
 	Memory
-	Score float32 `json:"score"` // similarity score 0-1
+	Score float32 `json:"score"` // relevance score (BM25, normalized)
 }
 
 // TimeRange represents a time window for filtering.
@@ -30,7 +30,7 @@ type TimeRange struct {
 // RecallOpts configures memory recall.
 type RecallOpts struct {
 	Limit     int        // max results, default 10
-	MinScore  float32    // minimum similarity score, default 0.0
+	MinScore  float32    // minimum relevance score, default 0.0
 	TimeRange *TimeRange // optional time filter
 }
 
@@ -83,15 +83,6 @@ type FILResult struct {
 	Findings []string `json:"findings"`
 	Insights []string `json:"insights"`
 	Lessons  []string `json:"lessons"`
-}
-
-// EmbeddingProvider generates vector embeddings for text.
-type EmbeddingProvider interface {
-	// Embed generates embeddings for the given texts.
-	Embed(ctx context.Context, texts []string) ([][]float32, error)
-
-	// Dimension returns the embedding dimension.
-	Dimension() int
 }
 
 // Consolidator extracts insights from session transcripts.

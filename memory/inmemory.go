@@ -1,9 +1,8 @@
-// Package memory provides semantic memory storage with vector embeddings.
+// Package memory provides persistent knowledge storage with BM25 text search.
 package memory
 
 import (
 	"context"
-	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -12,23 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// InMemoryStore is an in-memory implementation of Store for session-scoped memory.
+// InMemoryStore is an in-memory implementation of Store for testing.
 // All data is lost when the process exits.
 type InMemoryStore struct {
 	mu       sync.RWMutex
 	memories map[string]*Memory
-	vectors  map[string][]float32
 	kv       map[string]string
-	embedder EmbeddingProvider
 }
 
 // NewInMemoryStore creates a new in-memory store.
-func NewInMemoryStore(embedder EmbeddingProvider) *InMemoryStore {
+func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{
 		memories: make(map[string]*Memory),
-		vectors:  make(map[string][]float32),
 		kv:       make(map[string]string),
-		embedder: embedder,
 	}
 }
 
@@ -36,12 +31,6 @@ func NewInMemoryStore(embedder EmbeddingProvider) *InMemoryStore {
 func (s *InMemoryStore) RememberObservation(ctx context.Context, content, category, source string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Generate embedding
-	embeddings, err := s.embedder.Embed(ctx, []string{content})
-	if err != nil {
-		return "", err
-	}
 
 	id := uuid.New().String()
 	now := time.Now()
@@ -55,8 +44,6 @@ func (s *InMemoryStore) RememberObservation(ctx context.Context, content, catego
 	}
 
 	s.memories[id] = mem
-	s.vectors[id] = embeddings[0]
-
 	return id, nil
 }
 
@@ -108,7 +95,7 @@ func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (*Observati
 	}, nil
 }
 
-// RecallByCategory searches for memories in a specific category.
+// RecallByCategory searches for memories in a specific category using simple substring match.
 func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category string, limit int) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -121,32 +108,33 @@ func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category st
 		limit = 5
 	}
 
-	// Generate query embedding
-	embeddings, err := s.embedder.Embed(ctx, []string{query})
-	if err != nil {
-		return nil, err
-	}
-	queryVec := embeddings[0]
+	queryLower := strings.ToLower(query)
 
-	// Calculate similarity for memories in category
+	// Find memories containing query terms
 	type scored struct {
 		content string
-		score   float32
+		score   int
 	}
 	var results []scored
 
-	for id, mem := range s.memories {
+	for _, mem := range s.memories {
 		if mem.Category != category {
 			continue
 		}
 
-		vec, ok := s.vectors[id]
-		if !ok {
-			continue
+		contentLower := strings.ToLower(mem.Content)
+		score := 0
+
+		// Simple scoring: count query term occurrences
+		for _, term := range strings.Fields(queryLower) {
+			if strings.Contains(contentLower, term) {
+				score++
+			}
 		}
 
-		score := cosineSimilarity(queryVec, vec)
-		results = append(results, scored{content: mem.Content, score: score})
+		if score > 0 {
+			results = append(results, scored{content: mem.Content, score: score})
+		}
 	}
 
 	// Sort by score descending
@@ -168,7 +156,7 @@ func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category st
 	return out, nil
 }
 
-// RecallFIL performs semantic search and returns results grouped as FIL.
+// RecallFIL performs search and returns results grouped as FIL.
 func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*FILResult, error) {
 	if limitPerCategory <= 0 {
 		limitPerCategory = 5
@@ -196,7 +184,7 @@ func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCat
 	}, nil
 }
 
-// Recall searches for memories similar to the query (all categories).
+// Recall searches for memories matching the query (all categories).
 func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpts) ([]MemoryResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -205,22 +193,23 @@ func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpt
 		return nil, nil
 	}
 
-	// Generate query embedding
-	embeddings, err := s.embedder.Embed(ctx, []string{query})
-	if err != nil {
-		return nil, err
-	}
-	queryVec := embeddings[0]
+	queryLower := strings.ToLower(query)
 
-	// Calculate similarity for all memories
+	// Find memories containing query terms
 	var results []MemoryResult
-	for id, mem := range s.memories {
-		vec, ok := s.vectors[id]
-		if !ok {
-			continue
+
+	for _, mem := range s.memories {
+		contentLower := strings.ToLower(mem.Content)
+		score := float32(0)
+
+		// Simple scoring: count query term occurrences
+		queryTerms := strings.Fields(queryLower)
+		for _, term := range queryTerms {
+			if strings.Contains(contentLower, term) {
+				score += 0.1
+			}
 		}
 
-		score := cosineSimilarity(queryVec, vec)
 		if score < opts.MinScore {
 			continue
 		}
@@ -232,10 +221,12 @@ func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpt
 			}
 		}
 
-		results = append(results, MemoryResult{
-			Memory: *mem,
-			Score:  score,
-		})
+		if score > 0 {
+			results = append(results, MemoryResult{
+				Memory: *mem,
+				Score:  score,
+			})
+		}
 	}
 
 	// Sort by score descending
@@ -314,24 +305,4 @@ func (s *InMemoryStore) ConsolidateSession(ctx context.Context, sessionID string
 // Close is a no-op for in-memory store.
 func (s *InMemoryStore) Close() error {
 	return nil
-}
-
-// cosineSimilarity calculates the cosine similarity between two vectors.
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) {
-		return 0
-	}
-
-	var dotProduct, normA, normB float64
-	for i := range a {
-		dotProduct += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB)))
 }

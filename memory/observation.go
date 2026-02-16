@@ -1,4 +1,4 @@
-// Package memory provides semantic memory storage with vector embeddings.
+// Package memory provides persistent knowledge storage with BM25 text search.
 package memory
 
 import (

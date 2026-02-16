@@ -1,4 +1,4 @@
-// Package memory provides semantic memory storage with vector embeddings.
+// Package memory provides persistent knowledge storage with BM25 text search.
 package memory
 
 import (
@@ -18,43 +18,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// BleveStore implements Store using Bleve for BM25 search and a semantic graph for query expansion.
+// BleveStore implements Store using Bleve for BM25 full-text search.
 type BleveStore struct {
 	mu sync.RWMutex
 
 	// Bleve index for full-text search
 	index bleve.Index
 
-	// Semantic graph for query expansion
-	graph *SemanticGraph
-
-	// KV store for photographic memory
+	// KV store for scratchpad
 	kv     map[string]string
 	kvPath string
 
 	// Base path for all storage
 	basePath string
-
-	// Embedder for semantic graph
-	embedder EmbeddingProvider
 }
 
 // BleveStoreConfig configures the Bleve-based memory store.
 type BleveStoreConfig struct {
 	// BasePath is the directory for all storage files
 	BasePath string
-
-	// Embedder for semantic graph (nil to disable)
-	Embedder EmbeddingProvider
-
-	// Embedding config for graph metadata
-	Provider string
-	Model    string
-	BaseURL  string
 }
 
 // ObservationDocument represents a stored observation in Bleve.
-// Simplified: Category determines the FIL bucket, no Tags or Importance needed.
 type ObservationDocument struct {
 	ID        string    `json:"id"`
 	Content   string    `json:"content"`
@@ -71,48 +56,29 @@ func NewBleveStore(cfg BleveStoreConfig) (*BleveStore, error) {
 	}
 
 	indexPath := filepath.Join(cfg.BasePath, "observations.bleve")
-	graphPath := filepath.Join(cfg.BasePath, "semantic_graph.json")
 	kvPath := filepath.Join(cfg.BasePath, "kv.json")
 
 	// Open or create Bleve index
 	var index bleve.Index
-	var err error
+	var idxErr error
 
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(indexPath); os.IsNotExist(statErr) {
 		// Create new index
 		indexMapping := buildIndexMapping()
-		index, err = bleve.New(indexPath, indexMapping)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create bleve index: %w", err)
-		}
+		index, idxErr = bleve.New(indexPath, indexMapping)
 	} else {
 		// Open existing index
-		index, err = bleve.Open(indexPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open bleve index: %w", err)
-		}
+		index, idxErr = bleve.Open(indexPath)
 	}
-
-	// Create semantic graph
-	graph, err := NewSemanticGraph(SemanticGraphConfig{
-		Path:     graphPath,
-		Embedder: cfg.Embedder,
-		Provider: cfg.Provider,
-		Model:    cfg.Model,
-		BaseURL:  cfg.BaseURL,
-	})
-	if err != nil {
-		index.Close()
-		return nil, fmt.Errorf("failed to create semantic graph: %w", err)
+	if idxErr != nil {
+		return nil, fmt.Errorf("failed to open bleve index: %w", idxErr)
 	}
 
 	store := &BleveStore{
 		index:    index,
-		graph:    graph,
 		kv:       make(map[string]string),
 		kvPath:   kvPath,
 		basePath: cfg.BasePath,
-		embedder: cfg.Embedder,
 	}
 
 	// Load KV store
@@ -170,18 +136,6 @@ func (s *BleveStore) RememberObservation(ctx context.Context, content, category,
 	// Index in Bleve
 	if err := s.index.Index(id, doc); err != nil {
 		return "", fmt.Errorf("failed to index document: %w", err)
-	}
-
-	// Extract keywords and add to semantic graph
-	keywords := extractKeywords(content)
-	if s.graph != nil && len(keywords) > 0 {
-		if err := s.graph.AddTerms(ctx, keywords); err != nil {
-			// Log but don't fail - semantic graph is an enhancement
-		}
-		// Save graph periodically (every 10 new terms)
-		if s.graph.TermCount()%10 == 0 {
-			s.graph.Save()
-		}
 	}
 
 	return id, nil
@@ -503,11 +457,6 @@ func (s *BleveStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Save semantic graph
-	if s.graph != nil {
-		s.graph.Save()
-	}
-
 	// Save KV store
 	s.saveKV()
 
@@ -575,124 +524,6 @@ func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) ([
 	}
 
 	return items, nil
-}
-
-// RebuildSemanticGraph rebuilds the semantic graph from all indexed documents.
-func (s *BleveStore) RebuildSemanticGraph(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.graph == nil || s.embedder == nil {
-		return nil
-	}
-
-	// Get all documents from index
-	searchReq := bleve.NewSearchRequest(bleve.NewMatchAllQuery())
-	searchReq.Size = 100000 // Get all
-	searchReq.Fields = []string{"content"}
-
-	result, err := s.index.Search(searchReq)
-	if err != nil {
-		return fmt.Errorf("failed to fetch documents: %w", err)
-	}
-
-	// Collect all unique keywords from content
-	keywordSet := make(map[string]bool)
-	for _, hit := range result.Hits {
-		if content, ok := hit.Fields["content"].(string); ok {
-			for _, kw := range extractKeywords(content) {
-				keywordSet[kw] = true
-			}
-		}
-	}
-
-	// Convert to slice
-	var allKeywords []string
-	for k := range keywordSet {
-		allKeywords = append(allKeywords, k)
-	}
-
-	// Rebuild graph
-	return s.graph.RebuildFromTerms(ctx, allKeywords)
-}
-
-// extractKeywords extracts keywords from text (simple tokenization).
-func extractKeywords(text string) []string {
-	// Simple word extraction - in production, use proper NLP
-	text = strings.ToLower(text)
-
-	// Strip markdown formatting first (before punctuation replacement)
-	// Remove bold/italic markers
-	for strings.Contains(text, "**") {
-		text = strings.ReplaceAll(text, "**", " ")
-	}
-	for strings.Contains(text, "*") {
-		text = strings.ReplaceAll(text, "*", " ")
-	}
-	for strings.Contains(text, "__") {
-		text = strings.ReplaceAll(text, "__", " ")
-	}
-	// Remove inline code markers
-	for strings.Contains(text, "`") {
-		text = strings.ReplaceAll(text, "`", " ")
-	}
-
-	// Replace punctuation with spaces
-	for _, p := range []string{".", ",", "!", "?", ":", ";", "(", ")", "[", "]", "{", "}", "\"", "'", "-", "_", "/", "\\", "$", "%", "#", "@", "+", "=", "<", ">", "|", "~", "^"} {
-		text = strings.ReplaceAll(text, p, " ")
-	}
-
-	// Split and filter
-	words := strings.Fields(text)
-	var keywords []string
-
-	// Stop words to filter out
-	stopWords := map[string]bool{
-		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
-		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
-		"with": true, "by": true, "from": true, "as": true, "is": true, "was": true,
-		"are": true, "were": true, "be": true, "been": true, "being": true,
-		"have": true, "has": true, "had": true, "do": true, "does": true, "did": true,
-		"will": true, "would": true, "could": true, "should": true, "may": true,
-		"might": true, "must": true, "can": true, "this": true, "that": true,
-		"these": true, "those": true, "it": true, "its": true, "i": true, "we": true,
-		"you": true, "he": true, "she": true, "they": true, "them": true,
-		// Additional common words that don't add meaning
-		"not": true, "also": true, "use": true, "using": true, "used": true,
-		"via": true, "etc": true, "etc.": true, "eg": true, "ie": true,
-	}
-
-	seen := make(map[string]bool)
-	for _, word := range words {
-		// Filter out very short words
-		if len(word) < 3 {
-			continue
-		}
-		// Filter out pure numbers (years, counts, etc. - rarely useful for semantic search)
-		if isAllDigits(word) {
-			continue
-		}
-		if stopWords[word] {
-			continue
-		}
-		if seen[word] {
-			continue
-		}
-		seen[word] = true
-		keywords = append(keywords, word)
-	}
-
-	return keywords
-}
-
-// isAllDigits checks if a string is purely numeric.
-func isAllDigits(s string) bool {
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return len(s) > 0
 }
 
 // containsAny checks if text contains any of the patterns.
