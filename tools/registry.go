@@ -178,7 +178,6 @@ func (r *Registry) SetMemoryStore(store MemoryStore) {
 func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 	r.semanticMemory = mem
 	r.Register(&rememberTool{memory: mem})
-	r.Register(&retrieveTool{memory: mem})
 	r.Register(&recallTool{memory: mem})
 }
 
@@ -1965,54 +1964,6 @@ func (t *rememberTool) Execute(ctx context.Context, rawArgs map[string]interface
 		"stored": len(ids),
 		"ids":    ids,
 	}, nil
-}
-
-// retrieveTool implements the retrieve tool.
-type retrieveTool struct {
-	memory SemanticMemory
-}
-
-func (t *retrieveTool) Name() string { return "retrieve" }
-
-func (t *retrieveTool) Description() string {
-	return `Retrieve a specific observation by ID.
-
-Use when you have an ID from remember and need the full content.
-
-Parameters:
-  - id (required): The observation ID (e.g., "obs_abc123")`
-}
-
-func (t *retrieveTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"id": map[string]interface{}{
-				"type":        "string",
-				"description": "Observation ID to retrieve",
-			},
-		},
-		"required": []string{"id"},
-	}
-}
-
-func (t *retrieveTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
-	args := Args(rawArgs)
-	id, err := args.String("id")
-	if err != nil {
-		return nil, err
-	}
-
-	item, err := t.memory.RetrieveByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve: %w", err)
-	}
-
-	if item == nil {
-		return nil, fmt.Errorf("observation not found: %s", id)
-	}
-
-	return item, nil
 }
 
 // recallTool implements the recall tool.
