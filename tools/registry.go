@@ -177,9 +177,9 @@ func (r *Registry) SetMemoryStore(store MemoryStore) {
 // SetSemanticMemory sets the semantic memory and registers semantic memory tools
 func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 	r.semanticMemory = mem
-	r.Register(&memoryRememberTool{memory: mem})
-	r.Register(&memoryRetrieveTool{memory: mem})
-	r.Register(&memoryRecallTool{memory: mem})
+	r.Register(&rememberTool{memory: mem})
+	r.Register(&retrieveTool{memory: mem})
+	r.Register(&recallTool{memory: mem})
 }
 
 // SetBashChecker sets the bash security checker for the bash tool.
@@ -1340,7 +1340,7 @@ func (t *scratchpadReadTool) Description() string {
 Use for: intermediate results, temporary state, values to reference later by exact key.
 Examples: "api_endpoint", "selected_model", "step3_output"
 
-NOT for: insights or learnings. Use memory_remember for semantic storage.`
+NOT for: insights or learnings. Use remember for semantic storage.`
 	}
 	return `Read a value by exact key from session scratchpad.
 
@@ -1349,7 +1349,7 @@ NOT for: insights or learnings. Use memory_remember for semantic storage.`
 Use for: intermediate results, temporary state, values to reference later by exact key.
 Examples: "api_endpoint", "selected_model", "step3_output"
 
-NOT for: insights or learnings. Use memory_remember for semantic storage.`
+NOT for: insights or learnings. Use remember for semantic storage.`
 }
 
 func (t *scratchpadReadTool) Parameters() map[string]interface{} {
@@ -1396,7 +1396,7 @@ func (t *scratchpadWriteTool) Description() string {
 Use for: intermediate results, temporary state, values you'll retrieve by EXACT key.
 Examples: scratchpad_write("api_endpoint", "https://api.example.com")
 
-NOT for: insights, decisions, learnings. Use memory_remember for semantic storage.`
+NOT for: insights, decisions, learnings. Use remember for semantic storage.`
 	}
 	return `Store a key-value pair in session scratchpad.
 
@@ -1405,7 +1405,7 @@ NOT for: insights, decisions, learnings. Use memory_remember for semantic storag
 Use for: intermediate results, temporary state, values you'll retrieve by EXACT key.
 Examples: scratchpad_write("api_endpoint", "https://api.example.com")
 
-NOT for: insights, decisions, learnings. Use memory_remember for semantic storage.`
+NOT for: insights, decisions, learnings. Use remember for semantic storage.`
 }
 
 func (t *scratchpadWriteTool) Parameters() map[string]interface{} {
@@ -1889,14 +1889,14 @@ func (t *spawnAgentsTool) Execute(ctx context.Context, rawArgs map[string]interf
 
 // --- Semantic Memory Tools ---
 
-// memoryRememberTool implements the memory_remember tool.
-type memoryRememberTool struct {
+// rememberTool implements the remember tool.
+type rememberTool struct {
 	memory SemanticMemory
 }
 
-func (t *memoryRememberTool) Name() string { return "memory_remember" }
+func (t *rememberTool) Name() string { return "remember" }
 
-func (t *memoryRememberTool) Description() string {
+func (t *rememberTool) Description() string {
 	return `🧠 SAVE TO PERSISTENT KNOWLEDGE BASE — survives across sessions!
 
 Store important discoveries for future recall. This is NOT scratch space.
@@ -1908,7 +1908,7 @@ Categories:
 - lessons: Rules for future (e.g., "Always check rate limits first")
 
 Example:
-  memory_remember({
+  remember({
     "findings": ["Database uses PostgreSQL", "API has 100 req/min limit"],
     "insights": ["PostgreSQL chosen for JSON support"],
     "lessons": ["Always check rate limits before integration"]
@@ -1917,7 +1917,7 @@ Example:
 Returns array of IDs for stored observations.`
 }
 
-func (t *memoryRememberTool) Parameters() map[string]interface{} {
+func (t *rememberTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -1941,7 +1941,7 @@ func (t *memoryRememberTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRememberTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+func (t *rememberTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
 	args := Args(rawArgs)
 	findings := args.StringSliceOr("findings", nil)
 	insights := args.StringSliceOr("insights", nil)
@@ -1967,23 +1967,23 @@ func (t *memoryRememberTool) Execute(ctx context.Context, rawArgs map[string]int
 	}, nil
 }
 
-// memoryRetrieveTool implements the memory_retrieve tool.
-type memoryRetrieveTool struct {
+// retrieveTool implements the retrieve tool.
+type retrieveTool struct {
 	memory SemanticMemory
 }
 
-func (t *memoryRetrieveTool) Name() string { return "memory_retrieve" }
+func (t *retrieveTool) Name() string { return "retrieve" }
 
-func (t *memoryRetrieveTool) Description() string {
+func (t *retrieveTool) Description() string {
 	return `Retrieve a specific observation by ID.
 
-Use when you have an ID from memory_remember and need the full content.
+Use when you have an ID from remember and need the full content.
 
 Parameters:
   - id (required): The observation ID (e.g., "obs_abc123")`
 }
 
-func (t *memoryRetrieveTool) Parameters() map[string]interface{} {
+func (t *retrieveTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -1996,7 +1996,7 @@ func (t *memoryRetrieveTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRetrieveTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+func (t *retrieveTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
 	args := Args(rawArgs)
 	id, err := args.String("id")
 	if err != nil {
@@ -2015,22 +2015,28 @@ func (t *memoryRetrieveTool) Execute(ctx context.Context, rawArgs map[string]int
 	return item, nil
 }
 
-// memoryRecallTool implements the memory_recall tool.
-type memoryRecallTool struct {
+// recallTool implements the recall tool.
+type recallTool struct {
 	memory SemanticMemory
 }
 
-func (t *memoryRecallTool) Name() string { return "memory_recall" }
+func (t *recallTool) Name() string { return "recall" }
 
-func (t *memoryRecallTool) Description() string {
+func (t *recallTool) Description() string {
 	return `🧠 SEARCH YOUR PERSISTENT KNOWLEDGE BASE — use BEFORE external searches!
 
 This searches your accumulated knowledge from ALL past sessions.
 Check here FIRST before web search, file reading, or MCP calls.
 
-Search by MEANING (semantic), not exact keywords:
-- "database choice" finds "We chose PostgreSQL for JSON support"
-- "auth" finds "OAuth 2.0 with refresh tokens"
+Uses keyword-based search (BM25). Use DISTINCTIVE KEYWORDS, not sentences:
+- ✅ "PostgreSQL JSON" → finds "Chose PostgreSQL for JSON support"
+- ✅ "OAuth refresh tokens" → finds auth-related decisions
+- ❌ "What database did we choose?" → too vague, may miss results
+
+Tips for better results:
+- Use 2-4 key terms that appear in the original content
+- Include specific names: tools, libraries, formats, concepts
+- Try multiple searches with different keyword combinations
 
 Returns categorized results:
 {
@@ -2040,17 +2046,17 @@ Returns categorized results:
 }
 
 Parameters:
-  - query (required): What you're looking for (natural language)
+  - query (required): Keywords to search for
   - limit (optional): Results per category (default 5)`
 }
 
-func (t *memoryRecallTool) Parameters() map[string]interface{} {
+func (t *recallTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "What you're looking for",
+				"description": "Keywords to search for",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -2061,7 +2067,7 @@ func (t *memoryRecallTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *memoryRecallTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+func (t *recallTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
 	args := Args(rawArgs)
 	query, err := args.String("query")
 	if err != nil {
