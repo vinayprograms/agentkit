@@ -57,6 +57,11 @@ type Verifier struct {
 
 	// blockCounter for generating unique IDs
 	blockCounter int
+
+	// contentDedup tracks content hashes for de-duplication
+	// When identical content is added, we reuse the existing block
+	// to avoid redundant security checks
+	contentHashes map[string]string // SHA256(content) -> block ID
 }
 
 // NewVerifier creates a new security verifier.
@@ -78,6 +83,7 @@ func NewVerifier(cfg Config, sessionID string) (*Verifier, error) {
 		audit:         audit,
 		logger:        logger,
 		blocks:        make([]*Block, 0),
+		contentHashes: make(map[string]string),
 	}
 
 	if cfg.TriageProvider != nil {
@@ -122,6 +128,43 @@ func (v *Verifier) addBlockInternal(trust TrustLevel, typ BlockType, mutable boo
 	v.blocksMu.Lock()
 	defer v.blocksMu.Unlock()
 
+	// Compute content hash for de-duplication
+	contentHash := computeHash(content)
+
+	// Check if we've seen this exact content before (de-duplication)
+	// Only de-dupe untrusted content (trusted/vetted content doesn't need security checks)
+	if trust == TrustUntrusted {
+		if existingID, exists := v.contentHashes[contentHash]; exists {
+			// Find the existing block
+			for _, b := range v.blocks {
+				if b.ID == existingID {
+					// Log de-duplication hit
+					if v.logger != nil {
+						v.logger.Debug("content deduplicated", map[string]interface{}{
+							"hash":         contentHash[:16] + "...",
+							"existing_id":  existingID,
+							"source":       source,
+						})
+					}
+					// Return a new block that references the existing content
+					// but with the new source/taint info (for accurate taint tracking)
+					v.blockCounter++
+					id := fmt.Sprintf("b%04d", v.blockCounter)
+					block := NewBlock(id, trust, typ, mutable, content, source)
+					block.AgentContext = agentContext
+					block.CreatedAtSeq = eventSeq
+					block.TaintedBy = taintedBy
+					block.DedupeHit = true
+					// Link to original block for verification skip
+					block.TaintedBy = append(block.TaintedBy, existingID)
+					v.blocks = append(v.blocks, block)
+					return block
+				}
+			}
+		}
+	}
+
+	// New content - create block and register hash
 	v.blockCounter++
 	id := fmt.Sprintf("b%04d", v.blockCounter)
 
@@ -130,6 +173,11 @@ func (v *Verifier) addBlockInternal(trust TrustLevel, typ BlockType, mutable boo
 	block.CreatedAtSeq = eventSeq
 	block.TaintedBy = taintedBy
 	v.blocks = append(v.blocks, block)
+
+	// Register content hash for untrusted content
+	if trust == TrustUntrusted {
+		v.contentHashes[contentHash] = id
+	}
 
 	return block
 }

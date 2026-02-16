@@ -2,6 +2,11 @@
 // tiered verification, and cryptographic audit trails.
 package security
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
 // TrustLevel represents the origin-based authenticity of content.
 type TrustLevel string
 
@@ -42,6 +47,9 @@ type Block struct {
 	// Content is the actual text content.
 	Content string `json:"content"`
 
+	// ContentHash is SHA256 hash of content for de-duplication.
+	ContentHash string `json:"content_hash,omitempty"`
+
 	// Source describes where the content came from (for debugging).
 	Source string `json:"source,omitempty"`
 
@@ -55,6 +63,15 @@ type Block struct {
 	// CreatedAtSeq is the session event sequence when this block was created.
 	// Used to correlate blocks with session events in forensic analysis.
 	CreatedAtSeq uint64 `json:"created_at_seq,omitempty"`
+
+	// DedupeHit indicates this block was reused from a previous identical content.
+	DedupeHit bool `json:"dedupe_hit,omitempty"`
+}
+
+// computeHash returns SHA256 hash of content as hex string.
+func computeHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
 }
 
 // NewBlock creates a new block with the given properties.
@@ -70,11 +87,12 @@ func NewBlock(id string, trust TrustLevel, typ BlockType, mutable bool, content,
 
 	return &Block{
 		ID:      id,
-		Trust:   trust,
-		Type:    typ,
-		Mutable: mutable,
-		Content: content,
-		Source:  source,
+		Trust:        trust,
+		Type:         typ,
+		Mutable:      mutable,
+		Content:      content,
+		ContentHash:  computeHash(content),
+		Source:       source,
 	}
 }
 
