@@ -262,18 +262,9 @@ func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category s
 		limit = 5
 	}
 
-	// Tokenize query
-	queryTerms := extractKeywords(queryText)
-
-	// Expand query terms using semantic graph
-	var contentQuery query.Query
-	if s.graph != nil && len(queryTerms) > 0 {
-		expandedTerms := s.graph.ExpandQuery(queryTerms)
-		contentQuery = buildExpandedQuery(queryText, expandedTerms)
-	} else {
-		// Simple match query without expansion
-		contentQuery = bleve.NewMatchQuery(queryText)
-	}
+	// Use pure BM25 - semantic graph expansion was found to hurt recall quality
+	// by diluting queries with noisy related terms and losing original query terms.
+	contentQuery := bleve.NewMatchQuery(queryText)
 
 	// Build category filter
 	categoryQuery := bleve.NewTermQuery(category)
@@ -364,18 +355,8 @@ func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOp
 		limit = 10
 	}
 
-	// Tokenize query
-	queryTerms := extractKeywords(queryText)
-
-	// Expand query terms using semantic graph
-	var searchQuery query.Query
-	if s.graph != nil && len(queryTerms) > 0 {
-		expandedTerms := s.graph.ExpandQuery(queryTerms)
-		searchQuery = buildExpandedQuery(queryText, expandedTerms)
-	} else {
-		// Simple match query without expansion
-		searchQuery = bleve.NewMatchQuery(queryText)
-	}
+	// Use pure BM25 - semantic graph expansion was found to hurt recall quality
+	searchQuery := bleve.NewMatchQuery(queryText)
 
 	// Create search request
 	searchReq := bleve.NewSearchRequest(searchQuery)
@@ -421,36 +402,6 @@ func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOp
 	return results, nil
 }
 
-// buildExpandedQuery creates a disjunction query with expanded terms.
-func buildExpandedQuery(originalQuery string, expandedTerms map[string][]string) query.Query {
-	// If no expansion happened, use simple match
-	if len(expandedTerms) == 0 {
-		return bleve.NewMatchQuery(originalQuery)
-	}
-
-	// Collect all queries for a disjunction
-	var allQueries []query.Query
-
-	for _, relatedTerms := range expandedTerms {
-		if len(relatedTerms) == 0 {
-			continue
-		}
-		for _, term := range relatedTerms {
-			matchQuery := bleve.NewMatchQuery(term)
-			allQueries = append(allQueries, matchQuery)
-		}
-	}
-
-	// If no terms were added, fall back to original query
-	if len(allQueries) == 0 {
-		return bleve.NewMatchQuery(originalQuery)
-	}
-
-	// Use disjunction (OR) for all expanded terms
-	return bleve.NewDisjunctionQuery(allQueries...)
-}
-
-// Forget deletes a memory by ID.
 // Get retrieves a value by key (KV store).
 func (s *BleveStore) Get(key string) (string, error) {
 	s.mu.RLock()
@@ -670,8 +621,24 @@ func extractKeywords(text string) []string {
 	// Simple word extraction - in production, use proper NLP
 	text = strings.ToLower(text)
 
+	// Strip markdown formatting first (before punctuation replacement)
+	// Remove bold/italic markers
+	for strings.Contains(text, "**") {
+		text = strings.ReplaceAll(text, "**", " ")
+	}
+	for strings.Contains(text, "*") {
+		text = strings.ReplaceAll(text, "*", " ")
+	}
+	for strings.Contains(text, "__") {
+		text = strings.ReplaceAll(text, "__", " ")
+	}
+	// Remove inline code markers
+	for strings.Contains(text, "`") {
+		text = strings.ReplaceAll(text, "`", " ")
+	}
+
 	// Replace punctuation with spaces
-	for _, p := range []string{".", ",", "!", "?", ":", ";", "(", ")", "[", "]", "{", "}", "\"", "'", "-", "_", "/", "\\"} {
+	for _, p := range []string{".", ",", "!", "?", ":", ";", "(", ")", "[", "]", "{", "}", "\"", "'", "-", "_", "/", "\\", "$", "%", "#", "@", "+", "=", "<", ">", "|", "~", "^"} {
 		text = strings.ReplaceAll(text, p, " ")
 	}
 
@@ -690,11 +657,19 @@ func extractKeywords(text string) []string {
 		"might": true, "must": true, "can": true, "this": true, "that": true,
 		"these": true, "those": true, "it": true, "its": true, "i": true, "we": true,
 		"you": true, "he": true, "she": true, "they": true, "them": true,
+		// Additional common words that don't add meaning
+		"not": true, "also": true, "use": true, "using": true, "used": true,
+		"via": true, "etc": true, "etc.": true, "eg": true, "ie": true,
 	}
 
 	seen := make(map[string]bool)
 	for _, word := range words {
+		// Filter out very short words
 		if len(word) < 3 {
+			continue
+		}
+		// Filter out pure numbers (years, counts, etc. - rarely useful for semantic search)
+		if isAllDigits(word) {
 			continue
 		}
 		if stopWords[word] {
@@ -708,6 +683,16 @@ func extractKeywords(text string) []string {
 	}
 
 	return keywords
+}
+
+// isAllDigits checks if a string is purely numeric.
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // containsAny checks if text contains any of the patterns.
