@@ -3,6 +3,7 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -344,9 +345,15 @@ func mustMarshal(v interface{}) []byte {
 		return []byte(val)
 	case []byte:
 		return val
-	case int, int64, float64, bool:
-		return []byte(string(rune(val.(int))))
+	case int:
+		return []byte(fmt.Sprintf("%d", val))
+	case int64:
+		return []byte(fmt.Sprintf("%d", val))
+	case float64:
+		return []byte(fmt.Sprintf("%v", val))
+	case bool:
+		return []byte(fmt.Sprintf("%t", val))
 	default:
-		return []byte("<complex>")
+		return []byte(fmt.Sprintf("%v", val))
 	}
 }
