@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -152,6 +153,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 
 	// Add thinking if configured
 	thinkingLevel := ResolveThinkingLevel(p.thinking, req.Messages, req.Tools)
+	useStreaming := false
 	if thinkingLevel != ThinkingOff {
 		budget := ThinkingLevelToAnthropicBudget(thinkingLevel, p.thinking.BudgetTokens)
 		if budget > 0 {
@@ -167,11 +169,26 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 					BudgetTokens: int64(budget),
 				},
 			}
+			// Anthropic requires streaming for extended thinking
+			useStreaming = true
 		}
 	}
 
-	// Make request with retry
 	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
+
+	if useStreaming {
+		return p.chatStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
+	}
+	return p.chatNonStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
+}
+
+// chatNonStreaming makes a non-streaming request with retry.
+func (p *AnthropicProvider) chatNonStreaming(
+	ctx context.Context,
+	params anthropic.MessageNewParams,
+	maxRetries int,
+	initBackoff, maxBackoff time.Duration,
+) (*ChatResponse, error) {
 	var resp *anthropic.Message
 	var err error
 	backoff := initBackoff
@@ -233,6 +250,145 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 				Args: args,
 			})
 		}
+	}
+
+	return result, nil
+}
+
+// chatStreaming makes a streaming request (required for extended thinking).
+func (p *AnthropicProvider) chatStreaming(
+	ctx context.Context,
+	params anthropic.MessageNewParams,
+	maxRetries int,
+	initBackoff, maxBackoff time.Duration,
+) (*ChatResponse, error) {
+	backoff := initBackoff
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		result, err := p.doStreamingRequest(ctx, params)
+		if err == nil {
+			return result, nil
+		}
+
+		if isBillingError(err) {
+			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
+		}
+
+		if !isRetryableError(err) {
+			return nil, fmt.Errorf("anthropic streaming request failed: %w", err)
+		}
+
+		if attempt == maxRetries {
+			return nil, fmt.Errorf("anthropic streaming request failed after %d retries: %w", maxRetries, err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff = time.Duration(float64(backoff) * backoffFactor)
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	return nil, fmt.Errorf("unreachable")
+}
+
+// doStreamingRequest executes a single streaming request.
+func (p *AnthropicProvider) doStreamingRequest(
+	ctx context.Context,
+	params anthropic.MessageNewParams,
+) (*ChatResponse, error) {
+	stream := p.client.Messages.NewStreaming(ctx, params)
+	defer stream.Close()
+
+	result := &ChatResponse{}
+
+	// Track content blocks by index
+	type blockState struct {
+		blockType   string // "text", "thinking", "tool_use"
+		toolID      string
+		toolName    string
+		textBuilder strings.Builder
+	}
+	blocks := make(map[int64]*blockState)
+
+	for stream.Next() {
+		event := stream.Current()
+
+		switch event.Type {
+		case "message_start":
+			msg := event.AsMessageStart()
+			result.Model = string(msg.Message.Model)
+			result.InputTokens = int(msg.Message.Usage.InputTokens)
+
+		case "content_block_start":
+			evt := event.AsContentBlockStart()
+			cb := evt.ContentBlock
+			state := &blockState{blockType: cb.Type}
+
+			switch cb.Type {
+			case "tool_use":
+				state.toolID = cb.ID
+				state.toolName = cb.Name
+			}
+
+			blocks[evt.Index] = state
+
+		case "content_block_delta":
+			evt := event.AsContentBlockDelta()
+			state, ok := blocks[evt.Index]
+			if !ok {
+				continue
+			}
+
+			delta := evt.Delta
+			switch delta.Type {
+			case "text_delta":
+				state.textBuilder.WriteString(delta.Text)
+			case "thinking_delta":
+				state.textBuilder.WriteString(delta.Thinking)
+			case "input_json_delta":
+				state.textBuilder.WriteString(delta.PartialJSON)
+			}
+
+		case "content_block_stop":
+			evt := event.AsContentBlockStop()
+			state, ok := blocks[evt.Index]
+			if !ok {
+				continue
+			}
+
+			text := state.textBuilder.String()
+			switch state.blockType {
+			case "text":
+				result.Content += text
+			case "thinking":
+				result.Thinking += text
+			case "tool_use":
+				var args map[string]interface{}
+				if text != "" {
+					json.Unmarshal([]byte(text), &args)
+				}
+				result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
+					ID:   state.toolID,
+					Name: state.toolName,
+					Args: args,
+				})
+			}
+
+		case "message_delta":
+			evt := event.AsMessageDelta()
+			result.StopReason = string(evt.Delta.StopReason)
+			result.OutputTokens = int(evt.Usage.OutputTokens)
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil
