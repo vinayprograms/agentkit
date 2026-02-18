@@ -1189,36 +1189,90 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 	return results, nil
 }
 
+// DDG-specific rate limiting (more aggressive than generic cooldown)
+var (
+	ddgMutex        sync.Mutex
+	ddgLastSearch   time.Time
+	ddgCooldown     = 2 * time.Second // DDG needs longer cooldown
+	ddgBackoff      = 2 * time.Second // Initial backoff on 403
+	ddgMaxBackoff   = 30 * time.Second
+	ddgMaxRetries   = 3
+)
+
 // searchDuckDuckGo searches using DuckDuckGo's HTML lite endpoint (no API key needed).
 func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchResult, error) {
+	// DDG-specific rate limiting
+	ddgMutex.Lock()
+	elapsed := time.Since(ddgLastSearch)
+	if elapsed < ddgCooldown {
+		wait := ddgCooldown - elapsed
+		ddgMutex.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		ddgMutex.Lock()
+	}
+	ddgLastSearch = time.Now()
+	ddgMutex.Unlock()
+
 	// Use the HTML lite endpoint that works well with CLI browsers
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", 
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
 
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	// Mimic a simple text browser
-	req.Header.Set("User-Agent", "Lynx/2.8.9rel.1 libwww-FM/2.14")
-	req.Header.Set("Accept", "text/html")
+	backoff := ddgBackoff
+	var lastErr error
+	
+	for attempt := 0; attempt <= ddgMaxRetries; attempt++ {
+		if attempt > 0 {
+			// Wait with backoff before retry
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > ddgMaxBackoff {
+				backoff = ddgMaxBackoff
+			}
+		}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("duckduckgo search failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		// Mimic a simple text browser
+		req.Header.Set("User-Agent", "Lynx/2.8.9rel.1 libwww-FM/2.14")
+		req.Header.Set("Accept", "text/html")
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("duckduckgo search error: status %d", resp.StatusCode)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("duckduckgo search failed: %w", err)
+			continue
+		}
+
+		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("duckduckgo rate limited (status %d), retrying", resp.StatusCode)
+			continue
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("duckduckgo search error: status %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read duckduckgo response: %w", err)
+		}
+
+		return parseDuckDuckGoHTML(string(body), count), nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read duckduckgo response: %w", err)
-	}
-
-	return parseDuckDuckGoHTML(string(body), count), nil
+	return nil, fmt.Errorf("duckduckgo search failed after %d retries: %w", ddgMaxRetries, lastErr)
 }
 
 // parseDuckDuckGoHTML extracts search results from DuckDuckGo HTML response.
