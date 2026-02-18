@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -42,6 +43,13 @@ func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
 	if cfg.MaxTokens == 0 {
 		return nil, fmt.Errorf("max_tokens is required for anthropic")
 	}
+
+	// Debug: show what we're using for auth
+	keyPreview := cfg.APIKey
+	if len(keyPreview) > 25 {
+		keyPreview = keyPreview[:25] + "..."
+	}
+	fmt.Fprintf(os.Stderr, "DEBUG anthropic: key=%q isOAuth=%v len=%d\n", keyPreview, cfg.IsOAuthToken, len(cfg.APIKey))
 
 	var opts []option.RequestOption
 	if cfg.IsOAuthToken {
