@@ -1189,14 +1189,15 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 	return results, nil
 }
 
-// DDG-specific rate limiting (more aggressive than generic cooldown)
+// DDG-specific rate limiting
+// Total worst-case: 2s cooldown + 3 retries * 3s avg = ~11s (fits in 30s timeout)
 var (
 	ddgMutex        sync.Mutex
 	ddgLastSearch   time.Time
-	ddgCooldown     = 3 * time.Second  // DDG needs longer cooldown
-	ddgBackoff      = 5 * time.Second  // Initial backoff on rate limit
-	ddgMaxBackoff   = 60 * time.Second
-	ddgMaxRetries   = 4
+	ddgCooldown     = 2 * time.Second // Between requests
+	ddgBackoff      = 2 * time.Second // Initial backoff on rate limit
+	ddgMaxBackoff   = 5 * time.Second // Cap backoff to stay within timeout
+	ddgMaxRetries   = 3
 )
 
 // searchDuckDuckGo searches using DuckDuckGo's HTML endpoint (no API key needed).
