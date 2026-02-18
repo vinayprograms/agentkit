@@ -56,13 +56,14 @@ type Provider interface {
 
 // ProviderConfig holds configuration for the Provider adapter.
 type ProviderConfig struct {
-	Provider   string         `json:"provider"`    // anthropic, openai, google, groq, mistral, openai-compat
-	Model      string         `json:"model"`
-	APIKey     string         `json:"api_key"`
-	MaxTokens  int            `json:"max_tokens"`
-	BaseURL    string         `json:"base_url"`    // Custom API endpoint (for OpenRouter, LiteLLM, Ollama, LMStudio)
-	Thinking   ThinkingConfig `json:"thinking"`    // Thinking/reasoning configuration
-	RetryConfig RetryConfig   `json:"retry"`       // Retry configuration
+	Provider     string         `json:"provider"`      // anthropic, openai, google, groq, mistral, openai-compat
+	Model        string         `json:"model"`
+	APIKey       string         `json:"api_key"`
+	IsOAuthToken bool           `json:"is_oauth_token"` // True if APIKey is an OAuth access token (Anthropic only)
+	MaxTokens    int            `json:"max_tokens"`
+	BaseURL      string         `json:"base_url"`      // Custom API endpoint (for OpenRouter, LiteLLM, Ollama, LMStudio)
+	Thinking     ThinkingConfig `json:"thinking"`      // Thinking/reasoning configuration
+	RetryConfig  RetryConfig    `json:"retry"`         // Retry configuration
 }
 
 // RetryConfig holds retry settings for LLM calls.

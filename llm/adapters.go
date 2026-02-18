@@ -25,12 +25,13 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "anthropic":
 		return NewAnthropicProvider(AnthropicConfig{
-			APIKey:    cfg.APIKey,
-			BaseURL:   cfg.BaseURL,
-			Model:     cfg.Model,
-			MaxTokens: cfg.MaxTokens,
-			Thinking:  cfg.Thinking,
-			Retry:     cfg.RetryConfig,
+			APIKey:       cfg.APIKey,
+			IsOAuthToken: cfg.IsOAuthToken,
+			BaseURL:      cfg.BaseURL,
+			Model:        cfg.Model,
+			MaxTokens:    cfg.MaxTokens,
+			Thinking:     cfg.Thinking,
+			Retry:        cfg.RetryConfig,
 		})
 
 	case "openai":

@@ -22,12 +22,13 @@ type AnthropicProvider struct {
 
 // AnthropicConfig holds configuration for the Anthropic provider.
 type AnthropicConfig struct {
-	APIKey    string
-	BaseURL   string // Optional custom endpoint
-	Model     string
-	MaxTokens int
-	Thinking  ThinkingConfig
-	Retry     RetryConfig
+	APIKey       string
+	IsOAuthToken bool   // True if APIKey is an OAuth access token (uses Bearer auth)
+	BaseURL      string // Optional custom endpoint
+	Model        string
+	MaxTokens    int
+	Thinking     ThinkingConfig
+	Retry        RetryConfig
 }
 
 // NewAnthropicProvider creates a new Anthropic provider using the official SDK.
@@ -42,8 +43,13 @@ func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
 		return nil, fmt.Errorf("max_tokens is required for anthropic")
 	}
 
-	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.APIKey),
+	var opts []option.RequestOption
+	if cfg.IsOAuthToken {
+		// OAuth tokens use Authorization: Bearer header
+		opts = append(opts, option.WithAuthToken(cfg.APIKey))
+	} else {
+		// API keys use x-api-key header
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
 	}
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))

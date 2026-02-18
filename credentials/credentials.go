@@ -221,42 +221,55 @@ func parseOAuthToken(data map[string]interface{}) *OAuthToken {
 	return token
 }
 
-// GetAPIKey returns the API key or OAuth access token for a provider.
+// Credential holds a resolved credential (API key or OAuth token).
+type Credential struct {
+	Key          string // The API key or access token
+	IsOAuthToken bool   // True if Key is an OAuth access token (needs Bearer auth)
+}
+
+// GetCredential returns the credential for a provider with type information.
 // Priority: Claude CLI (for anthropic) > [provider.oauth] > [provider].api_key > [llm].api_key > env var
-func (c *Credentials) GetAPIKey(provider string) string {
+func (c *Credentials) GetCredential(provider string) Credential {
 	// Normalize provider name (lowercase, no dashes)
 	normalized := strings.ToLower(strings.ReplaceAll(provider, "-", ""))
 
 	// For Anthropic, check Claude CLI credentials first (highest priority)
 	if normalized == "anthropic" {
 		if token := ReadClaudeCliCredentials(); token != nil && token.IsValid() {
-			return token.AccessToken
+			return Credential{Key: token.AccessToken, IsOAuthToken: true}
 		}
 	}
 
 	if c != nil {
 		// Check OAuth token from credentials.toml
 		if token := c.GetOAuthToken(provider); token != nil && token.IsValid() {
-			return token.AccessToken
+			return Credential{Key: token.AccessToken, IsOAuthToken: true}
 		}
 
 		// Check provider-specific section
 		if creds, ok := c.providers[provider]; ok && creds.APIKey != "" {
-			return creds.APIKey
+			return Credential{Key: creds.APIKey, IsOAuthToken: false}
 		}
 		// Try normalized name
 		if creds, ok := c.providers[normalized]; ok && creds.APIKey != "" {
-			return creds.APIKey
+			return Credential{Key: creds.APIKey, IsOAuthToken: false}
 		}
 
 		// Fall back to generic [llm] section
 		if c.LLM != nil && c.LLM.APIKey != "" {
-			return c.LLM.APIKey
+			return Credential{Key: c.LLM.APIKey, IsOAuthToken: false}
 		}
 	}
 
 	// Fallback to environment variable
-	return os.Getenv(envVarForProvider(provider))
+	return Credential{Key: os.Getenv(envVarForProvider(provider)), IsOAuthToken: false}
+}
+
+// GetAPIKey returns the API key or OAuth access token for a provider.
+// For type-aware credential handling, use GetCredential instead.
+// Priority: Claude CLI (for anthropic) > [provider.oauth] > [provider].api_key > [llm].api_key > env var
+func (c *Credentials) GetAPIKey(provider string) string {
+	return c.GetCredential(provider).Key
 }
 
 // GetOAuthToken returns the OAuth token for a provider, if any.
