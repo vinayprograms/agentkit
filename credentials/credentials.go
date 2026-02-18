@@ -209,13 +209,20 @@ func parseOAuthToken(data map[string]interface{}) *OAuthToken {
 }
 
 // GetAPIKey returns the API key or OAuth access token for a provider.
-// Priority: [provider.oauth] (if valid) > [provider].api_key > [llm].api_key > env var
+// Priority: Claude CLI (for anthropic) > [provider.oauth] > [provider].api_key > [llm].api_key > env var
 func (c *Credentials) GetAPIKey(provider string) string {
-	if c != nil {
-		// Normalize provider name (lowercase, no dashes)
-		normalized := strings.ToLower(strings.ReplaceAll(provider, "-", ""))
+	// Normalize provider name (lowercase, no dashes)
+	normalized := strings.ToLower(strings.ReplaceAll(provider, "-", ""))
 
-		// Check OAuth token first (highest priority if valid)
+	// For Anthropic, check Claude CLI credentials first (highest priority)
+	if normalized == "anthropic" {
+		if token := ReadClaudeCliCredentials(); token != nil && token.IsValid() {
+			return token.AccessToken
+		}
+	}
+
+	if c != nil {
+		// Check OAuth token from credentials.toml
 		if token := c.GetOAuthToken(provider); token != nil && token.IsValid() {
 			return token.AccessToken
 		}
