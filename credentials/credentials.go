@@ -256,6 +256,14 @@ func (c *Credentials) GetOAuthToken(provider string) *OAuthToken {
 	return nil
 }
 
+// SetAPIKey stores or updates an API key for a provider.
+func (c *Credentials) SetAPIKey(provider, apiKey string) {
+	if c.providers == nil {
+		c.providers = make(map[string]*ProviderCreds)
+	}
+	c.providers[provider] = &ProviderCreds{APIKey: apiKey}
+}
+
 // SetOAuthToken stores or updates an OAuth token for a provider.
 func (c *Credentials) SetOAuthToken(provider string, token *OAuthToken) {
 	if c.oauthTokens == nil {
