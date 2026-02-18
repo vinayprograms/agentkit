@@ -88,16 +88,29 @@ func StandardPaths() []string {
 	return paths
 }
 
-// Load loads credentials from the first available standard location
+// Load loads credentials from the first available standard location.
+// Returns an error if a credentials file exists but has insecure permissions.
 func Load() (*Credentials, string, error) {
 	for _, path := range StandardPaths() {
-		if _, err := os.Stat(path); err == nil {
-			creds, err := LoadFile(path)
-			if err != nil {
-				return nil, path, err
-			}
-			return creds, path, nil
+		info, err := os.Stat(path)
+		if err != nil {
+			continue // File doesn't exist, try next path
 		}
+
+		// File exists - check permissions before loading
+		if runtime.GOOS != "windows" {
+			mode := info.Mode().Perm()
+			if mode != 0400 && mode != 0600 {
+				return nil, path, fmt.Errorf("%w: %s has mode %04o\n\nFix with: chmod 600 %s",
+					ErrInsecurePermissions, path, mode, path)
+			}
+		}
+
+		creds, err := LoadFile(path)
+		if err != nil {
+			return nil, path, err
+		}
+		return creds, path, nil
 	}
 	return nil, "", nil // No credentials file found (not an error)
 }
