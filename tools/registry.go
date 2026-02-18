@@ -1060,13 +1060,17 @@ func (t *webSearchTool) Execute(ctx context.Context, rawArgs map[string]interfac
 	lastSearchTime = time.Now()
 	searchMutex.Unlock()
 
-	// Try Brave first (credentials file, then env), then Tavily, then DuckDuckGo
-	var braveKey, tavilyKey string
+	// Priority: SearXNG (self-hosted) > Brave > Tavily > DuckDuckGo
+	var searxngURL, braveKey, tavilyKey string
 	if t.credentials != nil {
+		searxngURL = t.credentials.GetAPIKey("searxng") // Actually a URL, not a key
 		braveKey = t.credentials.GetAPIKey("brave")
 		tavilyKey = t.credentials.GetAPIKey("tavily")
 	}
 	// Fallback to env vars if credentials not set
+	if searxngURL == "" {
+		searxngURL = os.Getenv("SEARXNG_URL")
+	}
 	if braveKey == "" {
 		braveKey = os.Getenv("BRAVE_API_KEY")
 	}
@@ -1074,6 +1078,9 @@ func (t *webSearchTool) Execute(ctx context.Context, rawArgs map[string]interfac
 		tavilyKey = os.Getenv("TAVILY_API_KEY")
 	}
 
+	if searxngURL != "" {
+		return searchSearXNG(ctx, query, count, searxngURL)
+	}
 	if braveKey != "" {
 		return searchBrave(ctx, query, count, braveKey)
 	}
@@ -1090,6 +1097,60 @@ type SearchResult struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
+}
+
+// searchSearXNG searches using a self-hosted SearXNG instance.
+// SearXNG is a free, privacy-respecting meta-search engine.
+// See: https://github.com/searxng/searxng
+func searchSearXNG(ctx context.Context, query string, count int, baseURL string) ([]SearchResult, error) {
+	// Normalize base URL
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	
+	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
+		baseURL, strings.ReplaceAll(query, " ", "+"))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("searxng search failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("searxng search error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var searxResp struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"results"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&searxResp); err != nil {
+		return nil, fmt.Errorf("failed to parse searxng response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, count)
+	for i, r := range searxResp.Results {
+		if i >= count {
+			break
+		}
+		results = append(results, SearchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Snippet: r.Content,
+		})
+	}
+	return results, nil
 }
 
 // searchBrave searches using Brave Search API
