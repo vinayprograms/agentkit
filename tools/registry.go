@@ -1242,9 +1242,9 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 		if err != nil {
 			return nil, err
 		}
-		// Use a standard browser user-agent
-		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0")
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		// Custom user-agent identifying the agent
+		req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
+		req.Header.Set("Accept", "text/html")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
 		resp, err := http.DefaultClient.Do(req)
