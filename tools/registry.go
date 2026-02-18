@@ -1193,10 +1193,10 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 var (
 	ddgMutex        sync.Mutex
 	ddgLastSearch   time.Time
-	ddgCooldown     = 2 * time.Second // DDG needs longer cooldown
-	ddgBackoff      = 2 * time.Second // Initial backoff on 403
-	ddgMaxBackoff   = 30 * time.Second
-	ddgMaxRetries   = 3
+	ddgCooldown     = 3 * time.Second  // DDG needs longer cooldown
+	ddgBackoff      = 5 * time.Second  // Initial backoff on rate limit
+	ddgMaxBackoff   = 60 * time.Second
+	ddgMaxRetries   = 4
 )
 
 // searchDuckDuckGo searches using DuckDuckGo's HTML endpoint (no API key needed).
@@ -1253,7 +1253,7 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 			continue
 		}
 
-		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+		if resp.StatusCode == 202 || resp.StatusCode == 403 || resp.StatusCode == 429 {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("duckduckgo rate limited (status %d), retrying", resp.StatusCode)
 			continue
