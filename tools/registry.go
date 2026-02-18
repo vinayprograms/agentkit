@@ -1218,7 +1218,7 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 	ddgMutex.Unlock()
 
 	// Use the HTML lite endpoint that works well with CLI browsers
-	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", 
+	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s", 
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
 
 	backoff := ddgBackoff
