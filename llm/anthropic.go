@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -44,17 +43,13 @@ func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
 		return nil, fmt.Errorf("max_tokens is required for anthropic")
 	}
 
-	// Debug: show what we're using for auth
-	keyPreview := cfg.APIKey
-	if len(keyPreview) > 25 {
-		keyPreview = keyPreview[:25] + "..."
-	}
-	fmt.Fprintf(os.Stderr, "DEBUG anthropic: key=%q isOAuth=%v len=%d\n", keyPreview, cfg.IsOAuthToken, len(cfg.APIKey))
-
 	var opts []option.RequestOption
 	if cfg.IsOAuthToken {
-		// OAuth tokens use Authorization: Bearer header
-		opts = append(opts, option.WithAuthToken(cfg.APIKey))
+		// OAuth tokens use Authorization: Bearer header + required beta header
+		opts = append(opts,
+			option.WithAuthToken(cfg.APIKey),
+			option.WithHeader("anthropic-beta", "oauth-2025-04-20"),
+		)
 	} else {
 		// API keys use x-api-key header
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
