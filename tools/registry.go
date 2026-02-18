@@ -1199,7 +1199,7 @@ var (
 	ddgMaxRetries   = 3
 )
 
-// searchDuckDuckGo searches using DuckDuckGo's HTML lite endpoint (no API key needed).
+// searchDuckDuckGo searches using DuckDuckGo's HTML endpoint (no API key needed).
 func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchResult, error) {
 	// DDG-specific rate limiting
 	ddgMutex.Lock()
@@ -1217,7 +1217,7 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 	ddgLastSearch = time.Now()
 	ddgMutex.Unlock()
 
-	// Use the HTML lite endpoint that works well with CLI browsers
+	// Use the HTML endpoint
 	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s", 
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
 
@@ -1242,9 +1242,10 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 		if err != nil {
 			return nil, err
 		}
-		// Mimic a simple text browser
-		req.Header.Set("User-Agent", "Lynx/2.8.9rel.1 libwww-FM/2.14")
-		req.Header.Set("Accept", "text/html")
+		// Use a standard browser user-agent
+		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -1281,8 +1282,6 @@ func parseDuckDuckGoHTML(html string, count int) []SearchResult {
 
 	// DuckDuckGo HTML results are in <a class="result__a"> tags
 	// with snippets in <a class="result__snippet"> tags
-	
-	// Simple regex-based parsing for the HTML lite version
 	// Result links: <a rel="nofollow" class="result__a" href="...">Title</a>
 	// Snippets: <a class="result__snippet" href="...">Snippet text</a>
 	
