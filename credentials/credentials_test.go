@@ -145,7 +145,7 @@ api_key = "secret-key"
 	}
 }
 
-func TestLoadFile_RejectWritablePermissions(t *testing.T) {
+func TestLoadFile_RejectGroupReadablePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission check not applicable on Windows")
 	}
@@ -157,14 +157,39 @@ func TestLoadFile_RejectWritablePermissions(t *testing.T) {
 [llm]
 api_key = "secret-key"
 `
-	os.WriteFile(credPath, []byte(content), 0600)
+	// 0644 allows group/others to read - should be rejected
+	os.WriteFile(credPath, []byte(content), 0644)
 
 	_, err := LoadFile(credPath)
 	if err == nil {
-		t.Fatal("expected error for 0600 permissions (writable)")
+		t.Fatal("expected error for 0644 permissions (group readable)")
 	}
 	if !errors.Is(err, ErrInsecurePermissions) {
 		t.Errorf("expected ErrInsecurePermissions, got %v", err)
+	}
+}
+
+func TestLoadFile_Accept0600Permissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission check not applicable on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	credPath := filepath.Join(tmpDir, "credentials.toml")
+
+	content := `
+[llm]
+api_key = "secret-key"
+`
+	// 0600 allows owner read/write - needed for OAuth token updates
+	os.WriteFile(credPath, []byte(content), 0600)
+
+	creds, err := LoadFile(credPath)
+	if err != nil {
+		t.Fatalf("0600 should be accepted: %v", err)
+	}
+	if creds.LLM == nil || creds.LLM.APIKey != "secret-key" {
+		t.Error("expected to load credentials with 0600 permissions")
 	}
 }
 
@@ -285,5 +310,114 @@ api_key = "custom-key"
 	}
 	if got := creds.GetAPIKey("my-custom-llm"); got != "custom-key" {
 		t.Errorf("my-custom-llm key = %q, want %q", got, "custom-key")
+	}
+}
+
+func TestLoadFile_OAuthToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	credPath := filepath.Join(tmpDir, "credentials.toml")
+
+	content := `
+[anthropic]
+api_key = "sk-ant-fallback"
+
+[anthropic.oauth]
+access_token = "oauth-access-token"
+refresh_token = "oauth-refresh-token"
+expires_at = "2030-01-01T00:00:00Z"
+client_id = "test-client"
+scopes = ["api", "read"]
+`
+	os.WriteFile(credPath, []byte(content), 0600)
+
+	creds, err := LoadFile(credPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// OAuth token should take priority
+	if got := creds.GetAPIKey("anthropic"); got != "oauth-access-token" {
+		t.Errorf("expected OAuth token, got %q", got)
+	}
+
+	// Check OAuth token details
+	token := creds.GetOAuthToken("anthropic")
+	if token == nil {
+		t.Fatal("expected OAuth token")
+	}
+	if token.RefreshToken != "oauth-refresh-token" {
+		t.Errorf("refresh_token = %q, want %q", token.RefreshToken, "oauth-refresh-token")
+	}
+	if token.ClientID != "test-client" {
+		t.Errorf("client_id = %q, want %q", token.ClientID, "test-client")
+	}
+	if len(token.Scopes) != 2 || token.Scopes[0] != "api" {
+		t.Errorf("scopes = %v, want [api, read]", token.Scopes)
+	}
+	if token.IsExpired() {
+		t.Error("token should not be expired (expires 2030)")
+	}
+}
+
+func TestOAuthToken_ExpiredFallsBackToAPIKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	credPath := filepath.Join(tmpDir, "credentials.toml")
+
+	content := `
+[anthropic]
+api_key = "sk-ant-fallback"
+
+[anthropic.oauth]
+access_token = "expired-oauth-token"
+expires_at = "2020-01-01T00:00:00Z"
+`
+	os.WriteFile(credPath, []byte(content), 0600)
+
+	creds, err := LoadFile(credPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expired OAuth token should fall back to API key
+	if got := creds.GetAPIKey("anthropic"); got != "sk-ant-fallback" {
+		t.Errorf("expected fallback to API key, got %q", got)
+	}
+}
+
+func TestCredentials_SaveFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	credPath := filepath.Join(tmpDir, "credentials.toml")
+
+	creds := &Credentials{
+		LLM: &ProviderCreds{APIKey: "llm-key"},
+		providers: map[string]*ProviderCreds{
+			"anthropic": {APIKey: "ant-key"},
+		},
+		oauthTokens: map[string]*OAuthToken{
+			"github-copilot": {
+				AccessToken:  "gho_token",
+				RefreshToken: "ghr_token",
+				ClientID:     "my-app",
+			},
+		},
+	}
+
+	if err := creds.SaveFile(credPath); err != nil {
+		t.Fatalf("SaveFile failed: %v", err)
+	}
+
+	// Reload and verify
+	loaded, err := LoadFile(credPath)
+	if err != nil {
+		t.Fatalf("LoadFile failed: %v", err)
+	}
+
+	if got := loaded.GetAPIKey("anthropic"); got != "ant-key" {
+		t.Errorf("anthropic key = %q, want %q", got, "ant-key")
+	}
+
+	token := loaded.GetOAuthToken("github-copilot")
+	if token == nil || token.AccessToken != "gho_token" {
+		t.Errorf("github-copilot token not loaded correctly")
 	}
 }
