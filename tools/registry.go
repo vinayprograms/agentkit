@@ -1553,7 +1553,7 @@ func (t *scratchpadWriteTool) Execute(ctx context.Context, rawArgs map[string]in
 	if err := t.store.Set(key, value); err != nil {
 		return nil, err
 	}
-	return "ok", nil
+	return fmt.Sprintf("Stored in scratchpad under key %q. Use scratchpad_read(%q) to retrieve.", key, key), nil
 }
 
 // scratchpadListTool implements the scratchpad_list tool.
@@ -2078,6 +2078,7 @@ func (t *rememberTool) Execute(ctx context.Context, rawArgs map[string]interface
 	return map[string]interface{}{
 		"stored": len(ids),
 		"ids":    ids,
+		"note":   "Stored in persistent memory. Use recall() with relevant keywords to find later.",
 	}, nil
 }
 
