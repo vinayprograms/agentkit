@@ -20,6 +20,12 @@ import (
 	"github.com/vinayprograms/agentkit/telemetry"
 )
 
+// httpClient is a shared HTTP client with timeout for all tools.
+// Context deadlines still apply and take precedence over this timeout.
+var httpClient = &http.Client{
+	Timeout: 60 * time.Second,
+}
+
 // Tool represents an executable tool.
 type Tool interface {
 	// Name returns the tool name.
@@ -910,7 +916,7 @@ func (t *webFetchTool) Execute(ctx context.Context, rawArgs map[string]interface
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GridAgent/1.0)")
 	
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch failed: %w", err)
 	}
@@ -1116,7 +1122,7 @@ func searchSearXNG(ctx context.Context, query string, count int, baseURL string)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("searxng search failed: %w", err)
 	}
@@ -1165,7 +1171,7 @@ func searchBrave(ctx context.Context, query string, count int, apiKey string) ([
 	req.Header.Set("X-Subscription-Token", apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("brave search failed: %w", err)
 	}
@@ -1216,7 +1222,7 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("tavily search failed: %w", err)
 	}
@@ -1309,7 +1315,7 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 		req.Header.Set("Accept", "text/html")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("duckduckgo search failed: %w", err)
 			continue

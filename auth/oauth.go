@@ -14,6 +14,11 @@ import (
 	"github.com/vinayprograms/agentkit/credentials"
 )
 
+// httpClient is a shared HTTP client with timeout for OAuth requests.
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
+
 // DeviceAuthConfig configures the OAuth2 device authorization flow.
 type DeviceAuthConfig struct {
 	// Provider name (e.g., "anthropic", "github-copilot")
@@ -173,7 +178,7 @@ func requestDeviceCode(ctx context.Context, cfg DeviceAuthConfig) (*DeviceCodeRe
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +215,7 @@ func pollForToken(ctx context.Context, cfg DeviceAuthConfig, deviceCode string) 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +278,7 @@ func RefreshToken(ctx context.Context, tokenURL, clientID string, token *credent
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
