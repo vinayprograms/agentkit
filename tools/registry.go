@@ -20,10 +20,21 @@ import (
 	"github.com/vinayprograms/agentkit/telemetry"
 )
 
+// defaultHTTPTimeout is used when no timeout is configured.
+const defaultHTTPTimeout = 2 * time.Minute
+
 // httpClient is a shared HTTP client with timeout for all tools.
 // Context deadlines still apply and take precedence over this timeout.
+// Use SetHTTPTimeout to configure from agent.toml timeouts.
 var httpClient = &http.Client{
-	Timeout: 60 * time.Second,
+	Timeout: defaultHTTPTimeout,
+}
+
+// SetHTTPTimeout configures the shared HTTP client timeout.
+// This should be set to the maximum of configured tool timeouts.
+// Context deadlines take precedence for individual requests.
+func SetHTTPTimeout(timeout time.Duration) {
+	httpClient.Timeout = timeout
 }
 
 // Tool represents an executable tool.
