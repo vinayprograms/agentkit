@@ -1,481 +1,207 @@
 # Agent Client Protocol (ACP) Design
 
-## Overview
+## What This Package Does
 
-The acp package implements the Agent Client Protocol, a JSON-RPC based standard for communication between code editors and AI coding agents. ACP enables editors like VS Code, Cursor, and Zed to integrate with coding agents through a unified protocol over stdio.
+The `acp` package implements the Agent Client Protocol — a standard way for code editors to communicate with AI coding agents. It handles the JSON-RPC communication between an editor (VS Code, Cursor, Zed) and your agent over stdio.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Editor agnostic | Single protocol works with any ACP-compatible editor |
-| JSON-RPC based | Standard protocol with request/response and notifications |
-| Streaming support | Real-time message chunks and tool call updates |
-| Session management | Multiple conversation contexts with metadata |
-| Capability negotiation | Client and agent advertise supported features |
+Code editors want to integrate AI assistants, but each AI has different APIs. ACP provides a common protocol:
 
-## Non-Goals
+- **For editors** — Implement ACP once, work with any compatible agent
+- **For agents** — Implement ACP once, work with any compatible editor
+- **For users** — Switch agents without switching editors
 
-| Non-Goal | Reason |
-|----------|--------|
-| Transport abstraction | ACP uses stdio exclusively |
-| Multiple connections | Single client per agent process |
-| Binary messages | JSON-only for simplicity and debugging |
-| Custom framing | Line-delimited JSON (NDJSON) |
+Without a standard protocol, every editor-agent pair would need custom integration code.
+
+## When to Use It
+
+**Use ACP for:**
+- Building agents that integrate with code editors
+- Agents that need to receive prompts and send streaming responses
+- Agents that use tools and need to report tool calls to the UI
+
+**Don't use ACP for:**
+- Non-editor integrations (use `transport` package)
+- Agent-to-agent communication (use `bus`)
+- Headless agents without user interaction
+
+## Core Concepts
+
+### JSON-RPC Over Stdio
+
+ACP uses JSON-RPC 2.0 over standard input/output. Each message is a line of JSON. The editor sends requests; the agent sends responses and notifications.
+
+This is simple and universal — any language can read/write lines of JSON to stdin/stdout.
+
+### Capabilities
+
+During initialization, the editor and agent exchange capabilities:
+
+- **Agent capabilities** — What features the agent supports (images, audio, session loading)
+- **Editor capabilities** — What the editor can display (streaming, tool calls)
+
+This negotiation ensures both sides know what the other supports.
+
+### Sessions
+
+A session represents a conversation context. The editor creates a session, sends prompts, and receives responses. Sessions can have metadata (working directory, open files).
+
+Multiple sessions are possible — each maintains separate state.
+
+### Prompts and Responses
+
+The editor sends a prompt (user message + context). The agent processes it and responds. Responses can be:
+
+- **Synchronous** — Single response with full text
+- **Streaming** — Multiple chunks sent as notifications
+
+Streaming is common for LLM-based agents — users see text appear incrementally.
 
 ## Architecture
 
 ![ACP Architecture - Communication flow between Code Editor (UI, Client) and Agent Process (Server, Handler, Tools) over stdio JSON-RPC](images/acp-architecture.png)
 
-## Core Types
+The ACP server handles:
+1. Reading JSON-RPC messages from stdin
+2. Dispatching to appropriate handlers
+3. Sending responses to stdout
+4. Emitting notifications for streaming
 
-### Server
-
-The `Server` manages the ACP protocol lifecycle over stdio:
-
-```go
-type Server struct {
-    stdin   io.Reader
-    stdout  io.Writer
-    scanner *bufio.Scanner
-    mu      sync.Mutex
-    id      atomic.Int64
-
-    // Handlers
-    onPrompt func(ctx context.Context, req *PromptRequest) (*PromptResponse, error)
-
-    // State
-    session     *Session
-    initialized bool
-    info        AgentInfo
-    caps        AgentCapabilities
-}
-```
-
-### AgentInfo
-
-Describes the agent for client display:
-
-```go
-type AgentInfo struct {
-    Name    string `json:"name"`
-    Version string `json:"version"`
-}
-```
-
-### AgentCapabilities
-
-Advertises agent features during initialization:
-
-```go
-type AgentCapabilities struct {
-    LoadSession        bool               `json:"loadSession,omitempty"`
-    PromptCapabilities PromptCapabilities `json:"promptCapabilities,omitempty"`
-}
-
-type PromptCapabilities struct {
-    Image           bool `json:"image,omitempty"`
-    Audio           bool `json:"audio,omitempty"`
-    EmbeddedContext bool `json:"embeddedContext,omitempty"`
-}
-```
-
-### JSON-RPC Messages
-
-```go
-// Request is a JSON-RPC request.
-type Request struct {
-    JSONRPC string          `json:"jsonrpc"`
-    ID      interface{}     `json:"id,omitempty"`
-    Method  string          `json:"method"`
-    Params  json.RawMessage `json:"params,omitempty"`
-}
-
-// Response is a JSON-RPC response.
-type Response struct {
-    JSONRPC string      `json:"jsonrpc"`
-    ID      interface{} `json:"id"`
-    Result  interface{} `json:"result,omitempty"`
-    Error   *Error      `json:"error,omitempty"`
-}
-
-// Notification is a JSON-RPC notification (no response expected).
-type Notification struct {
-    JSONRPC string      `json:"jsonrpc"`
-    Method  string      `json:"method"`
-    Params  interface{} `json:"params,omitempty"`
-}
-```
+Your agent implements the handlers; ACP handles the protocol plumbing.
 
 ## Protocol Flow
 
-### Initialization Handshake
+### Initialization
+
+Before any work, the editor and agent exchange capabilities:
 
 ![Initialization Handshake - Editor sends initialize request, Agent validates and responds with capabilities](images/acp-init-handshake.png)
 
+1. Editor sends `initialize` with its info and capabilities
+2. Agent responds with its info and capabilities
+3. Editor sends `initialized` notification
+4. Protocol is now ready
+
 ### Session Lifecycle
+
+A typical session flow:
 
 ![Session Lifecycle - Full flow from session creation through prompts, streaming updates, and cancellation](images/acp-session-lifecycle.png)
 
-## Protocol Messages
+1. Editor creates session (`session/new`)
+2. Editor sends prompt (`session/prompt`)
+3. Agent streams response chunks (notifications)
+4. Agent sends tool calls if needed
+5. Editor provides tool results
+6. Agent completes response
+7. Repeat for more prompts
 
-### Initialize
+### Cancellation
 
-Establishes connection and negotiates capabilities.
+Either side can cancel an in-progress operation:
+- Editor sends cancellation for a pending request
+- Agent stops processing and acknowledges
 
-**Request:**
-```go
-type InitializeRequest struct {
-    ProtocolVersion string             `json:"protocolVersion"`
-    ClientInfo      ClientInfo         `json:"clientInfo"`
-    Capabilities    ClientCapabilities `json:"capabilities"`
-}
+This handles cases like user pressing "Stop" mid-generation.
 
-type ClientInfo struct {
-    Name    string `json:"name"`
-    Version string `json:"version"`
-}
+## Message Types
 
-type ClientCapabilities struct {
-    Terminal      bool `json:"terminal,omitempty"`
-    ReadTextFile  bool `json:"fs.readTextFile,omitempty"`
-    WriteTextFile bool `json:"fs.writeTextFile,omitempty"`
-}
-```
+### Requests (Editor → Agent)
 
-**Response:**
-```go
-type InitializeResponse struct {
-    ProtocolVersion string            `json:"protocolVersion"`
-    AgentInfo       AgentInfo         `json:"agentInfo"`
-    Capabilities    AgentCapabilities `json:"capabilities"`
-}
-```
+| Method | Purpose |
+|--------|---------|
+| `initialize` | Start protocol, exchange capabilities |
+| `session/new` | Create new conversation session |
+| `session/prompt` | Send user message for processing |
+| `$/cancelRequest` | Cancel pending operation |
 
-### Session/New
+### Responses (Agent → Editor)
 
-Creates a new conversation session.
+Responses match requests by ID. They contain either a result or an error.
 
-**Request:**
-```go
-type NewSessionRequest struct {
-    Metadata map[string]string `json:"metadata,omitempty"`
-}
-```
+### Notifications (Agent → Editor)
 
-**Response:**
-```go
-type NewSessionResponse struct {
-    Session Session `json:"session"`
-}
+| Method | Purpose |
+|--------|---------|
+| `session/update` | Streaming text chunk |
+| `toolCall/start` | Tool execution started |
+| `toolCall/result` | Tool execution completed |
 
-type Session struct {
-    ID       string            `json:"id"`
-    Metadata map[string]string `json:"metadata,omitempty"`
-}
-```
-
-### Session/Prompt
-
-Sends a user prompt and receives streaming updates.
-
-**Request:**
-```go
-type PromptRequest struct {
-    SessionID string        `json:"sessionId"`
-    Prompt    []PromptPart  `json:"prompt"`
-    Command   *CommandInput `json:"command,omitempty"`
-}
-
-type PromptPart struct {
-    Type string `json:"type"` // "text", "image", "audio"
-    Text string `json:"text,omitempty"`
-    Data string `json:"data,omitempty"` // base64
-    Mime string `json:"mimeType,omitempty"`
-}
-
-type CommandInput struct {
-    Name  string `json:"name"`
-    Input string `json:"input,omitempty"`
-}
-```
-
-**Response:**
-```go
-type PromptResponse struct {
-    StopReason string `json:"stopReason"` // "endTurn", "cancelled", "error"
-}
-```
-
-### Session/Update (Notification)
-
-Streams updates during prompt processing.
-
-```go
-type SessionNotification struct {
-    SessionID string        `json:"sessionId"`
-    Update    SessionUpdate `json:"update"`
-}
-
-type SessionUpdate struct {
-    Type     string          `json:"type"` // "messageChunk", "toolCall", "planUpdate"
-    Role     string          `json:"role,omitempty"`
-    Chunk    string          `json:"chunk,omitempty"`
-    ToolCall *ToolCallUpdate `json:"toolCall,omitempty"`
-}
-
-type ToolCallUpdate struct {
-    ID     string `json:"id"`
-    Name   string `json:"name"`
-    Status string `json:"status"` // "running", "completed", "error"
-    Input  string `json:"input,omitempty"`
-    Output string `json:"output,omitempty"`
-}
-```
-
-## Session Management
-
-Sessions enable multiple concurrent conversations with isolated state.
-
-| Feature | Description |
-|---------|-------------|
-| Session IDs | Unique identifiers (e.g., `session-1`) |
-| Metadata | Key-value pairs for context (workDir, git branch, etc.) |
-| Isolation | Each session maintains its own conversation history |
-| Auto-increment | Server generates sequential IDs |
-
-```go
-// Create session with metadata
-session := &Session{
-    ID: "session-1",
-    Metadata: map[string]string{
-        "workDir": "/project",
-        "branch":  "feature/new-ui",
-    },
-}
-```
-
-## Prompt Capabilities
-
-Agents advertise supported prompt content types:
-
-| Capability | Description |
-|------------|-------------|
-| `image` | Accept base64-encoded images in prompts |
-| `audio` | Accept base64-encoded audio in prompts |
-| `embeddedContext` | Support embedded file context |
-
-```go
-caps := AgentCapabilities{
-    LoadSession: true,
-    PromptCapabilities: PromptCapabilities{
-        Image:           true,
-        Audio:           false,
-        EmbeddedContext: true,
-    },
-}
-```
-
-## Usage Patterns
-
-### Basic Server Setup
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-    
-    "github.com/anthropics/agentkit/acp"
-)
-
-func main() {
-    // Create server with agent info
-    server := acp.NewServer(
-        acp.AgentInfo{
-            Name:    "my-coding-agent",
-            Version: "1.0.0",
-        },
-        acp.AgentCapabilities{
-            LoadSession: true,
-            PromptCapabilities: acp.PromptCapabilities{
-                Image: true,
-            },
-        },
-    )
-    
-    // Set prompt handler
-    server.OnPrompt(handlePrompt)
-    
-    // Run server loop
-    if err := server.Run(context.Background()); err != nil {
-        log.Fatal(err)
-    }
-}
-```
-
-### Prompt Handler with Streaming
-
-```go
-func handlePrompt(ctx context.Context, req *acp.PromptRequest) (*acp.PromptResponse, error) {
-    // Extract text from prompt
-    var userText string
-    for _, part := range req.Prompt {
-        if part.Type == "text" {
-            userText = part.Text
-            break
-        }
-    }
-    
-    // Stream response chunks
-    server.SendMessageChunk(req.SessionID, "assistant", "Processing your request...\n")
-    
-    // Notify about tool execution
-    server.SendToolCall(req.SessionID, &acp.ToolCallUpdate{
-        ID:     "call-1",
-        Name:   "read_file",
-        Status: "running",
-        Input:  "/path/to/file.go",
-    })
-    
-    // ... execute tool ...
-    
-    server.SendToolCall(req.SessionID, &acp.ToolCallUpdate{
-        ID:     "call-1",
-        Name:   "read_file",
-        Status: "completed",
-        Output: "file contents...",
-    })
-    
-    // Send final response
-    server.SendMessageChunk(req.SessionID, "assistant", "I've read the file and...")
-    
-    return &acp.PromptResponse{
-        StopReason: "endTurn",
-    }, nil
-}
-```
-
-### Handling Slash Commands
-
-```go
-func handlePrompt(ctx context.Context, req *acp.PromptRequest) (*acp.PromptResponse, error) {
-    if req.Command != nil {
-        switch req.Command.Name {
-        case "search":
-            return handleSearchCommand(ctx, req.SessionID, req.Command.Input)
-        case "fix":
-            return handleFixCommand(ctx, req.SessionID, req.Command.Input)
-        default:
-            return &acp.PromptResponse{StopReason: "error"}, 
-                   fmt.Errorf("unknown command: %s", req.Command.Name)
-        }
-    }
-    
-    // Handle regular prompt
-    return handleRegularPrompt(ctx, req)
-}
-```
-
-### Multi-modal Prompts
-
-```go
-func handlePrompt(ctx context.Context, req *acp.PromptRequest) (*acp.PromptResponse, error) {
-    for _, part := range req.Prompt {
-        switch part.Type {
-        case "text":
-            processText(part.Text)
-        case "image":
-            // part.Data is base64-encoded
-            // part.Mime is e.g., "image/png"
-            processImage(part.Data, part.Mime)
-        case "audio":
-            processAudio(part.Data, part.Mime)
-        }
-    }
-    // ...
-}
-```
+Notifications are fire-and-forget — no response expected.
 
 ## Error Handling
 
-### JSON-RPC Error Codes
+ACP uses JSON-RPC error codes:
 
-| Code | Meaning | When Used |
-|------|---------|-----------|
-| `-32700` | Parse error | Invalid JSON |
-| `-32600` | Invalid request | Malformed request structure |
-| `-32601` | Method not found | Unknown method name |
-| `-32602` | Invalid params | Bad parameters |
-| `-32603` | Internal error | Handler errors |
+| Code | Meaning |
+|------|---------|
+| -32700 | Parse error (invalid JSON) |
+| -32600 | Invalid request |
+| -32601 | Method not found |
+| -32602 | Invalid params |
+| -32603 | Internal error |
 
-### Error Response Format
+Agent-specific errors use positive codes defined by the application.
 
-```go
-type Error struct {
-    Code    int         `json:"code"`
-    Message string      `json:"message"`
-    Data    interface{} `json:"data,omitempty"`
-}
-```
+## Common Patterns
 
-### Handler Error Handling
+### Streaming Responses
 
-```go
-func (s *Server) handleRequest(ctx context.Context, req *Request) error {
-    switch req.Method {
-    case "initialize":
-        return s.handleInitialize(req)
-    case "session/new":
-        return s.handleNewSession(req)
-    case "session/prompt":
-        return s.handlePrompt(ctx, req)
-    case "session/cancel":
-        return s.sendResult(req.ID, map[string]interface{}{})
-    default:
-        return s.sendError(req.ID, -32601, "Method not found", nil)
-    }
-}
-```
+For LLM-generated text:
+1. Receive prompt
+2. Start LLM generation
+3. As tokens arrive, send `session/update` notifications
+4. When complete, send final response
 
-### Stop Reasons
+### Tool Calls
 
-| StopReason | Meaning |
-|------------|---------|
-| `endTurn` | Normal completion |
-| `cancelled` | User cancelled via session/cancel |
-| `error` | Handler encountered an error |
+When the agent needs to use a tool:
+1. Send `toolCall/start` notification
+2. Execute tool
+3. Send `toolCall/result` notification
+4. Continue response generation
 
-## Package Structure
+The editor can display tool execution to the user.
 
-```
-acp/
-├── server.go      # Server + all types + message handling
-└── acp_test.go    # Unit tests for types and server
-```
+### Context Embedding
 
-## Wire Protocol
+Editors can send embedded context with prompts (file contents, selections). The agent uses this without needing to read the filesystem directly.
 
-Messages are exchanged as newline-delimited JSON (NDJSON) over stdio:
+## Integration Notes
 
-```
-stdin  (client → agent):  {"jsonrpc":"2.0","id":1,"method":"initialize",...}\n
-stdout (agent → client):  {"jsonrpc":"2.0","id":1,"result":{...}}\n
-stdout (notifications):   {"jsonrpc":"2.0","method":"session/update",...}\n
-```
+### With LLM Package
 
-### Thread Safety
+The prompt handler typically calls an LLM. Stream LLM responses back via notifications.
 
-- All `send*` methods acquire a mutex before writing to stdout
-- Request handling is synchronous (one request at a time via scanner)
-- Session state updates are protected by atomic operations
+### With Transport Package
+
+ACP is stdio-specific. For other transports (WebSocket, HTTP), use the general `transport` package.
+
+### With Shutdown
+
+Handle `$/exit` or process termination gracefully. Flush any pending state before exiting.
+
+## Design Decisions
+
+### Why stdio?
+
+Editors typically spawn agent processes. Stdio is the simplest IPC — no ports, no sockets, works everywhere.
+
+### Why JSON-RPC?
+
+Standard, simple, well-supported. Easy to debug (human-readable). Line-delimited JSON is trivial to parse.
+
+### Why capability negotiation?
+
+Agents and editors evolve independently. Capabilities let them gracefully degrade when features don't match.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Type marshaling, request routing |
-| Integration | Full initialize → session → prompt flow |
-| Protocol | JSON-RPC compliance, error codes |
-| Streaming | Notification delivery, ordering |
+| Unit | Message parsing, capability negotiation |
+| Protocol | Initialization sequence, session lifecycle |
+| Streaming | Notification delivery, chunked responses |
+| Errors | Invalid requests, cancellation handling |
+| Integration | Full editor-agent round trip |
