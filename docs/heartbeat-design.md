@@ -1,277 +1,135 @@
 # Heartbeat Design
 
-## Overview
+## What This Package Does
 
-The heartbeat package provides liveness detection for distributed agents. It consists of two components: senders that emit periodic heartbeats, and monitors that track agent liveness and detect failures.
+The `heartbeat` package detects when agents die or become unresponsive. Agents periodically send "I'm alive" signals. A monitor watches for these signals and raises alerts when they stop.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Failure detection | Identify dead or unresponsive agents |
-| Status broadcasting | Share load and status across the swarm |
-| Configurable timing | Adjustable intervals for different needs |
-| Bus agnostic | Works over any MessageBus implementation |
-| Registry integration | Update registry based on liveness |
+In a distributed swarm, agents can crash, hang, or lose network connectivity. Without heartbeats, the system has no way to know an agent is gone — tasks assigned to it would wait forever.
 
-## Non-Goals
+Heartbeats solve this by creating a simple contract: agents promise to send a signal every few seconds. If signals stop, the agent is presumed dead, and the system can respond (reassign tasks, alert operators, spin up replacements).
 
-| Non-Goal | Reason |
-|----------|--------|
-| Leader election | Separate concern; use consensus algorithms |
-| Health checks | This is liveness, not deep health probing |
-| Automatic recovery | Detection only; recovery is caller's job |
-| Persistent history | Monitor keeps only last heartbeat per agent |
+## When to Use It
+
+**Use heartbeats for:**
+- Detecting crashed or frozen agents
+- Tracking which agents are currently available
+- Monitoring agent load for work distribution
+- Triggering cleanup when agents disappear
+
+**Don't use heartbeats for:**
+- Deep health checks (this is liveness, not correctness)
+- Leader election (use consensus algorithms)
+- Automatic recovery (detection only — recovery is your job)
+
+## Core Concepts
+
+### Heartbeat Signals
+
+A heartbeat is a small message containing:
+- **Agent ID** — Who sent it
+- **Timestamp** — When it was sent
+- **Status** — What the agent is doing ("idle", "busy", etc.)
+- **Load** — How busy the agent is (0.0 to 1.0)
+- **Metadata** — Optional extra info
+
+Heartbeats are published to the message bus on a subject like `heartbeat.agent-abc123`.
+
+### Senders and Monitors
+
+**Sender** — Runs inside each agent. Sends heartbeats at a regular interval (e.g., every 5 seconds). The agent can update its status and load between beats.
+
+**Monitor** — Runs in a supervisor or coordinator. Subscribes to all heartbeat subjects and tracks when each agent last checked in. If an agent misses too many beats, the monitor fires a callback.
 
 ## Architecture
 
 ![Heartbeat Architecture - Agents with Senders publish heartbeats via MessageBus to the Monitor](images/heartbeat-architecture.png)
 
-## Heartbeat Message Format
+The sender and monitor communicate indirectly through the message bus. They never talk directly to each other. This decoupling means:
+- Agents don't need to know who's monitoring them
+- Multiple monitors can watch the same agents
+- Adding/removing agents doesn't require configuration changes
 
-```go
-type Heartbeat struct {
-    AgentID   string            `json:"agent_id"`
-    Timestamp time.Time         `json:"timestamp"`
-    Status    string            `json:"status"`  // "idle", "busy", etc.
-    Load      float64           `json:"load"`    // 0.0-1.0
-    Metadata  map[string]string `json:"metadata,omitempty"`
-}
-```
+## Death Detection
 
-**Subject format:** `heartbeat.<agent-id>`
+The monitor uses a simple timeout algorithm:
 
-Example: `heartbeat.agent-abc123`
+1. Track the last heartbeat time for each known agent
+2. Periodically check: has any agent exceeded the timeout?
+3. If yes, fire the "dead" callback (once per death)
 
-## Sender Interface
+### Timing Tradeoffs
 
-```go
-type Sender interface {
-    // Start begins sending heartbeats at configured interval.
-    Start(ctx context.Context) error
+| Heartbeat Interval | Timeout | Detection Speed | False Positives |
+|--------------------|---------|-----------------|-----------------|
+| 1 second | 3 seconds | Fast | Higher (network blips) |
+| 5 seconds | 15 seconds | Medium | Low |
+| 30 seconds | 90 seconds | Slow | Very low |
 
-    // SetStatus updates the status field.
-    SetStatus(status string)
+**Rule of thumb:** Set timeout to 2-3x the heartbeat interval. This tolerates a missed beat or two without false alarms.
 
-    // SetLoad updates the load metric (clamped to 0.0-1.0).
-    SetLoad(load float64)
+Shorter intervals catch failures faster but cost more network traffic and risk false positives from temporary network issues. Longer intervals are cheaper but slower to detect problems.
 
-    // SetMetadata updates a metadata field.
-    SetMetadata(key, value string)
+## Common Patterns
 
-    // Stop stops sending heartbeats.
-    Stop() error
-}
-```
+### Basic Agent Heartbeat
 
-**Configuration:**
-- `Bus` - MessageBus for publishing
-- `AgentID` - Unique agent identifier
-- `Interval` - Time between heartbeats (default: 5s)
-- `InitialStatus` - Starting status (default: "idle")
-
-## Monitor Interface
-
-```go
-type Monitor interface {
-    // Watch returns heartbeats for a specific agent.
-    Watch(agentID string) (<-chan *Heartbeat, error)
-
-    // WatchAll returns all heartbeats (starts monitoring).
-    WatchAll() (<-chan *Heartbeat, error)
-
-    // IsAlive checks if agent sent heartbeat within timeout.
-    IsAlive(agentID string, timeout time.Duration) bool
-
-    // LastHeartbeat returns most recent heartbeat, if any.
-    LastHeartbeat(agentID string) *Heartbeat
-
-    // OnDead registers callback for dead agent detection.
-    OnDead(callback func(agentID string))
-
-    // Stop stops monitoring.
-    Stop() error
-}
-```
-
-**Configuration:**
-- `Bus` - MessageBus for subscribing
-- `Timeout` - Dead threshold (default: 15s, should be 2-3x interval)
-- `CheckInterval` - How often to check for deaths (default: 1s)
-
-## Death Detection Algorithm
-
-The monitor uses a simple timeout-based algorithm:
-
-```
-For each known agent:
-    if (now - lastHeartbeat.Timestamp) > timeout:
-        if not already_reported[agentID]:
-            mark as reported
-            invoke OnDead callbacks
-```
-
-**Timing recommendations:**
-| Heartbeat Interval | Suggested Timeout | Rationale |
-|--------------------|-------------------|-----------|
-| 5 seconds | 15 seconds | Tolerates 2 missed beats |
-| 1 second | 3-5 seconds | Fast detection for critical agents |
-| 30 seconds | 90 seconds | Low-overhead for stable agents |
-
-**Tradeoffs:**
-- Shorter timeout = faster detection, more false positives
-- Longer timeout = fewer false positives, slower detection
-
-## Implementations
-
-### BusSender
-
-Production sender over MessageBus.
-
-| Feature | Implementation |
-|---------|----------------|
-| Publishing | Periodic publish to `heartbeat.<id>` |
-| Threading | Single goroutine with ticker |
-| State updates | RWMutex-protected fields |
-| Initial beat | Sent immediately on Start() |
-
-### BusMonitor
-
-Production monitor over MessageBus.
-
-| Feature | Implementation |
-|---------|----------------|
-| Subscription | Subscribes to `heartbeat.*` (or equivalent) |
-| Tracking | `map[string]*Heartbeat` for last seen |
-| Death check | Periodic goroutine at `CheckInterval` |
-| Callbacks | Slice of `func(string)`, called synchronously |
-
-### Memory Implementations
-
-For testing:
-- `MemorySender` - Records sent heartbeats to slice
-- `MemoryMonitor` - Manual heartbeat injection, manual death check
-
-## Package Structure
-
-```
-heartbeat/
-├── heartbeat.go   # Types, interfaces, config
-├── sender.go      # BusSender + MemorySender
-├── sender_test.go
-├── monitor.go     # BusMonitor + MemoryMonitor
-├── monitor_test.go
-└── doc.go         # Package documentation
-```
-
-## Usage Patterns
-
-### Agent Heartbeat
-
-```go
-sender, err := heartbeat.NewBusSender(heartbeat.SenderConfig{
-    Bus:     msgBus,
-    AgentID: agentID,
-    Interval: 5 * time.Second,
-})
-if err != nil {
-    return err
-}
-
-// Start heartbeating
-ctx, cancel := context.WithCancel(context.Background())
-sender.Start(ctx)
-
-// Update as work happens
-sender.SetStatus("busy")
-sender.SetLoad(0.7)
-
-// Graceful shutdown
-sender.Stop()
-cancel()
-```
+An agent starts a sender when it boots. The sender automatically publishes heartbeats until stopped. The agent updates its status as work progresses ("idle" → "busy" → "idle").
 
 ### Supervisor Monitoring
 
-```go
-monitor, err := heartbeat.NewBusMonitor(heartbeat.MonitorConfig{
-    Bus:     msgBus,
-    Timeout: 15 * time.Second,
-})
-if err != nil {
-    return err
-}
+A supervisor starts a monitor and registers a callback for dead agents. When an agent dies, the callback fires — the supervisor can then deregister the agent, reassign its tasks, or alert operators.
 
-// Register death callback
-monitor.OnDead(func(agentID string) {
-    log.Printf("Agent %s is dead", agentID)
-    registry.Deregister(agentID)
-    rescheduleTasks(agentID)
-})
+### Load-Aware Work Distribution
 
-// Start monitoring all agents
-heartbeats, _ := monitor.WatchAll()
+Heartbeats include load metrics. A coordinator can watch heartbeats and preferentially assign work to agents with lower load. This enables simple load balancing without complex protocols.
 
-// Optionally process heartbeats
-for hb := range heartbeats {
-    log.Printf("Heartbeat from %s: load=%.2f", hb.AgentID, hb.Load)
-}
-```
+### Registry Integration
 
-### Query Agent Status
+Heartbeats and the registry often work together:
+- Heartbeat detects the agent is gone
+- Callback removes the agent from the registry
+- Other components query the registry and no longer see the dead agent
 
-```go
-// Check if specific agent is alive
-if monitor.IsAlive("agent-123", 15*time.Second) {
-    // Safe to assign work
-}
+## What Heartbeats Don't Do
 
-// Get last known state
-last := monitor.LastHeartbeat("agent-123")
-if last != nil {
-    fmt.Printf("Last status: %s, load: %.2f\n", last.Status, last.Load)
-}
-```
+**No recovery** — The monitor only detects failures. What to do about them (restart, reassign, alert) is up to you.
 
-## Integration with Registry
+**No health checks** — An agent might be alive but misbehaving (returning wrong results, stuck in a loop). Heartbeats only prove the process is running and can reach the network.
 
-Common pattern: heartbeat drives registry updates
+**No history** — The monitor keeps only the most recent heartbeat per agent. If you need historical data, log the heartbeats yourself.
 
-```go
-// In agent
-go func() {
-    ticker := time.NewTicker(5 * time.Second)
-    for range ticker.C {
-        // Update both
-        sender.SetLoad(calculateLoad())
-        registry.Register(AgentInfo{
-            ID:     agentID,
-            Load:   calculateLoad(),
-            Status: currentStatus,
-        })
-    }
-}()
+## Error Scenarios
 
-// In supervisor
-monitor.OnDead(func(agentID string) {
-    registry.Deregister(agentID)
-})
-```
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Network partition | Heartbeats stop arriving | Monitor triggers death callback (may be false positive) |
+| Agent frozen | Heartbeats stop | Monitor detects correctly |
+| Agent crash | Heartbeats stop | Monitor detects correctly |
+| Bus down | Nothing works | Fix the bus first |
+| High load delays heartbeat | May trigger false death | Increase timeout or fix the load |
 
-## Error Handling
+## Implementation Notes
 
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrAlreadyStarted` | Sender/monitor already running | Ignore or fix logic |
-| `ErrNotStarted` | Stop called before Start | Ignore or fix logic |
-| `ErrInvalidConfig` | Missing Bus or AgentID | Fix configuration |
+### Thread Safety
+
+Both sender and monitor are safe to use from multiple goroutines. Status/load updates don't block heartbeat publishing.
+
+### Startup Behavior
+
+Senders publish immediately on start (don't wait for first interval). This lets monitors detect new agents right away.
+
+### Graceful Shutdown
+
+Call `Stop()` before exiting. This ensures a clean shutdown — the final heartbeat is sent and resources are released.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Heartbeat serialization, timing |
-| Integration | Full sender→bus→monitor flow |
-| Timing | Death detection accuracy |
-| Concurrency | Multiple senders, callback safety |
-| Failure | Bus disconnection, recovery |
+| Unit | Heartbeat serialization, timing accuracy |
+| Integration | Full sender → bus → monitor flow |
+| Timing | Death detection fires at correct threshold |
+| Concurrency | Multiple senders, callback thread safety |
+| Failure | Bus disconnection, recovery behavior |
