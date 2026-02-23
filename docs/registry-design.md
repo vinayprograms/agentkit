@@ -1,281 +1,166 @@
 # Agent Registry Design
 
-## Overview
+## What This Package Does
 
-The registry package provides agent registration and capability-based discovery for swarm coordination. Agents self-register with their capabilities, status, and load metrics. Other agents discover and select appropriate handlers based on requirements.
+The `registry` package keeps track of which agents exist and what they can do. Agents register themselves ("I can do code review"), and other agents query the registry to find help ("Who can review code?").
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Capability discovery | Find agents by what they can do |
-| Load-aware selection | Route to least-loaded agents |
-| Real-time updates | Watch for agent arrivals/departures |
-| Backend agnostic | Memory for testing, NATS for production |
-| TTL-based cleanup | Stale entries auto-expire |
+In a swarm, agents need to find each other:
 
-## Non-Goals
+- **Task routing** — A coordinator receives a "review this code" task. Who should handle it? The registry answers: "Agent X can do code-review and has low load."
+- **Load balancing** — Multiple agents might handle the same capability. The registry tracks load so work goes to the least-busy agent.
+- **Dynamic membership** — Agents come and go. The registry provides a live view of who's currently available.
 
-| Non-Goal | Reason |
-|----------|--------|
-| Service mesh | Not a full service discovery system |
-| Health checks | Use heartbeat package instead |
-| Load balancing | Registry provides data; caller decides |
-| Hierarchical namespaces | Flat capability model is simpler |
+Without a registry, you'd need static configuration listing every agent and its capabilities. That doesn't scale and breaks when agents crash.
 
-## Core Types
+## When to Use It
 
-### AgentInfo
+**Use the registry for:**
+- Finding agents by capability ("who can do X?")
+- Load-aware task routing
+- Tracking which agents are currently online
+- Reacting when agents join or leave
 
-```go
-type AgentInfo struct {
-    ID           string            // Unique identifier
-    Name         string            // Human-readable name
-    Capabilities []string          // What the agent can do
-    Status       Status            // Current state
-    Load         float64           // Normalized load (0.0-1.0)
-    Metadata     map[string]string // Additional key-value pairs
-    LastSeen     time.Time         // Last registration update
-}
+**Don't use the registry for:**
+- Health checks (use `heartbeat` for liveness)
+- Storing agent state (use `state` package)
+- Message routing (use `bus` package)
 
-type Status string
-const (
-    StatusIdle     Status = "idle"
-    StatusBusy     Status = "busy"
-    StatusRunning  Status = "running"
-    StatusStopping Status = "stopping"
-)
-```
+## Core Concepts
 
-### Registry Interface
+### Agent Information
 
-```go
-type Registry interface {
-    // Register adds or updates an agent in the registry.
-    Register(info AgentInfo) error
+Each registered agent has:
+- **ID** — Unique identifier (typically a UUID)
+- **Name** — Human-readable label
+- **Capabilities** — List of things it can do (e.g., "code-review", "test", "deploy")
+- **Status** — Current state ("idle", "busy", "stopping")
+- **Load** — How busy it is (0.0 to 1.0)
+- **Metadata** — Optional key-value pairs for extra info
 
-    // Deregister removes an agent from the registry.
-    Deregister(id string) error
+### Registration
 
-    // Get retrieves a specific agent by ID.
-    Get(id string) (*AgentInfo, error)
+Agents register themselves when they start and update their entry periodically. Registration is upsert — if the agent exists, it updates; if not, it creates.
 
-    // List returns all agents matching the optional filter.
-    List(filter *Filter) ([]AgentInfo, error)
+Registration typically happens alongside heartbeats: every few seconds, the agent re-registers with fresh load metrics.
 
-    // FindByCapability returns agents with a specific capability.
-    // Results sorted by load (lowest first).
-    FindByCapability(capability string) ([]AgentInfo, error)
+### TTL and Expiry
 
-    // Watch returns a channel of registry events.
-    Watch() (<-chan Event, error)
+Registrations can have a TTL (time-to-live). If an agent stops updating, its entry automatically expires. This prevents stale entries from dead agents cluttering the registry.
 
-    // Close shuts down the registry client.
-    Close() error
-}
-```
+### Capabilities
 
-### Filter
+Capabilities are simple strings. There's no hierarchy or wildcard matching — an agent either has a capability or it doesn't. Keep capability names consistent across your swarm.
 
-```go
-type Filter struct {
-    Status     Status  // Filter by state (empty = all)
-    Capability string  // Filter by capability
-    MaxLoad    float64 // Filter to agents at or below this load
-}
-```
-
-### Events
-
-```go
-type EventType string
-const (
-    EventAdded   EventType = "added"
-    EventUpdated EventType = "updated"
-    EventRemoved EventType = "removed"
-)
-
-type Event struct {
-    Type  EventType
-    Agent AgentInfo
-}
-```
+Examples: "code-review", "image-generation", "web-search", "python-execution"
 
 ## Architecture
 
 ![Registry Architecture](images/registry-architecture.png)
 
-## Implementations
+The registry has two implementations:
 
-### MemoryRegistry
+**MemoryRegistry** — In-memory storage for testing and single-node deployments. All data lives in Go maps.
 
-In-memory implementation for testing and single-node deployments.
+**NATSRegistry** — Distributed storage using NATS JetStream KV. Supports clustering and replication. This is what you'd use in production.
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | `map[string]AgentInfo` with RWMutex |
-| TTL | Cleanup goroutine runs at `TTL/2` interval |
-| Watch | Buffered channels, non-blocking sends |
-| Thread safety | All operations use appropriate locks |
+Both implement the same interface, so code works unchanged across environments.
 
-**Configuration:**
-- `TTL` - Duration before agent considered stale (0 = never expires)
+## Finding Agents
 
-### NATSRegistry
+### By Capability
 
-Distributed implementation using NATS JetStream KV store.
+Query for agents that can handle a specific task. Results come back sorted by load (lowest first), making it easy to pick the least-busy agent.
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | JetStream KV bucket (JSON-encoded AgentInfo) |
-| TTL | Native KV TTL support |
-| Watch | KV watcher with event translation |
-| Replication | Configurable bucket replicas |
+### By Filter
 
-**Configuration:**
-- `BucketName` - KV bucket name (default: "agent-registry")
-- `TTL` - Entry expiry time
-- `Replicas` - Number of replicas (1-5)
+More complex queries can filter by:
+- Status (only "idle" agents)
+- Maximum load (only agents below 50% load)
+- Capability (combined with above)
 
-## Package Structure
+### Load-Aware Selection
 
-```
-registry/
-├── registry.go    # Interface + types + helpers
-├── memory.go      # MemoryRegistry implementation
-├── memory_test.go
-├── nats.go        # NATSRegistry implementation
-├── nats_test.go
-└── doc.go         # Package documentation
-```
+The registry doesn't make routing decisions — it provides data. Typical patterns:
 
-## Watch for Changes
+- **Least loaded** — Always pick the first result (lowest load)
+- **Random from top N** — Pick randomly from the 3 least-loaded agents
+- **Threshold** — Only consider agents below a certain load
 
-Watchers receive events when agents are added, updated, or removed:
+## Watching for Changes
 
-```go
-events, err := registry.Watch()
-if err != nil {
-    return err
-}
+You can subscribe to registry events to react when agents come and go:
 
-for event := range events {
-    switch event.Type {
-    case EventAdded:
-        log.Printf("Agent joined: %s", event.Agent.ID)
-    case EventUpdated:
-        log.Printf("Agent updated: %s (load: %.2f)", 
-            event.Agent.ID, event.Agent.Load)
-    case EventRemoved:
-        log.Printf("Agent left: %s", event.Agent.ID)
-    }
-}
-```
+- **Added** — New agent registered
+- **Updated** — Existing agent changed (load, status)
+- **Removed** — Agent deregistered or expired
 
-**Event delivery:**
-- Non-blocking sends (events dropped if channel full)
-- Channel buffer size: 64 events
-- Channel closed when registry closes
-
-## Load-Aware Selection
-
-`FindByCapability` returns agents sorted by load (lowest first):
-
-```go
-// Find code-review capable agents, sorted by load
-agents, err := registry.FindByCapability("code-review")
-if err != nil {
-    return err
-}
-
-if len(agents) == 0 {
-    return ErrNoAgentsAvailable
-}
-
-// Select least-loaded agent
-target := agents[0]
-```
-
-**Selection strategies (caller's responsibility):**
-- **Least loaded:** Always pick first (lowest load)
-- **Random from N:** Pick random from top N lowest
-- **Threshold:** Only consider agents below load threshold
-
-## Usage Patterns
-
-### Self-Registration
-
-```go
-// Agent startup
-info := registry.AgentInfo{
-    ID:           "agent-" + uuid.New().String(),
-    Name:         "Code Reviewer",
-    Capabilities: []string{"code-review", "lint", "test"},
-    Status:       registry.StatusIdle,
-    Load:         0.0,
-}
-registry.Register(info)
-
-// Periodic update (typically with heartbeat)
-info.Load = calculateLoad()
-info.Status = currentStatus()
-registry.Register(info)
-
-// Agent shutdown
-registry.Deregister(info.ID)
-```
-
-### Capability Discovery
-
-```go
-// Find agents that can handle code review
-agents, _ := registry.FindByCapability("code-review")
-
-// Find idle agents with low load
-agents, _ := registry.List(&registry.Filter{
-    Status:  registry.StatusIdle,
-    MaxLoad: 0.5,
-})
-```
-
-### Supervisor Pattern
-
-```go
-events, _ := registry.Watch()
-
-for event := range events {
-    if event.Type == registry.EventRemoved {
-        // Agent died, reschedule its work
-        rescheduleTasks(event.Agent.ID)
-    }
-}
-```
+This enables patterns like:
+- Rescheduling work when an agent disappears
+- Logging swarm membership changes
+- Updating dashboards in real-time
 
 ## Integration with Heartbeat
 
-Registry and heartbeat work together for liveness detection:
+Registry and heartbeat often work together:
 
 ![Heartbeat Integration Flow](images/registry-heartbeat-integration.png)
 
-Typically:
-- Heartbeat sender updates registry on each beat
-- Heartbeat monitor deregisters dead agents
+1. Agent sends heartbeat (proves it's alive)
+2. Heartbeat sender also updates registry (shares load/status)
+3. If heartbeats stop, monitor fires callback
+4. Callback deregisters the dead agent
 
-## Error Handling
+This creates a complete lifecycle: agents automatically appear when healthy and disappear when dead.
 
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrNotFound` | Agent ID not in registry | Expected for queries |
-| `ErrClosed` | Registry has been closed | Reconnect or exit |
-| `ErrInvalidID` | Empty agent ID | Fix caller code |
-| `ErrDuplicateID` | ID collision (rare) | Use UUIDs |
+## Common Patterns
+
+### Self-Registration
+
+Agent registers on startup with its capabilities. Periodically re-registers with updated load. Deregisters on graceful shutdown.
+
+### Capability-Based Routing
+
+Coordinator receives task, queries registry for capable agents, picks one (usually least loaded), assigns work.
+
+### Supervisor Watching
+
+A supervisor watches for removed events. When an agent disappears, the supervisor reassigns any pending work.
+
+### Discovery Cache
+
+For performance, cache registry results briefly. The registry is eventually consistent anyway — a few seconds of staleness is usually fine.
+
+## Error Scenarios
+
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Agent not found | Query returns empty | Expected — agent may have died |
+| Registry closed | Operations fail | Reconnect or shut down |
+| TTL expiry | Agent removed automatically | Normal cleanup behavior |
+| Network partition | Registry may be stale | Accept eventual consistency |
+
+## Design Decisions
+
+### Why capabilities instead of roles?
+
+Capabilities are more flexible. An agent can have multiple capabilities, and capability names are arbitrary. Roles suggest hierarchy; capabilities suggest composition.
+
+### Why client-side load selection?
+
+The registry returns data; the caller decides policy. Different tasks might want different selection strategies. Keeping selection logic out of the registry makes it more flexible.
+
+### Why TTL-based cleanup?
+
+TTL handles the common case (crashed agents) without requiring explicit deregistration. Combined with heartbeat integration, it creates robust self-healing behavior.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | CRUD operations, filtering, event delivery |
-| Integration | Multi-agent registration scenarios |
-| Concurrency | Concurrent register/deregister |
-| TTL | Expiry behavior, cleanup timing |
+| Unit | CRUD operations, filtering logic, event delivery |
+| Integration | Multi-agent registration and discovery |
+| Concurrency | Simultaneous register/deregister calls |
+| TTL | Expiry timing and cleanup |
 | Watch | Event ordering, channel behavior |
