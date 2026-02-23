@@ -1,364 +1,163 @@
 # Rate Limiter Design
 
-## Overview
+## What This Package Does
 
-The ratelimit package provides rate limit coordination for shared resources across agent swarms. It implements token bucket rate limiting with both local and distributed modes, enabling multiple agents to safely share API quotas and resource capacity.
+The `ratelimit` package prevents agents from overwhelming shared resources (like APIs) by coordinating request rates across a swarm. When one agent hits a rate limit, it tells the others to slow down too.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Shared resource protection | Prevent agents from exceeding API rate limits |
-| Distributed coordination | Synchronize capacity across agent swarms via message bus |
-| Adaptive throttling | Automatically reduce capacity when limits are hit (429 responses) |
-| Gradual recovery | Restore capacity over time after throttling events |
-| Backend agnostic | Memory for testing, distributed for production |
+External APIs have rate limits. If you're allowed 100 requests per minute, and you have 10 agents each making requests, they need to share that quota. Without coordination:
 
-## Non-Goals
+- Each agent thinks it has the full 100 requests
+- They collectively send 1000 requests
+- Most requests get rejected (HTTP 429)
+- You waste resources and annoy the API provider
 
-| Non-Goal | Reason |
-|----------|--------|
-| Global token counting | Per-agent local buckets, not centralized counting |
-| Exact fairness | Approximate distribution is sufficient |
-| Persistence | Transient rate state; capacity config is ephemeral |
-| Complex quotas | Fixed tokens/window only; no burst or tiered limits |
+This package solves that by:
+1. Giving each agent a local token bucket (limits its own rate)
+2. When an agent hits a 429, it broadcasts "slow down" to all agents
+3. All agents reduce their limits simultaneously
+4. Over time, limits gradually recover
+
+## When to Use It
+
+**Use rate limiting for:**
+- Coordinating access to external APIs with quotas
+- Protecting shared resources from overload
+- Handling 429 (Too Many Requests) responses gracefully
+- Ensuring fair resource sharing across agents
+
+**Don't use rate limiting for:**
+- Exact quota tracking (this is approximate)
+- Complex tiered limits (this is simple token bucket)
+- Persistent configuration (limits are in-memory)
+
+## Core Concepts
+
+### Token Bucket
+
+Each resource has a **token bucket** — a pool of tokens that refills over time. To make a request, you take a token. If no tokens are available, you wait.
+
+![Token Bucket State Transitions](images/ratelimit-token-bucket.png)
+
+**Example:** 100 tokens, refills every minute. You can make 100 requests per minute. If you use all tokens, you wait for refill.
+
+### Acquire and Release
+
+**Acquire** — Take a token before making a request. Blocks if none available.
+
+**TryAcquire** — Try to take a token without blocking. Returns success/failure.
+
+**Release** — Return a token (optional). Useful for tracking in-flight requests.
+
+### Capacity Reduction
+
+When an agent receives a 429 response, it calls `AnnounceReduced()`. This:
+1. Cuts the local capacity (e.g., by 50%)
+2. Broadcasts to other agents via the message bus
+3. Other agents also cut their capacity
+
+Now the entire swarm is making fewer requests, reducing 429s.
+
+### Gradual Recovery
+
+After a reduction, a background process slowly increases capacity back to normal. This typically happens over minutes:
+- Every 30 seconds, increase capacity by 10%
+- Stop when you reach the original limit (or exceed it, configurable)
+
+This prevents the swarm from immediately hammering the API again after a brief pause.
 
 ## Architecture
 
 ![Rate Limiter Architecture](images/ratelimit-architecture.png)
 
-## Core Types
-
-### RateLimiter Interface
-
-```go
-type RateLimiter interface {
-    // Acquire blocks until a token is available for the resource.
-    // Returns context.Canceled or context.DeadlineExceeded if context ends.
-    // Returns ErrResourceUnknown if the resource has no configured capacity.
-    Acquire(ctx context.Context, resource string) error
-
-    // TryAcquire attempts to acquire a token without blocking.
-    // Returns true if a token was acquired, false otherwise.
-    TryAcquire(resource string) bool
-
-    // Release returns a token to the resource bucket.
-    // Optional; useful for tracking in-flight requests.
-    Release(resource string)
-
-    // SetCapacity configures the rate limit for a resource.
-    // capacity is tokens per window; window is the refill period.
-    SetCapacity(resource string, capacity int, window time.Duration)
-
-    // AnnounceReduced broadcasts that capacity should be reduced.
-    // For distributed limiters, notifies other agents.
-    AnnounceReduced(resource string, reason string)
-
-    // GetCapacity returns the current capacity info for a resource.
-    GetCapacity(resource string) *Capacity
-
-    // Close shuts down the limiter and releases resources.
-    Close() error
-}
-```
-
-### Capacity
-
-```go
-type Capacity struct {
-    Resource  string        // Unique resource identifier
-    Available int           // Current available tokens
-    Total     int           // Maximum capacity (tokens per window)
-    Window    time.Duration // Refill period
-    InFlight  int           // Requests currently in progress
-}
-```
+Two implementations:
 
-### CapacityUpdate
+**MemoryLimiter** — Local token buckets only. Each agent limits itself independently. Good for testing or single-agent scenarios.
 
-```go
-type CapacityUpdate struct {
-    Resource    string    `json:"resource"`     // Affected resource
-    AgentID     string    `json:"agent_id"`     // Sender agent
-    NewCapacity int       `json:"new_capacity"` // Suggested capacity
-    Reason      string    `json:"reason"`       // Why reduced
-    Timestamp   time.Time `json:"timestamp"`    // When sent
-}
-```
+**DistributedLimiter** — Local buckets + bus coordination. When one agent announces a reduction, all agents hear it. Good for production swarms.
 
-## Implementations
+## Distributed Coordination
 
-### MemoryLimiter
+When using DistributedLimiter:
 
-In-memory implementation using token buckets. Suitable for single-process scenarios and testing.
+1. **Initial setup** — Each agent configures the same resources with the same limits
+2. **Normal operation** — Each agent uses its local bucket
+3. **Rate limit hit** — One agent calls `AnnounceReduced(resource, reason)`
+4. **Broadcast** — Message goes out on `ratelimit.capacity` subject
+5. **All agents receive** — Each reduces its local capacity
+6. **Recovery** — Background process gradually restores capacity
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | `map[string]*bucket` with sync.Mutex |
-| Refill | Time-based token addition on each access |
-| Blocking | sync.Cond with periodic wake-up for context checks |
-| Thread safety | All operations protected by mutex |
+![Distributed Coordination Message Flow](images/ratelimit-message-flow.png)
 
-**Token Bucket Algorithm:**
-- Tokens added at rate: `capacity / window`
-- Each `Acquire` consumes one token
-- `Release` returns a token for immediate reuse
-- Refill calculated on-demand (lazy evaluation)
+This is **eventually consistent**. There's a brief window where some agents haven't received the reduction yet. That's acceptable — the goal is approximate coordination, not perfect synchronization.
 
-### DistributedLimiter
+## Common Patterns
 
-Coordinates rate limits across agents via the message bus. Wraps a MemoryLimiter for local token management.
+### API Client Integration
 
-| Feature | Implementation |
-|---------|----------------|
-| Local limiting | Delegates to embedded MemoryLimiter |
-| Coordination | Subscribes to `ratelimit.capacity` subject |
-| Reduction | Broadcasts capacity updates to swarm |
-| Recovery | Background goroutine gradually restores capacity |
+Before making an API call, acquire a token. If the call returns 429, announce reduction. This integrates rate limiting into your HTTP client.
 
-**Configuration:**
-
-```go
-type DistributedConfig struct {
-    Bus              bus.MessageBus // Required: message bus for coordination
-    AgentID          string         // Required: unique agent identifier
-    ReduceFactor     float64        // Multiplier when reducing (default: 0.5)
-    RecoveryInterval time.Duration  // How often to attempt recovery (default: 30s)
-    RecoveryFactor   float64        // Multiplier when recovering (default: 1.1)
-    MaxRecovery      bool           // Cap recovery at original capacity (default: true)
-}
-```
+### Multiple Resources
 
-## Package Structure
+You can limit multiple resources independently. Set up separate capacities for different APIs or endpoints. Each has its own bucket and coordination.
 
-```
-ratelimit/
-├── ratelimit.go       # Interface + types + errors
-├── memory.go          # MemoryLimiter implementation
-├── memory_test.go
-├── distributed.go     # DistributedLimiter implementation
-├── distributed_test.go
-└── doc.go             # Package documentation
-```
+### Shared vs Per-Agent Limits
 
-## Resource Management and Capacity
+If an API gives you 1000 requests/minute for your entire organization, divide among agents: 10 agents × 100 each. If each agent has its own quota, configure accordingly.
 
-### Token Bucket Mechanics
+### Backoff on Reduction
 
-![Token Bucket State Transitions](images/ratelimit-token-bucket.png)
+When announcing a reduction, you can specify the reason. Other agents might use this to decide how aggressively to back off.
 
-### Capacity Configuration
+## Error Scenarios
 
-```go
-// Configure 60 requests per minute
-limiter.SetCapacity("openai-api", 60, time.Minute)
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Unknown resource | Acquire fails | Configure capacity first |
+| No tokens available | Acquire blocks | Wait or use TryAcquire |
+| Context cancelled | Acquire returns error | Handle timeout |
+| Bus down | Reduction not broadcast | Local reduction still works |
+| Agent ignores reduction | That agent gets more 429s | Ensure all agents use same config |
 
-// Configure 10 requests per second
-limiter.SetCapacity("fast-api", 10, time.Second)
+## Design Decisions
 
-// Remove resource (capacity=0 or window=0)
-limiter.SetCapacity("old-api", 0, time.Minute)
-```
+### Why token bucket?
 
-**Capacity Update Behavior:**
-- New resource: Starts full (available = capacity)
-- Existing resource: Updates limits, caps available if reduced
-- Invalid values (≤0): Removes the resource
+Simple, well-understood, good enough. More complex algorithms (leaky bucket, sliding window) add complexity without much benefit for this use case.
 
-## Distributed Coordination via Bus
+### Why broadcast reductions?
 
-### Message Flow
+When one agent hits a limit, others probably will too. Proactive reduction prevents wasted requests. The first agent to hit the limit warns the others.
 
-![Distributed Message Flow](images/ratelimit-message-flow.png)
+### Why gradual recovery?
 
-### Subject Convention
+Instant recovery would immediately restore full capacity, potentially causing another wave of 429s. Gradual recovery tests whether the API is ready for more traffic.
 
-All capacity updates use subject: `ratelimit.capacity`
+### Why no persistence?
 
-### Update Processing Rules
+Rate limits are operational state, not configuration. After restart, agents re-learn limits quickly (first 429 triggers reduction). Persisting would add complexity for little benefit.
 
-1. **Ignore own updates** - Agents filter out messages with their own AgentID
-2. **Only reduce, never increase** - Updates requesting higher capacity than original are ignored
-3. **Unknown resources ignored** - Only affects resources already configured locally
-4. **Callback notification** - Optional callback invoked for monitoring/logging
-
-## Recovery Mechanics
+## Integration Notes
 
-### Gradual Capacity Recovery
+### With LLM Package
 
-After a reduction event, the DistributedLimiter automatically attempts to recover capacity:
+LLM API calls should acquire tokens before sending requests. On 429 response, call `AnnounceReduced()`. This coordinates across all agents using the same LLM provider.
 
-```
-Time 0:    Capacity reduced to 50 (from 100)
-Time 30s:  Recovery attempt: 50 × 1.1 = 55
-Time 60s:  Recovery attempt: 55 × 1.1 = 60
-Time 90s:  Recovery attempt: 60 × 1.1 = 66
-...
-Time 240s: Recovery capped at 100 (original)
-```
-
-### Recovery Configuration
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `RecoveryInterval` | 30s | Time between recovery attempts |
-| `RecoveryFactor` | 1.1 | Multiplier per recovery (10% increase) |
-| `MaxRecovery` | true | Cap at original capacity |
-
-### Recovery Flow
-
-```go
-func (d *DistributedLimiter) attemptRecovery() {
-    for resource, lastReduce := range d.lastReduction {
-        // Wait at least one interval
-        if now.Sub(lastReduce) < d.config.RecoveryInterval {
-            continue
-        }
-        
-        // Gradually increase
-        newCapacity := int(float64(current.Total) * d.config.RecoveryFactor)
-        
-        // Cap at original if MaxRecovery enabled
-        if d.config.MaxRecovery && newCapacity > original {
-            newCapacity = original
-        }
-        
-        d.local.SetCapacity(resource, newCapacity, window)
-    }
-}
-```
-
-## Usage Patterns
-
-### Basic Rate Limiting
-
-```go
-limiter := ratelimit.NewMemoryLimiter()
-defer limiter.Close()
-
-limiter.SetCapacity("api", 60, time.Minute) // 60 RPM
-
-// Blocking acquire
-if err := limiter.Acquire(ctx, "api"); err != nil {
-    return err // context cancelled
-}
-defer limiter.Release("api")
-
-// Make API call
-response, err := client.Call(ctx)
-```
-
-### Non-blocking with Fallback
-
-```go
-if limiter.TryAcquire("api") {
-    defer limiter.Release("api")
-    return callPrimaryAPI()
-}
-
-// Fallback to secondary source
-return callSecondaryAPI()
-```
-
-### Distributed Swarm Coordination
-
-```go
-limiter, err := ratelimit.NewDistributedLimiter(ratelimit.DistributedConfig{
-    Bus:     messageBus,
-    AgentID: agentID,
-})
-if err != nil {
-    return err
-}
-defer limiter.Close()
-
-// Set shared resource limit (each agent manages its own portion)
-limiter.SetCapacity("shared-api", 100, time.Minute)
-
-// Monitor capacity changes
-limiter.OnCapacityChange(func(update *ratelimit.CapacityUpdate) {
-    log.Printf("Capacity reduced by %s: %s (new: %d)",
-        update.AgentID, update.Reason, update.NewCapacity)
-})
-```
-
-### Handling 429 Responses
-
-```go
-resp, err := client.Call(ctx)
-if err != nil {
-    return err
-}
-
-if resp.StatusCode == 429 {
-    // Announce to swarm that we hit the limit
-    limiter.AnnounceReduced("api", "received 429 response")
-    
-    // Retry with backoff
-    return retryWithBackoff(ctx, client)
-}
-```
-
-### Tracking In-Flight Requests
-
-```go
-// Acquire tracks in-flight count
-if err := limiter.Acquire(ctx, "api"); err != nil {
-    return err
-}
-
-// Check current state
-cap := limiter.GetCapacity("api")
-log.Printf("In-flight: %d, Available: %d", cap.InFlight, cap.Available)
-
-// Release when done (decrements in-flight, returns token)
-defer limiter.Release("api")
-```
-
-### Timeout-Bounded Acquisition
-
-```go
-// Wait at most 5 seconds for a token
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-
-if err := limiter.Acquire(ctx, "api"); err != nil {
-    if err == context.DeadlineExceeded {
-        return ErrRateLimited
-    }
-    return err
-}
-defer limiter.Release("api")
-```
-
-## Error Handling
-
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrClosed` | Limiter has been closed | Reconnect or exit |
-| `ErrResourceUnknown` | No capacity configured for resource | Call SetCapacity first |
-| `ErrCapacityExhausted` | No tokens available (for future use) | Wait or use TryAcquire |
-| `ErrInvalidCapacity` | Invalid capacity value | Fix configuration |
-| `ErrInvalidWindow` | Invalid window duration | Fix configuration |
-| `ErrInvalidConfig` | Missing Bus or AgentID | Provide required config |
-| `context.Canceled` | Context was cancelled | Handle cancellation |
-| `context.DeadlineExceeded` | Acquire timed out | Retry or fail gracefully |
-
-## Best Practices
-
-1. **Set capacity below actual limits** - Leave headroom for clock skew and bursty traffic
-2. **Use Release for tracking** - Enables accurate in-flight monitoring
-3. **Handle context cancellation** - Always check Acquire errors
-4. **Monitor AnnounceReduced** - Log/alert when limits are hit
-5. **Configure recovery appropriately** - Balance between safety and throughput
-6. **Use TryAcquire for non-critical** - Fail fast instead of blocking
+### With Bus Package
+
+DistributedLimiter requires a MessageBus for coordination. Uses subject `ratelimit.capacity` for broadcasts.
+
+### With Shutdown
+
+Call `Close()` to stop the recovery goroutine and release resources.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Token bucket mechanics, refill timing |
-| Integration | Multi-agent coordination via bus |
-| Concurrency | Race conditions, mutex contention |
+| Unit | Token bucket mechanics, acquire/release |
+| Concurrency | Multiple goroutines acquiring same resource |
+| Distributed | Reduction broadcast and reception |
 | Recovery | Gradual capacity restoration |
-| Edge cases | Zero capacity, unknown resources, close during wait |
+| Timeout | Context cancellation during acquire |
