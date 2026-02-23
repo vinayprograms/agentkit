@@ -1,105 +1,124 @@
 # Transport Abstraction Design
 
-## Overview
+## What This Package Does
 
-Pluggable transport layer for agentkit supporting multiple backends while maintaining JSON-RPC 2.0 as the protocol.
+The `transport` package handles how agents communicate with the outside world. It provides a pluggable layer that can use different connection types (stdin/stdout, WebSocket, HTTP) while keeping the same message format (JSON-RPC 2.0).
+
+## Why It Exists
+
+Agents need to receive commands and send responses. Where those commands come from varies:
+
+- **CLI tools** — Use stdin/stdout (simple pipes)
+- **Web clients** — Use WebSocket or HTTP
+- **Other services** — Might use any of the above
+
+Without a transport abstraction, you'd need different agent implementations for each connection type. The transport layer lets you write one agent that works over any connection.
+
+## When to Use It
+
+**Use transport for:**
+- Building agents that need to communicate with external clients
+- Supporting multiple connection types from the same agent code
+- Implementing custom communication protocols
+
+**Don't use transport for:**
+- Agent-to-agent communication within a swarm (use `bus`)
+- Storing data (use `state`)
+- Internal function calls
+
+## Core Concepts
+
+### JSON-RPC 2.0
+
+All transports use JSON-RPC 2.0 as the message protocol. This is a simple format where:
+- **Requests** have an ID, method name, and parameters
+- **Responses** have the same ID, plus result or error
+- **Notifications** are requests without an ID (no response expected)
+
+Using a standard protocol means clients can be written in any language.
+
+### Inbound and Outbound
+
+The transport handles bidirectional messaging:
+- **Inbound** — Messages coming into the agent (requests, notifications)
+- **Outbound** — Messages going out (responses, notifications)
+
+Each direction uses a channel. The agent reads from the inbound channel, processes messages, and writes to the outbound channel.
+
+### Transport Lifecycle
+
+1. **Create** — Instantiate the transport with configuration
+2. **Run** — Start the transport (blocks until shutdown)
+3. **Process** — Read inbound, write outbound in your handler
+4. **Close** — Gracefully shut down
+
+## Available Transports
+
+### stdio
+
+Communicates over standard input/output. Each message is a line of JSON.
+
+**Best for:** CLI tools, piped commands, simple integrations
+
+**How it works:** Reads lines from stdin, writes lines to stdout. No network involved.
+
+### WebSocket
+
+Bidirectional communication over a persistent WebSocket connection.
+
+**Best for:** Web clients, real-time UIs, long-running connections
+
+**How it works:** Client connects via WebSocket. Messages flow both directions over the same connection.
+
+### SSE + HTTP
+
+Server-Sent Events for server-to-client, HTTP POST for client-to-server.
+
+**Best for:** Environments where WebSocket isn't available, one-way streaming with occasional requests
+
+**How it works:** Client opens SSE connection to receive updates. Client sends requests via HTTP POST to a separate endpoint.
 
 ## Design Decisions
 
-| Area | Decision |
-|------|----------|
-| Concurrency | Channel-based API (Go idiomatic) |
-| Protocol | JSON-RPC 2.0 (all transports) |
-| Reconnection | Transport impl responsibility (in agent, not agentkit) |
-| Architecture | One agent instance per user |
+### Why JSON-RPC?
 
-## Transports
+JSON-RPC is simple, well-specified, and language-agnostic. It's easy to debug (human-readable JSON) and has client libraries in every language.
 
-### 1. stdio (current)
-- Bidirectional over stdin/stdout
-- Line-delimited JSON-RPC
+### Why channels?
 
-### 2. WebSocket
-- Bidirectional JSON-RPC over persistent connection
-- Native fit for JSON-RPC
+Channels are idiomatic Go. They naturally handle concurrent message processing and provide backpressure when handlers are slow.
 
-### 3. SSE + HTTP
-- Server→Client: SSE stream (JSON-RPC notifications/responses)
-- Client→Server: HTTP POST (JSON-RPC requests)
-- Same JSON-RPC format, split transport
+### Why one agent per user?
 
-## Interface
+The transport assumes one agent instance per connection. This simplifies state management — each agent handles one user's session.
 
-```go
-// Transport provides bidirectional message passing.
-type Transport interface {
-    // Recv returns channel for incoming messages (requests from client)
-    Recv() <-chan *InboundMessage
-    
-    // Send queues a message for delivery (responses/notifications to client)
-    Send(msg *OutboundMessage) error
-    
-    // Run starts the transport, blocks until ctx cancelled or error
-    Run(ctx context.Context) error
-    
-    // Close shuts down the transport gracefully
-    Close() error
-}
+## Message Flow
 
-// InboundMessage wraps an incoming JSON-RPC message.
-type InboundMessage struct {
-    Request      *Request      // Non-nil if this is a request
-    Notification *Notification // Non-nil if this is a notification (no ID)
-    Raw          []byte        // Original bytes for passthrough
-}
+1. Client sends JSON-RPC request over transport
+2. Transport parses and puts on inbound channel
+3. Agent handler reads from channel, processes request
+4. Handler creates response, puts on outbound channel
+5. Transport serializes and sends to client
 
-// OutboundMessage wraps an outgoing JSON-RPC message.
-type OutboundMessage struct {
-    Response     *Response     // Non-nil if this is a response
-    Notification *Notification // Non-nil if this is a notification
-}
-```
+For notifications (no response expected), steps 4-5 are skipped.
 
-## Package Structure
+## Error Handling
 
-```
-transport/
-├── transport.go      # Interface + types
-├── jsonrpc.go        # JSON-RPC types (existing, cleaned up)
-├── stdio.go          # StdioTransport
-├── stdio_test.go
-├── websocket.go      # WebSocketTransport
-├── websocket_test.go
-├── sse.go            # SSETransport (SSE + HTTP POST)
-├── sse_test.go
-└── doc.go            # Package documentation
-```
+| Situation | What Happens |
+|-----------|--------------|
+| Malformed JSON | Transport returns JSON-RPC parse error |
+| Invalid request | Handler returns JSON-RPC invalid request error |
+| Handler error | Handler returns JSON-RPC application error |
+| Connection lost | Transport's Run() returns error |
+| Channel full | Configurable: drop message or block |
 
-## Implementation Notes
+## Backpressure
 
-### Channel Sizing
-- Recv channel: buffered (e.g., 100) to prevent blocking on slow handlers
-- Internal send channel: buffered to allow non-blocking Send()
+If the agent can't process messages fast enough, channels fill up. The transport can either:
+- **Block** — Stop accepting new messages until space opens
+- **Drop** — Discard oldest messages to make room
 
-### Backpressure
-- If recv channel fills, transport may drop messages or block (configurable)
-- Send() returns error if transport is closed
-
-### Error Handling
-- Transport errors surface via Run() return
-- Per-message errors use JSON-RPC error responses
-
-### Graceful Shutdown
-1. Close() signals shutdown
-2. Transport drains pending sends
-3. Run() returns nil or context error
-
-## Migration Path
-
-1. Keep existing Server for backward compatibility
-2. Add Transport interface implementations
-3. New code uses Transport directly
-4. Eventually deprecate Server wrapper
+The right choice depends on your application. Blocking preserves all messages but may cause client timeouts. Dropping keeps things responsive but loses data.
 
 ## Testing Strategy
 
@@ -108,6 +127,6 @@ transport/
 | Unit | Message parsing, channel mechanics |
 | Integration | Transport + handler round-trip |
 | System | Full agent workflow over transport |
-| Performance | Throughput, latency, memory |
+| Performance | Throughput, latency, memory usage |
 | Failure | Disconnects, malformed input, timeouts |
-| Security | Size limits, injection, DoS |
+| Security | Size limits, injection prevention |
