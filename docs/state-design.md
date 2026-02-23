@@ -1,331 +1,163 @@
 # Shared State Design
 
-## Overview
+## What This Package Does
 
-The state package provides distributed key-value storage with locking for shared agent state. It supports TTL-based expiry, change watching, and distributed locks for coordination.
+The `state` package provides a shared key-value store that multiple agents can read from and write to. Think of it as a shared scratchpad where agents can:
 
-## Goals
+- Store and retrieve data by key
+- Set expiration times so data auto-cleans
+- Watch for changes in real-time
+- Use locks to prevent race conditions
 
-| Goal | Description |
-|------|-------------|
-| Shared state | Key-value storage accessible by all agents |
-| Distributed locking | Prevent concurrent access to resources |
-| TTL support | Auto-expire transient data |
-| Watch patterns | React to state changes in real-time |
-| Backend agnostic | Memory for testing, NATS JetStream for production |
+## Why It Exists
 
-## Non-Goals
+In a swarm, agents need to share information:
 
-| Non-Goal | Reason |
-|----------|--------|
-| Full database | Not for large datasets or complex queries |
-| Transactions | Single-key operations only |
-| Strong consistency | Eventual consistency is acceptable |
-| Schema enforcement | Opaque byte values |
+- **Configuration** — One agent updates settings, others pick up the change
+- **Task coordination** — Agents claim work items without stepping on each other
+- **Caching** — Expensive computation results shared across agents
+- **Leader election** — Only one agent acts as coordinator at a time
 
-## Core Types
+Without shared state, agents would duplicate work, conflict with each other, or need complex point-to-point messaging.
 
-### KeyValue
+## When to Use It
 
-```go
-type KeyValue struct {
-    Key       string
-    Value     []byte
-    Revision  uint64     // Monotonic version number
-    Operation Operation  // OpPut or OpDelete
-    Created   time.Time
-    Modified  time.Time
-}
+**Use state for:**
+- Small pieces of data (configs, flags, task claims)
+- Data that needs TTL (caches, temporary locks)
+- Coordination between agents (locks, leader election)
 
-type Operation int
-const (
-    OpPut    Operation = iota  // Created or updated
-    OpDelete                    // Deleted
-)
-```
+**Don't use state for:**
+- Large datasets — use a proper database
+- Complex queries — this is key-value only
+- Message passing — use the `bus` package instead
 
-### StateStore Interface
+## Core Concepts
 
-```go
-type StateStore interface {
-    // Get retrieves a value by key.
-    Get(key string) ([]byte, error)
+### Keys and Values
 
-    // GetKeyValue retrieves full entry with metadata.
-    GetKeyValue(key string) (*KeyValue, error)
+Data is stored as key-value pairs. Keys are strings (like `config.timeout` or `task.abc123`). Values are opaque bytes — you decide the format (JSON, protobuf, plain text).
 
-    // Put stores a value with optional TTL.
-    // If ttl is 0, the key never expires.
-    Put(key string, value []byte, ttl time.Duration) error
+Keys support hierarchical naming with dots: `config.agent-pool.timeout`. This enables pattern matching when watching for changes.
 
-    // Delete removes a key.
-    Delete(key string) error
+### Time-to-Live (TTL)
 
-    // Keys returns all keys matching a pattern.
-    // Pattern supports * wildcard at end (e.g., "config.*").
-    Keys(pattern string) ([]string, error)
+Every entry can have an optional TTL. When the TTL expires, the entry is automatically deleted. This is essential for:
 
-    // Watch watches for changes to keys matching pattern.
-    Watch(pattern string) (<-chan *KeyValue, error)
+- **Caches** — Don't manually clean up stale data
+- **Locks** — Prevent deadlocks if an agent crashes while holding a lock
+- **Temporary state** — Session data, in-progress markers
 
-    // Lock acquires a distributed lock with TTL.
-    Lock(key string, ttl time.Duration) (Lock, error)
+If you don't set a TTL (or set it to zero), the entry lives forever until explicitly deleted.
 
-    // Close shuts down the store.
-    Close() error
-}
-```
+### Revisions
 
-### Lock Interface
+Each key has a revision number that increments on every change. This enables:
 
-```go
-type Lock interface {
-    // Unlock releases the lock.
-    Unlock() error
+- **Optimistic locking** — "Update only if revision is still X"
+- **Change detection** — "Has this key changed since I last read it?"
 
-    // Refresh extends the lock TTL.
-    Refresh() error
+### Watching
 
-    // Key returns the lock key.
-    Key() string
-}
-```
+You can watch for changes to keys matching a pattern. The store pushes notifications when keys are created, updated, or deleted. This enables reactive patterns — respond to changes instead of polling.
 
 ## Architecture
 
 ![StateStore Architecture](images/state-architecture.png)
 
-## Implementations
+The `StateStore` interface has two implementations:
 
-### MemoryStore
+**MemoryStore** — In-memory storage for testing and single-process use. All data lives in Go maps protected by mutexes. A background goroutine cleans up expired entries.
 
-In-memory implementation for testing and single-process use.
+**NATSStore** — Production implementation using NATS JetStream. Data is replicated across the NATS cluster for high availability. Supports the same interface but with network-level distribution.
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | `map[string]*entry` with RWMutex |
-| TTL | Cleanup goroutine runs every second |
-| Locks | `map[string]*memoryLock` with expiry checks |
-| Watch | Slice of watchers with pattern matching |
-| Revision | Monotonic counter incremented on each change |
+## Distributed Locking
 
-### NATSStore
+Locks prevent multiple agents from modifying the same resource simultaneously.
 
-Production implementation using NATS JetStream KV.
-
-| Feature | Implementation |
-|---------|----------------|
-| Storage | JetStream KV bucket |
-| TTL | Bucket-level TTL configuration |
-| Locks | KV entries with TTL-encoded values |
-| Watch | Native KV watcher with pattern translation |
-| Replication | JetStream replication for HA |
-
-**Configuration:**
-- `Conn` - NATS connection
-- `Bucket` - KV bucket name (default: "agent-state")
-- `TTL` - Default entry TTL
-- `History` - Revisions to keep per key
-- `MaxValueSize` - Maximum value size (default: 1MB)
-
-## Package Structure
-
-![Package Structure](images/state-package-structure.png)
-
-## Distributed Locking Design
-
-Locks prevent concurrent access to resources across agents.
-
-### Lock Acquisition
+### How Locking Works
 
 ![Lock Acquisition Flow](images/state-lock-acquisition.png)
+
+1. Agent requests a lock on a key with a TTL
+2. Store checks if lock already exists
+3. If free, store creates the lock and returns a handle
+4. Agent does protected work
+5. Agent releases the lock
+
+The TTL is critical: if an agent crashes while holding a lock, the lock automatically expires. Without TTL, a crashed agent would leave resources locked forever.
 
 ### Lock Contention
 
 ![Lock Contention Scenario](images/state-lock-contention.png)
 
+When two agents try to lock the same resource:
+
+1. First agent wins, gets the lock
+2. Second agent receives "lock held" error
+3. Second agent can retry with backoff, or do something else
+
 ### Lock Best Practices
 
-1. **Always set TTL** - Prevents deadlocks from crashed agents
-2. **Refresh for long operations** - Call `Refresh()` periodically
-3. **Use defer Unlock** - Ensure release on all code paths
-4. **Handle ErrLockHeld** - Retry with backoff or fail gracefully
-
-```go
-lock, err := store.Lock("resource.db", 30*time.Second)
-if err == ErrLockHeld {
-    // Retry or fail
-    return err
-}
-if err != nil {
-    return err
-}
-defer lock.Unlock()
-
-// For long operations, refresh periodically
-go func() {
-    ticker := time.NewTicker(10 * time.Second)
-    for range ticker.C {
-        if err := lock.Refresh(); err != nil {
-            break
-        }
-    }
-}()
-
-// Do protected work
-```
-
-## TTL and Expiry
-
-TTL enables automatic cleanup of transient data.
-
-```go
-// Store with 5-minute TTL
-store.Put("cache.result.123", data, 5*time.Minute)
-
-// Store without expiry
-store.Put("config.permanent", data, 0)
-```
-
-**Expiry behavior:**
-- MemoryStore: Cleanup goroutine removes expired entries every second
-- NATSStore: JetStream handles expiry at bucket level
-- Expired keys return `ErrNotFound` on Get
-- Watch receives `OpDelete` event on expiry
+- **Always set a TTL** — 30 seconds to a few minutes depending on operation length
+- **Refresh for long operations** — If work takes longer than TTL, periodically refresh the lock
+- **Release promptly** — Don't hold locks longer than needed
+- **Handle contention gracefully** — Expect locks to fail sometimes
 
 ## Watch Patterns
 
-Watch enables reactive state handling:
+Watching enables event-driven architectures where agents react to state changes.
 
-```go
-// Watch all config changes
-changes, err := store.Watch("config.*")
-if err != nil {
-    return err
-}
+### Pattern Syntax
 
-for kv := range changes {
-    switch kv.Operation {
-    case OpPut:
-        log.Printf("Config updated: %s", kv.Key)
-        reloadConfig(kv.Key, kv.Value)
-    case OpDelete:
-        log.Printf("Config deleted: %s", kv.Key)
-        removeConfig(kv.Key)
-    }
-}
-```
+- `*` — Watch all keys
+- `prefix.*` — Watch keys starting with "prefix."
 
-**Pattern syntax:**
-- `*` - Match all keys
-- `prefix.*` - Match keys starting with prefix
+### Delivery Guarantees
 
-**Channel behavior:**
-- Buffer size: 64 events
-- Non-blocking sends (drops if full)
-- Closed when store closes
+- Events are buffered (typically 64 events)
+- If buffer fills, oldest events may be dropped
+- Order is preserved per key
+- Channel closes when store closes
 
-## Usage Patterns
+## Error Scenarios
 
-### Shared Configuration
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Key doesn't exist | Get returns "not found" | Expected — check existence first or handle gracefully |
+| Store closed | All operations fail | Reconnect or shut down |
+| Lock already held | Lock returns error | Retry with backoff or skip |
+| Lock expired | Refresh fails | Re-acquire if needed |
+| Network partition (NATS) | Operations may timeout | Retry with backoff |
 
-```go
-// Writer
-config := map[string]string{"timeout": "30s"}
-data, _ := json.Marshal(config)
-store.Put("config.agent-pool", data, 0)
+## Common Patterns
 
-// Reader
-data, err := store.Get("config.agent-pool")
-var config map[string]string
-json.Unmarshal(data, &config)
-```
+### Configuration Distribution
 
-### Task Queue with Locking
+One agent (or external system) writes configuration. Other agents watch for changes and reload automatically. No polling, no restarts needed.
 
-```go
-// Worker claims task
-lock, err := store.Lock("task."+taskID, 60*time.Second)
-if err == ErrLockHeld {
-    return // Another worker got it
-}
-defer lock.Unlock()
+### Work Queue with Claims
 
-// Process task (protected)
-taskData, _ := store.Get("tasks." + taskID)
-result := process(taskData)
+Tasks are stored as keys. Workers try to lock a task before processing. Only one worker succeeds; others move on. When done, worker deletes the task and releases the lock.
 
-// Store result and clean up
-store.Put("results."+taskID, result, 24*time.Hour)
-store.Delete("tasks." + taskID)
-```
+### Leader Election
 
-### Caching with TTL
+All agents try to acquire the same lock. One succeeds and becomes leader. Leader refreshes lock periodically. If leader crashes, lock expires and another agent takes over.
 
-```go
-// Check cache
-result, err := store.Get("cache.expensive." + key)
-if err == nil {
-    return result, nil
-}
+### Caching with Auto-Expiry
 
-// Cache miss - compute and store
-result = expensiveComputation(key)
-store.Put("cache.expensive."+key, result, 10*time.Minute)
-return result, nil
-```
+Store expensive computation results with TTL. On cache miss, compute and store. Stale entries expire automatically — no cleanup code needed.
 
-### Leader Election (Simple)
+## Package Structure
 
-```go
-func tryBecomeLeader(store StateStore, agentID string) bool {
-    lock, err := store.Lock("leader", 30*time.Second)
-    if err != nil {
-        return false
-    }
-    
-    // We're the leader - start refresh loop
-    go func() {
-        ticker := time.NewTicker(10 * time.Second)
-        for range ticker.C {
-            if err := lock.Refresh(); err != nil {
-                // Lost leadership
-                return
-            }
-        }
-    }()
-    
-    return true
-}
-```
-
-## Error Handling
-
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrNotFound` | Key does not exist | Expected for queries |
-| `ErrClosed` | Store has been closed | Reconnect or exit |
-| `ErrLockHeld` | Lock held by another | Retry with backoff |
-| `ErrLockNotHeld` | Unlock without lock | Fix logic error |
-| `ErrLockExpired` | Lock TTL elapsed | Re-acquire if needed |
-| `ErrInvalidKey` | Empty or malformed key | Fix key format |
-| `ErrInvalidTTL` | Negative TTL | Use 0 for no expiry |
-
-## Key Validation
-
-Keys must:
-- Be non-empty
-- Not contain spaces
-- Not start or end with `.`
-- Be at most 1024 characters
+![Package Structure](images/state-package-structure.png)
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | CRUD operations, pattern matching |
-| Integration | Multi-agent state sharing |
-| Locking | Contention, TTL expiry, deadlock prevention |
-| TTL | Expiry timing, cleanup behavior |
-| Watch | Event delivery, pattern filtering |
-| Concurrency | Race conditions, lock contention |
+| Unit | Basic CRUD, pattern matching, TTL behavior |
+| Integration | Multi-agent state sharing via NATS |
+| Locking | Contention scenarios, TTL expiry, refresh |
+| Watch | Event delivery, pattern filtering, channel behavior |
+| Failure | Network issues, store closure, recovery |
