@@ -1,363 +1,179 @@
 # Logging Design
 
-## Overview
+## What This Package Does
 
-The logging package provides real-time structured logging for agent monitoring and debugging. It produces human-readable console output derived from execution events, serving as the real-time view into agent behavior.
+The `logging` package provides real-time console output for monitoring agent execution. It produces structured, human-readable logs showing what the agent is doing as it happens.
 
-**Key insight:** The session JSON is THE forensic record. Logging provides optional real-time console output for monitoring—it does not duplicate data storage.
+## Why It Exists
 
-## Goals
+When developing and debugging agents, you need visibility:
+- What goal is the agent working on?
+- Which tools is it calling?
+- Where did things go wrong?
 
-| Goal | Description |
-|------|-------------|
-| Real-time monitoring | Immediate visibility into agent execution |
-| Structured fields | Key-value pairs for machine parsing |
-| Human readable | Clear format for console/terminal viewing |
-| Level filtering | Control verbosity via log levels |
-| Component isolation | Per-subsystem loggers with context |
-| Thread safety | Safe concurrent use from multiple goroutines |
+Logs provide this real-time window into agent behavior.
 
-## Non-Goals
+**Important distinction:** Logs are for real-time monitoring. The session JSON file is the forensic record. Don't confuse them:
+- **Logs** — Ephemeral console output for watching execution
+- **Session JSON** — Persistent record for replay and analysis
 
-| Non-Goal | Reason |
-|----------|--------|
-| Forensic storage | Session JSON handles this |
-| Log aggregation | External systems (ELK, etc.) handle this |
-| Log rotation | OS-level concern (logrotate) |
-| Structured JSON output | Keep format simple and readable |
-| Async buffering | Synchronous writes are fine for console |
+## When to Use It
 
-## Core Types
+**Use logging for:**
+- Watching agent execution in real-time
+- Debugging during development
+- Monitoring production agents
+- Troubleshooting failures
 
-### Level
+**Don't use logging for:**
+- Forensic analysis (use session JSON)
+- Log aggregation (use external systems like ELK)
+- Persistent storage (logs go to console, not files)
 
-```go
-type Level string
+## Core Concepts
 
-const (
-    LevelDebug Level = "DEBUG"  // Verbose tracing
-    LevelInfo  Level = "INFO"   // Normal operations
-    LevelWarn  Level = "WARN"   // Potential issues
-    LevelError Level = "ERROR"  // Failures
-)
+### Log Levels
+
+Levels control verbosity:
+
+| Level | Use Case |
+|-------|----------|
+| DEBUG | Verbose tracing — every detail |
+| INFO | Normal operations — what's happening |
+| WARN | Potential issues — something's off |
+| ERROR | Failures — something broke |
+
+Each level includes all higher-severity levels. Setting INFO shows INFO, WARN, and ERROR but hides DEBUG.
+
+### Structured Fields
+
+Logs include key-value pairs for context:
+
+```
+INFO  2026-02-23T12:00:00Z tool_call tool=bash duration=150ms exit=0
 ```
 
-### Fields
+This format is:
+- Human readable (makes sense at a glance)
+- Machine parseable (can grep or filter)
+- Compact (fits in terminal width)
 
-```go
-// Fields is a map of structured log fields.
-// Type alias provides semantic clarity over raw map[string]interface{}.
-type Fields = map[string]interface{}
+### Components
+
+Loggers can have a component name for context:
+
+```
+INFO  2026-02-23T12:00:00Z [executor] starting goal goal=analyze-code
 ```
 
-### Logger
+The `[executor]` tag shows which subsystem generated the log.
 
-```go
-type Logger struct {
-    mu        sync.Mutex   // Protects output writes
-    output    io.Writer    // Destination (default: stdout)
-    minLevel  Level        // Minimum level to log
-    component string       // Logger name for context
-    traceID   string       // Request correlation ID
-}
-```
+### Trace Correlation
+
+Loggers can carry a trace ID that appears in every log line. This helps correlate logs from the same request across components.
 
 ## Architecture
 
 ![Logging Architecture](images/logging-architecture.png)
 
-## Log Levels
-
-Levels control verbosity. Each level includes all higher-severity levels.
-
-| Level | Priority | Use Case | Examples |
-|-------|----------|----------|----------|
-| DEBUG | 0 | Verbose tracing | Tool calls, phase transitions, security decisions |
-| INFO | 1 | Normal operations | Goal start/complete, execution lifecycle |
-| WARN | 2 | Potential issues | Security warnings, degraded operation |
-| ERROR | 3 | Failures | Tool errors, execution failures |
-
-**Default level:** INFO (filters out DEBUG)
-
-```go
-// Set to DEBUG for verbose output
-logger.SetLevel(LevelDebug)
-
-// Set to WARN for production (quieter)
-logger.SetLevel(LevelWarn)
-```
-
-## Structured Fields
-
-Fields add machine-parseable context to log messages:
-
-```go
-logger.Info("tool_call", map[string]interface{}{
-    "tool":     "bash",
-    "duration": "150ms",
-    "exit":     0,
-})
-// Output: INFO  2026-02-23T12:00:00.000Z tool_call tool=bash duration=150ms exit=0
-```
-
-**Field formatting:**
-- Keys and values joined with `=`
-- Multiple fields space-separated
-- Appended after message text
+The logger writes to an output stream (default: stdout). Multiple goroutines can log concurrently — a mutex ensures lines don't interleave.
 
 ## Output Format
 
-The logger produces a consistent, human-readable format:
-
 ```
-LEVEL TIMESTAMP [component] message key=value key2=value2
+LEVEL TIMESTAMP [component] message key=value key=value
 ```
 
-**Examples:**
-```
-INFO  2026-02-23T12:00:00.000Z [executor] goal_start goal=analyze-data
-DEBUG 2026-02-23T12:00:01.234Z [executor] tool_call tool=read
-INFO  2026-02-23T12:00:02.567Z [executor] goal_complete goal=analyze-data duration=2.567s
-WARN  2026-02-23T12:00:03.000Z [security] MCP policy not configured security=true
-ERROR 2026-02-23T12:00:04.000Z [executor] tool_error tool=bash error=exit status 1
-```
-
-**Format details:**
-- Level: Left-padded to 5 chars for alignment
-- Timestamp: UTC ISO-8601 with milliseconds
-- Component: In brackets, optional
-- Message: Free-form text
-- Fields: Key=value pairs
-
-## Thread Safety
-
-The Logger uses a mutex to protect concurrent writes:
-
-```go
-func (l *Logger) log(level Level, msg string, fields ...map[string]interface{}) {
-    // ... format line ...
-    
-    l.mu.Lock()
-    defer l.mu.Unlock()
-    l.output.Write([]byte(line))
-}
-```
-
-**Thread-safe operations:**
-- All logging methods (Debug, Info, Warn, Error)
-- Event-derived methods (ToolCall, GoalStart, etc.)
-- Output writes are atomic per log line
-
-**Not thread-safe (call before concurrent use):**
-- `SetLevel()` - Set once at startup
-- `SetOutput()` - Set once at startup
-
-## Package Structure
+Example lines:
 
 ```
-logging/
-├── logging.go       # Logger implementation + event methods
-└── logging_test.go  # Unit tests
+INFO  2026-02-23T12:00:00Z [executor] goal_start goal=review-pr
+DEBUG 2026-02-23T12:00:01Z [security] checking_policy path=/etc/passwd
+WARN  2026-02-23T12:00:02Z [supervisor] high_latency duration=5.2s
+ERROR 2026-02-23T12:00:03Z [llm] request_failed error="rate limited"
 ```
 
-## Relationship to Session Forensics
+The format prioritizes readability. For JSON structured logging, use a separate log aggregation system.
 
-The logging package and session JSON serve complementary purposes:
-
-| Aspect | Logging | Session JSON |
-|--------|---------|--------------|
-| Purpose | Real-time monitoring | Post-mortem analysis |
-| Persistence | Transient (console) | Durable (file/store) |
-| Format | Human-readable text | Structured JSON |
-| Content | Summary/highlights | Complete events |
-| Timing | Immediate | Batched/async |
-
-**Design principle:** The executor adds events to the session (forensic record), then calls logging methods for real-time output. No data duplication—logging derives from session events.
-
-```go
-// In executor:
-session.AddEvent(ToolCallEvent{...})   // Forensic record
-logger.ToolCall("bash", args)           // Real-time output (derived)
-```
-
-## Event-Derived Logging Methods
-
-Specialized methods log common execution events:
-
-### Execution Lifecycle
-
-```go
-// Workflow start/end
-logger.ExecutionStart("my-workflow")
-logger.ExecutionComplete("my-workflow", duration, "complete")
-
-// Goal start/end
-logger.GoalStart("analyze-data")
-logger.GoalComplete("analyze-data", duration)
-
-// Phase tracking
-logger.PhaseStart("PLAN", "analyze", "step-1")
-logger.PhaseComplete("PLAN", "analyze", "step-1", duration, "success")
-```
-
-### Tool Operations
-
-```go
-// Tool invocation
-logger.ToolCall("read", map[string]interface{}{"path": "/tmp/data"})
-
-// Tool result (includes error handling)
-logger.ToolResult("read", 150*time.Millisecond, nil)           // Success
-logger.ToolResult("bash", 5*time.Second, errors.New("timeout")) // Error
-```
-
-### Security Events
-
-```go
-// Security warnings
-logger.SecurityWarning("MCP policy not configured", nil)
-
-// Security decisions
-logger.SecurityDecision("exec", "allowed", "in allowlist")
-
-// Supervisor verdicts
-logger.SupervisorVerdict("deploy", "step-3", "rejected", "needs review", true)
-```
-
-### Supervision Phases
-
-```go
-// RECONCILE phase details
-logger.ReconcilePhase("analyze", "step-1", []string{"timeout"}, false)
-
-// SUPERVISE phase details
-logger.SupervisePhase("deploy", "step-2", "approved", "safe operation")
-```
-
-## Usage Patterns
+## Common Patterns
 
 ### Basic Logging
 
-```go
-logger := logging.New()
-logger.SetLevel(logging.LevelInfo)
-
-logger.Info("server started", map[string]interface{}{
-    "port": 8080,
-    "env":  "production",
-})
-```
+Log with a message and optional fields:
+- `Info("starting", fields)` — Normal event
+- `Warn("slow response", fields)` — Something concerning
+- `Error("failed", fields)` — Something broke
 
 ### Component Logger
 
-```go
-// Create component-scoped logger
-execLogger := logging.New().WithComponent("executor")
-secLogger := logging.New().WithComponent("security")
+Create a logger scoped to a component:
+- Component name appears in brackets
+- Helps identify which part of the system logged
 
-execLogger.Info("goal started")  // INFO ... [executor] goal started
-secLogger.Warn("policy missing") // WARN ... [security] policy missing
-```
+### Conditional Debug
 
-### Trace Correlation
+Debug logs are verbose. Enable them during development, disable in production:
+- Development: DEBUG level shows everything
+- Production: INFO level hides noise
 
-```go
-// Add trace ID for request correlation
-reqLogger := logger.WithTraceID("req-abc-123")
+### Event-Derived Logging
 
-reqLogger.Info("processing request")
-// Can be used for distributed tracing correlation
-```
+The logger provides methods for common agent events:
+- Tool calls (start, result, error)
+- Goal transitions (start, complete, fail)
+- Security events (warnings, verdicts)
 
-### Testing with Buffer
+These ensure consistent formatting across the codebase.
 
-```go
-func TestMyComponent(t *testing.T) {
-    var buf bytes.Buffer
-    logger := logging.New()
-    logger.SetOutput(&buf)
-    logger.SetLevel(logging.LevelDebug)
-    
-    // Run code that logs
-    myComponent.DoWork(logger)
-    
-    // Assert on log output
-    output := buf.String()
-    if !strings.Contains(output, "expected message") {
-        t.Errorf("expected log message, got: %s", output)
-    }
-}
-```
+## Relationship to Session Forensics
 
-### Execution Flow Logging
+![Logging vs Session Forensics](images/logging-integration.png)
 
-```go
-func (e *Executor) Run(workflow string) error {
-    logger := e.logger.WithComponent("executor")
-    
-    logger.ExecutionStart(workflow)
-    start := time.Now()
-    defer func() {
-        logger.ExecutionComplete(workflow, time.Since(start), "complete")
-    }()
-    
-    for _, goal := range workflow.Goals {
-        logger.GoalStart(goal.Name)
-        goalStart := time.Now()
-        
-        if err := e.executeGoal(goal); err != nil {
-            logger.Error("goal_failed", map[string]interface{}{
-                "goal":  goal.Name,
-                "error": err.Error(),
-            })
-            return err
-        }
-        
-        logger.GoalComplete(goal.Name, time.Since(goalStart))
-    }
-    
-    return nil
-}
-```
+| Aspect | Logging | Session JSON |
+|--------|---------|--------------|
+| Purpose | Real-time monitoring | Post-hoc analysis |
+| Persistence | Ephemeral | Durable |
+| Format | Human-readable text | Structured JSON |
+| Completeness | Filtered by level | Complete record |
+| Use case | Watch execution | Replay, audit |
+
+The session JSON derives logs (you can replay events as log lines), but logging doesn't derive session JSON. Keep them separate in your mental model.
 
 ## Error Handling
 
-The logging package is designed to never fail or block execution:
+The logger follows the "logging should never crash the app" principle:
+- Write errors are silently ignored
+- Nil fields are handled gracefully
+- Malformed input produces ugly output but doesn't panic
 
-| Scenario | Behavior |
-|----------|----------|
-| Write error | Silently ignored (logging shouldn't crash the app) |
-| Nil fields map | Handled gracefully (no fields output) |
-| Empty message | Logged as-is |
-| Invalid level | Uses INFO as default |
+Logging is best-effort. If it fails, the agent keeps running.
 
-**Philosophy:** Logging is observability, not business logic. A logging failure should never interrupt agent execution.
+## Thread Safety
 
-## Configuration
+All logging operations are safe for concurrent use:
+- Multiple goroutines can log simultaneously
+- Lines won't interleave (mutex protection)
+- Creating child loggers is thread-safe
 
-```go
-logger := logging.New()
+## Design Decisions
 
-// Set minimum log level (default: INFO)
-logger.SetLevel(logging.LevelDebug)
+### Why not JSON output?
 
-// Set output destination (default: os.Stdout)
-logger.SetOutput(os.Stderr)
-logger.SetOutput(&myBuffer)
-logger.SetOutput(io.Discard)  // Silence all output
-```
+Readability. Humans read logs in terminals. JSON is for machines. If you need JSON, pipe logs through a formatter or use a dedicated log aggregation system.
 
-## Integration with AgentKit
+### Why synchronous writes?
 
-The logging package integrates with other AgentKit components:
+Simplicity. Console logging doesn't need buffering. For high-throughput scenarios, use async logging externally.
 
-![Logging Integration with AgentKit](images/logging-integration.png)
+### Why no log rotation?
+
+That's an OS concern. Use `logrotate` or similar. The logging package writes to a stream; what happens to that stream is outside its scope.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Level filtering, field formatting, output format |
-| Integration | Component logger inheritance |
-| Concurrency | Thread-safe writes under load |
-| Format | Log line parsing, timestamp format |
+| Unit | Level filtering, field formatting |
+| Output | Correct format, timestamp generation |
+| Concurrency | No interleaving, no races |
+| Integration | End-to-end agent logging |
