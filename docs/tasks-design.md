@@ -1,369 +1,148 @@
 # Tasks Design
 
-## Overview
+## What This Package Does
 
-The tasks package provides idempotent task handling with deduplication for distributed agent workloads. It enables safe retry semantics through idempotency keys, claim-based ownership, and configurable retry limits.
+The `tasks` package provides idempotent task handling with deduplication. It ensures that submitting the same task twice doesn't create duplicate work, and that tasks can safely retry when they fail.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Idempotent submission | Duplicate task submissions return existing task |
-| Claim ownership | Workers claim tasks with exclusive access |
-| Retry semantics | Failed tasks automatically retry with limits |
-| State persistence | Tasks survive restarts via state backend |
-| Deduplication | Idempotency keys prevent duplicate work |
+Distributed systems have a fundamental problem: messages can be delivered more than once. A coordinator might send a task, not receive an acknowledgment (network blip), and send it again. Without deduplication, the task runs twice.
 
-## Non-Goals
+This package solves that with **idempotency keys**. Each task has a unique key. If you submit a task with a key that already exists, you get back the existing task instead of creating a duplicate.
 
-| Non-Goal | Reason |
-|----------|--------|
-| Scheduling | No time-based or priority scheduling |
-| Fan-out | Single worker per task, no parallel execution |
-| Dead letter queue | Failed tasks stay in state, no separate queue |
-| Rate limiting | Workers control their own claim rate |
+It also handles the claim/complete workflow: workers claim tasks, process them, and mark them done. If a worker crashes mid-processing, the task can be retried by another worker.
 
-## Core Types
+## When to Use It
 
-### Task
+**Use tasks for:**
+- Work that must run exactly once (sending emails, processing payments)
+- Work that needs retry on failure
+- Coordinating work across multiple workers
+- Tracking task status and results
 
-```go
-type Task struct {
-    // ID is the unique identifier for the task.
-    ID string
+**Don't use tasks for:**
+- Fire-and-forget notifications (use `bus`)
+- Real-time messaging (too much overhead)
+- Simple key-value storage (use `state` directly)
 
-    // IdempotencyKey is used for deduplication.
-    IdempotencyKey string
+## Core Concepts
 
-    // Payload is the task data to be processed.
-    Payload []byte
+### Task Lifecycle
 
-    // Status is the current state of the task.
-    Status TaskStatus
+A task moves through four states:
 
-    // Attempts is the number of times this task has been attempted.
-    Attempts int
+1. **Pending** — Waiting for a worker to claim it
+2. **Claimed** — A worker is processing it
+3. **Completed** — Successfully finished
+4. **Failed** — Permanently failed (exhausted retries)
 
-    // MaxAttempts is the maximum number of attempts allowed.
-    // Zero means unlimited attempts.
-    MaxAttempts int
+![Task Lifecycle State Machine](images/tasks-lifecycle.png)
 
-    // CreatedAt is when the task was created.
-    CreatedAt time.Time
+### Idempotency Keys
 
-    // ClaimedAt is when the task was last claimed.
-    ClaimedAt *time.Time
+Every task has an **idempotency key** — a string that uniquely identifies the work. When you submit a task, the system first checks if a task with that key exists:
 
-    // ClaimedBy is the worker ID that currently holds the task.
-    ClaimedBy string
+- If yes, return the existing task (no duplicate created)
+- If no, create the new task
 
-    // CompletedAt is when the task was completed or failed.
-    CompletedAt *time.Time
+![Idempotency Key Deduplication Flow](images/tasks-idempotency.png)
 
-    // Result is the output from task completion.
-    Result []byte
+Good idempotency keys include:
+- The entity being acted on (`order-123`)
+- The action being performed (`send-confirmation`)
+- Combined: `order-123-send-confirmation`
 
-    // Error is the error message if the task failed.
-    Error string
-}
-```
+Avoid timestamps or random values — retries would generate different keys and defeat deduplication.
 
-### TaskStatus
+### Claim Ownership
 
-```go
-type TaskStatus string
+Before processing a task, a worker must **claim** it. Claiming:
+- Marks the task as in-progress
+- Records which worker has it
+- Prevents other workers from grabbing it
 
-const (
-    StatusPending   TaskStatus = "pending"    // Waiting to be claimed
-    StatusClaimed   TaskStatus = "claimed"    // Being worked on
-    StatusCompleted TaskStatus = "completed"  // Successfully finished
-    StatusFailed    TaskStatus = "failed"     // Permanently failed
-)
-```
+Only the claiming worker can complete or fail the task. This prevents race conditions where two workers process the same task.
 
-### TaskManager Interface
+![Claim Ownership and Conflict Resolution](images/tasks-claim-conflicts.png)
 
-```go
-type TaskManager interface {
-    // Submit creates a new task or returns existing ID if
-    // a task with the same IdempotencyKey already exists.
-    Submit(ctx context.Context, task Task) (string, error)
+### Retry Logic
 
-    // Claim marks a task as being worked on by a worker.
-    Claim(ctx context.Context, taskID string, workerID string) error
+Tasks can specify a maximum number of attempts. When a worker fails a task:
+- If retries remain, the task returns to pending for another worker
+- If retries are exhausted, the task moves to failed permanently
 
-    // Complete marks a task as successfully completed.
-    Complete(ctx context.Context, taskID string, result []byte) error
+![Task Retry Flow Between Workers](images/tasks-retry-flow.png)
 
-    // Fail marks a task as failed with the given error.
-    Fail(ctx context.Context, taskID string, err error) error
-
-    // Retry moves a failed/claimed task back to pending.
-    Retry(ctx context.Context, taskID string) error
-
-    // Get retrieves a task by ID.
-    Get(ctx context.Context, taskID string) (*Task, error)
-
-    // GetByIdempotencyKey retrieves a task by its idempotency key.
-    GetByIdempotencyKey(ctx context.Context, key string) (*Task, error)
-
-    // List returns all tasks matching the status filter.
-    List(ctx context.Context, status TaskStatus) ([]*Task, error)
-
-    // Delete removes a terminal task by ID.
-    Delete(ctx context.Context, taskID string) error
-
-    // Close releases resources.
-    Close() error
-}
-```
+This enables automatic retry without manual intervention.
 
 ## Architecture
 
 ![TaskManager Architecture](images/tasks-architecture.png)
 
-## Task Lifecycle
+The task manager stores tasks in the state backend (memory or NATS). Two types of keys:
 
-Tasks move through four states:
+- **Task data** (`tasks.task.{id}`) — The full task record
+- **Idempotency mapping** (`tasks.idem.{key}`) — Maps idempotency key to task ID
 
-![Task Lifecycle State Machine](images/tasks-lifecycle.png)
+The idempotency check is atomic — even concurrent submissions with the same key won't create duplicates.
 
-### State Transitions
+## Common Patterns
 
-| From | To | Trigger | Condition |
-|------|-----|---------|-----------|
-| – | Pending | `Submit()` | New task or new idempotency key |
-| Pending | Claimed | `Claim()` | Task not already claimed |
-| Claimed | Completed | `Complete()` | Same worker completes |
-| Claimed | Failed | `Fail()` | MaxAttempts reached |
-| Claimed | Pending | `Fail()` | Retries available |
-| Claimed | Pending | `Retry()` | Retries available |
-| Failed | Pending | `Retry()` | Retries available |
+### Producer/Consumer
 
-### Terminal States
+A coordinator submits tasks. Multiple workers compete to claim and process them. Each task goes to exactly one worker.
 
-Tasks in `StatusCompleted` or `StatusFailed` are terminal:
-- No further state transitions (except `Retry()` for failed with retries)
-- Can be deleted via `Delete()`
-- Idempotency key lookup still returns the task
+### Safe Retry
 
-## Idempotency Key Design
+Network errors? Submit again with the same idempotency key. If the task already exists, you get back its status. If it doesn't, a new one is created. Either way, no duplicate work.
 
-Idempotency keys enable safe retry semantics and deduplication.
+### Status Tracking
 
-### How It Works
+After submitting a task, you can check its status by ID or idempotency key. When it completes, the result is stored on the task record.
 
-![Idempotency Key Deduplication Flow](images/tasks-idempotency.png)
+### Cleanup
 
-### Key Design Guidelines
+Completed and failed tasks stay in storage indefinitely. Periodically delete old ones to prevent unbounded growth.
 
-| Guideline | Explanation |
-|-----------|-------------|
-| Include entity ID | `order-123-process` not just `process` |
-| Include action | `order-123-send-email` not just `order-123` |
-| Be deterministic | Same input → same key every time |
-| Avoid timestamps | Retries generate different keys |
+## Error Scenarios
 
-### Storage Layout
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Duplicate submission | Returns existing task ID | Expected behavior |
+| Another worker claimed it | Claim returns error | Skip, try another task |
+| Worker crashes while processing | Task stays claimed | External process calls retry |
+| Max attempts exhausted | Task moves to failed | Manual intervention needed |
+| Storage unavailable | Operations fail | Retry with backoff |
 
-```
-State Store Keys:
-  tasks.idem.{idempotency-key}  →  task-id (string)
-  tasks.task.{task-id}          →  task JSON (bytes)
-```
+## Design Decisions
 
-The idempotency key is checked atomically during submission, preventing race conditions where duplicate tasks could be created.
+### Why claim before process?
 
-## Retry Logic and Max Attempts
+Claiming provides exclusive access. Without it, two workers might grab the same task from a pending list and both process it.
 
-### Attempt Counting
+### Why no automatic claim expiry?
 
-- `Attempts` increments on each `Claim()` call
-- First claim: `Attempts = 1`
-- `MaxAttempts = 0` means unlimited retries
-- `MaxAttempts = 3` allows 3 total attempts
+Simplicity. Automatic expiry requires background goroutines and timing complexity. For now, crashed workers need external recovery (a supervisor calling retry).
 
-### Fail Behavior
+### Why store results on tasks?
 
-```go
-// When Fail() is called:
-if task.MaxAttempts > 0 && task.Attempts >= task.MaxAttempts {
-    // Permanently failed - no more retries
-    task.Status = StatusFailed
-    task.CompletedAt = now
-} else {
-    // Move back to pending for retry
-    task.Status = StatusPending
-    task.ClaimedBy = ""
-}
-```
+Callers often want to know: did it succeed? what was the result? Storing results on the task record makes this a simple lookup instead of a separate storage system.
 
-### Retry Flow
+## Integration Notes
 
-![Task Retry Flow Between Workers](images/tasks-retry-flow.png)
+### With Bus
 
-## State Backend Integration
+Use the bus to notify workers when new tasks arrive. Workers subscribe to a topic, receive notifications, then claim tasks from the task manager.
 
-The task manager delegates storage to a `state.StateStore` implementation.
+### With State
 
-### Key Prefixes
+The task manager uses the state package for persistence. Memory store for testing, NATS store for production.
 
-| Prefix | Purpose |
-|--------|---------|
-| `tasks.task.` | Task data (JSON-encoded) |
-| `tasks.idem.` | Idempotency key → task ID mapping |
+### With Shutdown
 
-### Operations Mapping
-
-| TaskManager | StateStore |
-|-------------|------------|
-| `Submit()` | `Get()` + `Put()` (check then create) |
-| `Claim()` | `Get()` + `Put()` (read-modify-write) |
-| `Complete()` | `Get()` + `Put()` |
-| `Fail()` | `Get()` + `Put()` |
-| `Get()` | `Get()` |
-| `List()` | `Keys()` + multiple `Get()` |
-| `Delete()` | `Delete()` × 2 (task + idem key) |
-
-### Backend Requirements
-
-The state backend must support:
-- Key-value Get/Put/Delete
-- Pattern-based key listing (`Keys("tasks.task.*")`)
-- No TTL required (tasks persist indefinitely)
-
-## Claim Ownership and Conflict Handling
-
-### Worker Identification
-
-Each worker must provide a unique `workerID` when claiming tasks. This enables:
-- Conflict detection between workers
-- Idempotent re-claims by the same worker
-- Audit trail of task processing
-
-### Claim Conflicts
-
-![Claim Ownership and Conflict Resolution](images/tasks-claim-conflicts.png)
-
-### Conflict Resolution
-
-| Scenario | Behavior |
-|----------|----------|
-| Task pending, worker claims | Success, task now claimed |
-| Task claimed by same worker | Success (idempotent) |
-| Task claimed by different worker | `ErrTaskAlreadyClaimed` |
-| Task completed | `ErrTaskCompleted` |
-| Task failed | `ErrTaskFailed` |
-
-### Stale Claim Handling
-
-The current implementation does not automatically expire stale claims. Options:
-1. Worker calls `Fail()` before shutting down
-2. External process calls `Retry()` for stuck tasks
-3. Future: claim TTL with automatic release
-
-## Package Structure
-
-```
-tasks/
-├── doc.go         # Package documentation
-├── tasks.go       # Types, errors, TaskManager interface
-├── manager.go     # Manager implementation
-└── tasks_test.go  # Comprehensive tests
-```
-
-## Usage Patterns
-
-### Basic Task Processing
-
-```go
-store := state.NewMemoryStore()
-mgr := tasks.NewManager(store)
-
-// Submit a task
-task := tasks.Task{
-    IdempotencyKey: "order-123-process",
-    Payload:        []byte(`{"order_id": "123"}`),
-    MaxAttempts:    3,
-}
-taskID, err := mgr.Submit(ctx, task)
-
-// Worker loop
-for {
-    tasks, _ := mgr.List(ctx, tasks.StatusPending)
-    for _, t := range tasks {
-        if err := mgr.Claim(ctx, t.ID, "worker-1"); err != nil {
-            continue // Another worker got it
-        }
-        
-        result, err := processTask(t.Payload)
-        if err != nil {
-            mgr.Fail(ctx, t.ID, err)
-        } else {
-            mgr.Complete(ctx, t.ID, result)
-        }
-    }
-}
-```
-
-### Idempotent Submission
-
-```go
-// Safe to retry - same task returned
-id1, _ := mgr.Submit(ctx, Task{
-    IdempotencyKey: "email-456-send",
-    Payload:        []byte("email data"),
-})
-
-id2, _ := mgr.Submit(ctx, Task{
-    IdempotencyKey: "email-456-send",
-    Payload:        []byte("email data"),
-})
-// id1 == id2, no duplicate task
-```
-
-### Checking Task Status
-
-```go
-// By ID
-task, err := mgr.Get(ctx, taskID)
-if task.Status == tasks.StatusCompleted {
-    fmt.Println("Result:", string(task.Result))
-}
-
-// By idempotency key
-task, err := mgr.GetByIdempotencyKey(ctx, "order-123-process")
-if err == tasks.ErrTaskNotFound {
-    // Task was never submitted
-}
-```
-
-### Cleanup Old Tasks
-
-```go
-// List and delete completed tasks
-completed, _ := mgr.List(ctx, tasks.StatusCompleted)
-for _, t := range completed {
-    if time.Since(t.CompletedAt) > 24*time.Hour {
-        mgr.Delete(ctx, t.ID)
-    }
-}
-```
-
-## Error Handling
-
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrTaskNotFound` | Task does not exist | Check task ID |
-| `ErrTaskAlreadyClaimed` | Another worker has it | Skip or wait |
-| `ErrTaskNotClaimed` | Must claim before complete/fail | Call Claim first |
-| `ErrTaskCompleted` | Task already done | No action needed |
-| `ErrTaskFailed` | Task permanently failed | Check Error field |
-| `ErrMaxAttemptsReached` | No more retries allowed | Manual intervention |
-| `ErrInvalidTask` | Missing required fields | Include Payload |
-| `ErrInvalidWorkerID` | Empty worker ID | Provide unique ID |
-| `ErrWrongWorker` | Not the claiming worker | Only claimer can complete |
-| `ErrStoreClosed` | Manager was closed | Create new manager |
+During graceful shutdown, workers should either:
+- Complete in-progress tasks quickly
+- Call fail on tasks they can't finish (so another worker can retry)
 
 ## Testing Strategy
 
@@ -372,6 +151,5 @@ for _, t := range completed {
 | Unit | CRUD operations, state transitions |
 | Idempotency | Duplicate submission handling |
 | Concurrency | Multiple workers claiming same task |
-| Retry | Attempt counting, max attempts |
-| Lifecycle | Full pending→claimed→completed flow |
-| Edge cases | Re-claim, double complete, empty payloads |
+| Retry | Attempt counting, exhaustion |
+| Lifecycle | Full pending → claimed → completed flow |
