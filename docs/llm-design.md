@@ -1,524 +1,204 @@
 # LLM Package Design
 
-## Overview
+## What This Package Does
 
-The llm package provides a unified interface for interacting with multiple Large Language Model providers. It abstracts provider-specific APIs behind a common `Provider` interface, enabling seamless switching between Anthropic, OpenAI, Google, and other LLM providers without changing application code.
+The `llm` package provides a unified interface for calling Large Language Models from multiple providers. Write your code once, then switch between Anthropic (Claude), OpenAI (GPT), Google (Gemini), and others by changing configuration.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Provider agnostic | Single interface works with Anthropic, OpenAI, Google, Groq, Mistral, xAI, and more |
-| Automatic provider inference | Infer provider from model name (e.g., `claude-*` → Anthropic) |
-| Tool calling support | Unified tool definition and response parsing across providers |
-| Adaptive thinking | Heuristic-based reasoning level selection (auto/off/low/medium/high) |
-| Retry resilience | Exponential backoff for rate limits and transient errors |
-| Extensible | Easy to add new OpenAI-compatible providers |
+Each LLM provider has its own API:
+- Anthropic uses `Messages` with different tool formats
+- OpenAI uses `ChatCompletions` with function calling
+- Google uses `GenerateContent` with FunctionDeclaration
+- Ollama has its own REST API
 
-## Non-Goals
+Without abstraction, you'd need provider-specific code everywhere. This package hides those differences behind a common interface.
 
-| Non-Goal | Reason |
-|----------|--------|
-| Streaming to clients | Focus on request/response; streaming handled internally when required |
-| Model fine-tuning | Out of scope for inference abstraction |
-| Token counting | Use provider-reported tokens, not pre-calculation |
-| Cost tracking | Delegated to telemetry/billing layers |
+It also handles:
+- **Provider inference** — Figure out which provider from model name
+- **Retry logic** — Exponential backoff for rate limits
+- **Thinking modes** — Adaptive reasoning level selection
+- **Tool calling** — Unified tool format across providers
+
+## When to Use It
+
+**Use this package for:**
+- Building agents that call LLMs
+- Applications that need provider flexibility
+- Projects that use tool calling with LLMs
+
+**You might not need this for:**
+- Simple one-off scripts (direct SDK might be simpler)
+- Highly provider-specific features
+- Projects locked to a single provider forever
+
+## Core Concepts
+
+### Provider Interface
+
+All LLM providers implement one method: send a chat request, get a response. The request contains messages (conversation history) and optionally tools. The response contains the LLM's reply and metadata (tokens used, stop reason).
+
+### Messages
+
+Messages form the conversation:
+- **User** — Human input
+- **Assistant** — LLM output
+- **System** — Instructions to the LLM
+- **Tool** — Results from tool execution
+
+Each message has a role and content. Tool calls and results have additional fields for the call ID and arguments.
+
+### Tool Calling
+
+LLMs can request tool calls. When the LLM wants to use a tool:
+1. Response includes tool call (name + arguments)
+2. You execute the tool
+3. You send a tool result message
+4. LLM continues with the result
+
+This enables agentic behavior — the LLM can take actions, not just generate text.
+
+### Thinking/Reasoning
+
+Some models support extended thinking (Claude) or reasoning effort (OpenAI o1/o3). The package provides:
+- **Auto mode** — Heuristically choose thinking level based on prompt
+- **Manual levels** — Off, low, medium, high
+- **Provider translation** — Each provider implements thinking differently
 
 ## Architecture
 
 ![LLM Package Architecture](images/llm-architecture.png)
 
-## Core Types
+### Provider Implementations
 
-### Provider Interface
+**AnthropicProvider** — Official SDK for Claude models. Supports extended thinking via budget tokens. Uses streaming internally when thinking is enabled.
 
-```go
-// Provider is the interface for LLM providers.
-type Provider interface {
-    // Chat sends a chat request and returns the response.
-    Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-}
-```
+**OpenAIProvider** — Official SDK for GPT models. Supports ReasoningEffort for o1/o3 models.
 
-### Message
+**GoogleProvider** — Official SDK for Gemini models. Translates JSON Schema to Gemini's schema format.
 
-```go
-// Message represents an LLM message.
-type Message struct {
-    Role       string             `json:"role"`       // user, assistant, tool, system
-    Content    string             `json:"content"`
-    ToolCalls  []ToolCallResponse `json:"tool_calls,omitempty"`
-    ToolCallID string             `json:"tool_call_id,omitempty"` // For tool result messages
-}
-```
+**OllamaCloudProvider** — Native API for hosted Ollama models. Supports think parameter.
 
-### ChatRequest
+**OpenAICompatProvider** — Generic provider for OpenAI-compatible APIs (Groq, Mistral, xAI, local Ollama). Any endpoint that accepts OpenAI format works.
 
-```go
-// ChatRequest represents a chat request to the LLM.
-type ChatRequest struct {
-    Messages  []Message `json:"messages"`
-    Tools     []ToolDef `json:"tools,omitempty"`
-    MaxTokens int       `json:"max_tokens,omitempty"`
-}
-```
+### Provider Inference
 
-### ChatResponse
+The package can automatically detect the provider from the model name:
 
-```go
-// ChatResponse represents a chat response from the LLM.
-type ChatResponse struct {
-    Content      string             `json:"content"`
-    Thinking     string             `json:"thinking,omitempty"`     // Extended thinking output
-    ToolCalls    []ToolCallResponse `json:"tool_calls,omitempty"`
-    StopReason   string             `json:"stop_reason"`
-    InputTokens  int                `json:"input_tokens"`
-    OutputTokens int                `json:"output_tokens"`
-    Model        string             `json:"model"`
-    TTFTMs       int64              `json:"ttft_ms,omitempty"`      // Time to first token
-}
-```
+| Pattern | Provider |
+|---------|----------|
+| `claude-*` | Anthropic |
+| `gpt-*`, `o1-*`, `o3-*` | OpenAI |
+| `gemini-*`, `gemma-*` | Google |
+| `llama*`, `mistral*` | Ollama Cloud |
+| `groq/*` | Groq |
 
-### Tool Types
+You can also specify the provider explicitly.
 
-```go
-// ToolDef represents a tool definition for the LLM.
-type ToolDef struct {
-    Name        string                 `json:"name"`
-    Description string                 `json:"description"`
-    Parameters  map[string]interface{} `json:"parameters"` // JSON Schema
-}
-
-// ToolCallResponse represents a tool call from the LLM.
-type ToolCallResponse struct {
-    ID   string                 `json:"id"`
-    Name string                 `json:"name"`
-    Args map[string]interface{} `json:"args"`
-}
-```
-
-## Provider Implementations
-
-### AnthropicProvider
-
-Uses the official Anthropic SDK for Claude models.
-
-| Feature | Implementation |
-|---------|----------------|
-| SDK | `github.com/anthropics/anthropic-sdk-go` |
-| Auth | API key (`x-api-key`) or OAuth token (`Bearer`) |
-| Thinking | Extended thinking with budget tokens |
-| Streaming | Required for extended thinking, optional otherwise |
-| Tool format | Native Anthropic tool_use blocks |
-
-**Supported models:** claude-3-5-sonnet, claude-3-opus, claude-3-haiku, claude-4-*
-
-### OpenAIProvider
-
-Uses the official OpenAI SDK.
-
-| Feature | Implementation |
-|---------|----------------|
-| SDK | `github.com/openai/openai-go` |
-| Auth | API key |
-| Reasoning | ReasoningEffort for o1/o3 models |
-| Tool format | Function calling |
-
-**Supported models:** gpt-4o, gpt-4-turbo, gpt-3.5-turbo, o1-*, o3-*
-
-### GoogleProvider
-
-Uses the official Google Generative AI SDK for Gemini models.
-
-| Feature | Implementation |
-|---------|----------------|
-| SDK | `github.com/google/generative-ai-go/genai` |
-| Auth | API key |
-| Tool format | FunctionDeclaration |
-| Schema | Converts JSON Schema to Gemini Schema |
-
-**Supported models:** gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-*, gemma-*
-
-### OllamaCloudProvider
-
-Uses Ollama's native `/api/chat` endpoint for hosted Ollama models.
-
-| Feature | Implementation |
-|---------|----------------|
-| API | Native Ollama HTTP API |
-| Auth | Bearer token |
-| Thinking | Boolean or string level ("low"/"medium"/"high") |
-| Default URL | `https://ollama.com` |
-
-### OpenAICompatProvider
-
-Generic provider for any OpenAI-compatible API.
-
-| Feature | Implementation |
-|---------|----------------|
-| API | OpenAI chat completions format |
-| Auth | Bearer token (optional for local) |
-| Custom URL | Configurable base URL |
-
-**Pre-configured variants:**
-
-| Provider | Base URL | API Key Required |
-|----------|----------|------------------|
-| Groq | `https://api.groq.com/openai/v1` | Yes |
-| Mistral | `https://api.mistral.ai/v1` | Yes |
-| xAI | `https://api.x.ai/v1` | Yes |
-| OpenRouter | `https://openrouter.ai/api/v1` | Yes |
-| Ollama Local | `http://localhost:11434/v1` | No |
-| LM Studio | `http://localhost:1234/v1` | No |
-
-## Provider Inference
-
-The package can infer the provider from the model name:
-
-```go
-// Model name → Provider
-"claude-3-5-sonnet-20241022"  → "anthropic"
-"gpt-4o"                       → "openai"
-"o1-preview"                   → "openai"
-"gemini-1.5-pro"               → "google"
-"mistral-large-latest"         → "mistral"
-"grok-2"                       → "xai"
-```
-
-**Inference rules:**
-
-| Model Prefix | Provider |
-|--------------|----------|
-| `claude*` | anthropic |
-| `gpt-*`, `o1*`, `o3*`, `chatgpt*` | openai |
-| `gemini*`, `gemma*` | google |
-| `mistral*`, `mixtral*`, `codestral*`, `pixtral*` | mistral |
-| `grok*` | xai |
-| `llama*` | groq |
-
-## Thinking/Reasoning Support
-
-The package supports adaptive thinking levels that adjust reasoning effort based on request complexity.
-
-### Thinking Levels
-
-```go
-type ThinkingLevel string
-
-const (
-    ThinkingOff    ThinkingLevel = "off"    // No extended thinking
-    ThinkingLow    ThinkingLevel = "low"    // Light reasoning
-    ThinkingMedium ThinkingLevel = "medium" // Moderate reasoning
-    ThinkingHigh   ThinkingLevel = "high"   // Deep reasoning
-    ThinkingAuto   ThinkingLevel = "auto"   // Heuristic-based selection
-)
-```
-
-### Auto Mode Heuristics
-
-When `ThinkingAuto` is set, the classifier analyzes the request:
-
-| Complexity | Triggers | Level |
-|------------|----------|-------|
-| High | Math proofs, system design, security analysis, >3000 chars, >10 tools | High |
-| Medium | Code implementation, step-by-step, refactoring, >1000 chars, >5 tools | Medium |
-| Low | "How to" questions, recommendations, >300 chars, >2 tools | Low |
-| Off | Simple greetings, short queries | Off |
-
-**Detection patterns:**
-
-```go
-// High complexity keywords
-"prove", "derive", "architect", "design system", "security analysis", "debug", "root cause"
-
-// Medium complexity keywords  
-"implement", "refactor", "optimize", "step by step", "function", "class", "algorithm"
-
-// Low complexity keywords
-"how to", "what is the best", "should i", "summarize", "list"
-```
-
-### Provider-Specific Implementation
-
-| Provider | Thinking Support |
-|----------|-----------------|
-| Anthropic | Extended thinking with budget tokens (requires streaming) |
-| OpenAI | ReasoningEffort for o1/o3 models |
-| Ollama Cloud | `think` parameter (bool or level string) |
-| Others | Not directly supported |
-
-**Anthropic budget defaults:**
-
-| Level | Budget Tokens |
-|-------|---------------|
-| High | 16,000 |
-| Medium | 8,000 |
-| Low | 4,000 |
-
-## Tool Calling Patterns
-
-### Request with Tools
-
-```go
-resp, err := provider.Chat(ctx, ChatRequest{
-    Messages: []Message{
-        {Role: "user", Content: "Read the file /etc/hosts"},
-    },
-    Tools: []ToolDef{
-        {
-            Name:        "read",
-            Description: "Read a file from the filesystem",
-            Parameters: map[string]interface{}{
-                "type": "object",
-                "properties": map[string]interface{}{
-                    "path": map[string]interface{}{
-                        "type":        "string",
-                        "description": "Path to the file",
-                    },
-                },
-                "required": []string{"path"},
-            },
-        },
-    },
-})
-```
-
-### Handling Tool Calls
-
-```go
-if len(resp.ToolCalls) > 0 {
-    // Execute tools and collect results
-    var toolResults []Message
-    
-    for _, tc := range resp.ToolCalls {
-        result := executeToolCall(tc.Name, tc.Args)
-        toolResults = append(toolResults, Message{
-            Role:       "tool",
-            ToolCallID: tc.ID,
-            Content:    result,
-        })
-    }
-    
-    // Continue conversation with tool results
-    messages = append(messages, Message{
-        Role:      "assistant",
-        ToolCalls: resp.ToolCalls,
-    })
-    messages = append(messages, toolResults...)
-    
-    // Get final response
-    finalResp, _ := provider.Chat(ctx, ChatRequest{
-        Messages: messages,
-        Tools:    tools,
-    })
-}
-```
-
-## Error Handling and Retries
-
-### Error Classification
-
-| Error Type | Detection | Retryable |
-|------------|-----------|-----------|
-| Rate limit | 429, "rate limit", "too many requests" | Yes |
-| Server error | 5xx, "internal server error", "bad gateway" | Yes |
-| Billing | 402, "billing", "payment", "credits", "quota" | No (fatal) |
-| Auth | 401, "unauthorized", "invalid api key" | No |
-
-### Retry Configuration
-
-```go
-type RetryConfig struct {
-    MaxRetries   int           // Max attempts (default: 5)
-    InitBackoff  time.Duration // Initial wait (default: 1s)
-    MaxBackoff   time.Duration // Maximum wait (default: 60s)
-}
-```
-
-**Exponential backoff:**
-- Backoff doubles after each retry
-- Capped at MaxBackoff
-- Context cancellation respected
-
-### Billing Error Handling
-
-Billing errors are never retried and immediately return:
-
-```go
-if isBillingError(err) {
-    return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-}
-```
-
-## Configuration
-
-### ProviderConfig
-
-```go
-type ProviderConfig struct {
-    Provider     string         // anthropic, openai, google, groq, etc.
-    Model        string         // Model name
-    APIKey       string         // API key or OAuth token
-    IsOAuthToken bool           // True if APIKey is OAuth (Anthropic only)
-    MaxTokens    int            // Required: max response tokens
-    BaseURL      string         // Custom API endpoint
-    Thinking     ThinkingConfig // Thinking/reasoning settings
-    RetryConfig  RetryConfig    // Retry settings
-}
-```
-
-### ThinkingConfig
-
-```go
-type ThinkingConfig struct {
-    Level        ThinkingLevel // auto, off, low, medium, high
-    BudgetTokens int64         // Anthropic budget (0 = use defaults)
-}
-```
-
-## Package Structure
-
-![LLM Package Structure](images/llm-package-structure.png)
-
-## Usage Patterns
+## Common Patterns
 
 ### Basic Chat
 
-```go
-provider, err := llm.NewProvider(llm.ProviderConfig{
-    Model:     "claude-3-5-sonnet-20241022",  // Provider inferred
-    APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
-    MaxTokens: 4096,
-})
+Send messages, get response. The simplest use case:
+1. Create provider with config
+2. Build request with messages
+3. Call Chat()
+4. Use response content
 
-resp, err := provider.Chat(ctx, llm.ChatRequest{
-    Messages: []llm.Message{
-        {Role: "system", Content: "You are a helpful assistant."},
-        {Role: "user", Content: "Hello!"},
-    },
-})
+### Tool Use Loop
 
-fmt.Println(resp.Content)
-```
+For agentic behavior:
+1. Define tools (name, description, parameters)
+2. Send request with tools
+3. Check if response has tool calls
+4. If yes, execute tools, add results, send again
+5. Repeat until no more tool calls
 
-### With Adaptive Thinking
+### Streaming (Internal)
 
-```go
-provider, _ := llm.NewProvider(llm.ProviderConfig{
-    Model:     "claude-3-5-sonnet-20241022",
-    APIKey:    apiKey,
-    MaxTokens: 8192,
-    Thinking: llm.ThinkingConfig{
-        Level: llm.ThinkingAuto,  // Auto-detect complexity
-    },
-})
+Some operations require streaming (extended thinking). The provider handles this internally — you still get a complete response.
 
-// Simple query → no thinking
-resp, _ := provider.Chat(ctx, llm.ChatRequest{
-    Messages: []llm.Message{
-        {Role: "user", Content: "What time is it?"},
-    },
-})
+### Retry on Rate Limit
 
-// Complex query → extended thinking
-resp, _ = provider.Chat(ctx, llm.ChatRequest{
-    Messages: []llm.Message{
-        {Role: "user", Content: "Design a distributed cache system with consistency guarantees"},
-    },
-})
-// resp.Thinking contains the reasoning process
-```
+The package automatically retries on rate limits with exponential backoff. Configure max retries and initial delay.
 
-### With OpenTelemetry Tracing
+## Error Handling
 
-```go
-baseProvider, _ := llm.NewProvider(cfg)
-provider := llm.WithTracing(baseProvider, "anthropic")
+| Error Type | Meaning | Retry? |
+|------------|---------|--------|
+| Rate limit (429) | Too many requests | Yes, with backoff |
+| Server error (5xx) | Provider issue | Yes, with backoff |
+| Invalid request | Bad input | No |
+| Auth error | Bad API key | No |
+| Network error | Connectivity | Yes, with backoff |
 
-// All Chat calls now generate spans with:
-// - Provider name
-// - Model
-// - Input/output tokens
-// - Response content
-// - Thinking content (if any)
-```
+The package classifies errors and applies appropriate retry behavior automatically.
 
-### Using OpenAI-Compatible Provider
+## Configuration
 
-```go
-// Using OpenRouter to access multiple models
-provider, _ := llm.NewProvider(llm.ProviderConfig{
-    Provider:  "openrouter",
-    Model:     "anthropic/claude-3-opus",
-    APIKey:    os.Getenv("OPENROUTER_API_KEY"),
-    MaxTokens: 4096,
-})
+### Provider Config
 
-// Using local Ollama
-provider, _ = llm.NewProvider(llm.ProviderConfig{
-    Provider:  "ollama-local",
-    Model:     "llama3",
-    MaxTokens: 4096,
-    // No API key needed
-})
+| Field | Purpose |
+|-------|---------|
+| Provider | Which provider (anthropic, openai, google, etc.) |
+| Model | Model name |
+| APIKey | Authentication |
+| BaseURL | Custom endpoint (for proxies or self-hosted) |
+| MaxTokens | Response length limit |
 
-// Using custom endpoint (e.g., LiteLLM)
-provider, _ = llm.NewProvider(llm.ProviderConfig{
-    Provider:  "openai-compat",
-    BaseURL:   "https://my-litellm-proxy.com/v1",
-    Model:     "gpt-4",
-    APIKey:    "my-key",
-    MaxTokens: 4096,
-})
-```
+### Thinking Config
 
-### Content Summarization
+| Field | Purpose |
+|-------|---------|
+| Mode | Auto, off, low, medium, high |
+| BudgetTokens | For Anthropic extended thinking |
 
-```go
-summarizer := llm.NewSummarizer(provider)
+### Retry Config
 
-summary, err := summarizer.Summarize(ctx, 
-    webPageContent,
-    "What are the main features of this product?",
-)
-```
+| Field | Purpose |
+|-------|---------|
+| MaxRetries | How many times to retry |
+| InitialDelay | Starting backoff duration |
+| MaxDelay | Cap on backoff |
 
-## Testing
+## Integration Notes
 
-### MockProvider
+### With MCP Package
 
-```go
-provider := llm.NewMockProvider()
-provider.SetResponse("Test response")
-provider.SetToolCall("read", map[string]interface{}{"path": "/test"})
-provider.SetTokenCounts(100, 50)
+Tools from MCP servers become ToolDefs for the LLM. The agent translates between MCP tool format and LLM tool format.
 
-resp, _ := provider.Chat(ctx, request)
+### With Ratelimit Package
 
-// Inspect captured request
-lastReq := provider.LastRequest()
-callCount := provider.CallCount()
-```
+Use the rate limiter before LLM calls to prevent hitting provider limits. On 429 response, announce reduction.
 
-### Custom Mock Behavior
+### With Telemetry Package
 
-```go
-provider := llm.NewMockProvider()
-provider.ChatFunc = func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-    // Custom logic
-    if strings.Contains(req.Messages[0].Content, "error") {
-        return nil, errors.New("simulated error")
-    }
-    return &llm.ChatResponse{Content: "Custom response"}, nil
-}
-```
+LLM calls can be traced — model, tokens, latency. Use spans to track LLM operations in your traces.
+
+## Design Decisions
+
+### Why one method (Chat)?
+
+Simplicity. All LLM interactions are fundamentally "here's context, give me completion." More complex operations (embeddings, fine-tuning) would be separate interfaces.
+
+### Why auto-detect provider?
+
+Convenience. Most of the time, `claude-3-5-sonnet` obviously means Anthropic. Explicit configuration is still available when needed.
+
+### Why unified tool format?
+
+Tool calling is essential for agents. Having one format means your tool definitions work across providers without modification.
+
+### Why internal retry?
+
+Rate limits are common and handling them is boilerplate. Built-in retry makes the default behavior correct.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Provider creation, config validation, inference |
-| Mock server | HTTP request/response format, tool calls |
-| Integration | Real provider calls (manual/CI with keys) |
-| Thinking | Heuristic classification accuracy |
+| Unit | Message formatting, tool translation |
+| Provider | Each provider's specific behavior |
 | Retry | Backoff timing, error classification |
+| Thinking | Mode selection, budget application |
+| Integration | Full request/response with real providers |
