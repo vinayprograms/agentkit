@@ -15,6 +15,7 @@ Reusable Go packages for building AI agents.
 | `credentials` | Credential management (TOML-based) |
 | `transport` | Pluggable transports (stdio, WebSocket, SSE) with JSON-RPC 2.0 |
 | `bus` | Message bus clients (NATS, in-memory) for pub/sub and request/reply |
+| `registry` | Agent registration and discovery for swarm coordination |
 | `policy` | Security policy enforcement |
 | `logging` | Structured logging |
 | `telemetry` | Observability (OpenTelemetry) |
@@ -109,6 +110,45 @@ reply, _ := nbus.Request("service.echo", []byte("ping"), 5*time.Second)
 ```
 
 Queue groups enable natural scaling: messages are load-balanced across agents subscribed to the same queue.
+
+## Agent Registry
+
+The registry package provides agent registration and discovery for swarm coordination:
+
+```go
+import "github.com/vinayprograms/agentkit/registry"
+
+// In-memory registry (testing/single-node)
+reg := registry.NewMemoryRegistry(registry.MemoryConfig{TTL: 30 * time.Second})
+
+// NATS registry (distributed)
+nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+reg, _ := registry.NewNATSRegistry(nbus.Conn(), registry.NATSRegistryConfig{
+    BucketName: "my-swarm",
+    TTL:        30 * time.Second,
+})
+
+// Register an agent
+reg.Register(registry.AgentInfo{
+    ID:           "agent-1",
+    Name:         "Code Review Agent",
+    Capabilities: []string{"code-review", "testing"},
+    Status:       registry.StatusIdle,
+    Load:         0.3,
+})
+
+// Discover agents by capability (sorted by load)
+agents, _ := reg.FindByCapability("code-review")
+target := agents[0] // Pick the least loaded agent
+
+// Watch for changes
+events, _ := reg.Watch()
+for event := range events {
+    fmt.Printf("%s: %s\n", event.Type, event.Agent.ID)
+}
+```
+
+Agents self-register with capabilities, status, and load. The registry enables capability-based routing with load-aware selection.
 
 ## Used By
 
