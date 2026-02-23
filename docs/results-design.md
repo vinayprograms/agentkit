@@ -1,384 +1,155 @@
 # Results Design
 
-## Overview
+## What This Package Does
 
-The results package provides task result publication and subscription for agent coordination. It enables agents to publish task outputs to a shared store and allows other agents to subscribe to and retrieve results asynchronously. This decouples result production from consumption, enabling async task pipelines and distributed workflows.
+The `results` package lets agents publish task results and other agents subscribe to them. When a task completes, interested parties receive a notification without polling.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Async task coordination | Agents publish results; others subscribe without polling |
-| Status tracking | Track task progression from pending to terminal states |
-| Push-based updates | Subscribers receive updates as they happen |
-| Backend agnostic | Memory for testing, bus-backed for distributed systems |
-| Clean lifecycle | Results transition through well-defined states |
+In distributed workflows, one agent often needs to know when another agent finishes work:
 
-## Non-Goals
+- **Pipeline coordination** — Agent B waits for Agent A's result before starting
+- **Progress tracking** — A coordinator monitors task completion across workers
+- **Async responses** — Request something, do other work, get notified when it's ready
 
-| Non-Goal | Reason |
-|----------|--------|
-| Result persistence | Use state package for durable storage |
-| Result ordering | Results are independent; ordering is caller responsibility |
-| Complex queries | Simple filtering only; use a database for complex queries |
-| Result streaming | Single result per task; use bus for streaming data |
+Without a results system, agents would need to poll repeatedly ("is it done yet?"). That wastes resources and adds latency. Push-based notifications are more efficient.
 
-## Core Types
+## When to Use It
 
-### Result
+**Use results for:**
+- Publishing task outputs for other agents
+- Subscribing to task completion notifications
+- Tracking task status (pending → success/failed)
+- Coordinating multi-stage pipelines
 
-```go
-type Result struct {
-    // TaskID uniquely identifies the task.
-    TaskID string
+**Don't use results for:**
+- Persistent storage (use `state` — results may live only in memory)
+- Streaming data (use `bus` — results are single values, not streams)
+- Complex queries (this is simple filtering, not a database)
 
-    // Status indicates the current state of the result.
-    Status ResultStatus
+## Core Concepts
 
-    // Output contains the task's output data.
-    // Empty for pending or failed tasks.
-    Output []byte
+### Result Lifecycle
 
-    // Error contains the error message if Status is StatusFailed.
-    Error string
+A result moves through three states:
 
-    // Metadata contains additional key-value data about the result.
-    Metadata map[string]string
+1. **Pending** — Task is in progress
+2. **Success** — Task completed successfully (with output)
+3. **Failed** — Task failed (with error message)
 
-    // CreatedAt is when the result was first created.
-    CreatedAt time.Time
+Success and failed are **terminal states**. Once a result reaches them, subscriptions auto-close.
 
-    // UpdatedAt is when the result was last updated.
-    UpdatedAt time.Time
-}
-```
+![Result Lifecycle State Machine](images/results-lifecycle.png)
 
-### ResultStatus
+### Publishing
 
-```go
-type ResultStatus string
+When a task makes progress or completes, the worker publishes an update:
+- First publish creates the result (pending status)
+- Subsequent publishes update the result
+- Final publish sets status to success or failed
 
-const (
-    StatusPending ResultStatus = "pending"  // Task in progress
-    StatusSuccess ResultStatus = "success"  // Task completed successfully
-    StatusFailed  ResultStatus = "failed"   // Task failed
-)
+Publishing is idempotent — you can publish the same result multiple times safely.
 
-// Valid returns true if the status is a known value.
-func (s ResultStatus) Valid() bool
+### Subscribing
 
-// IsTerminal returns true if the status represents a final state.
-func (s ResultStatus) IsTerminal() bool
-```
+Agents can subscribe to a task ID to receive updates:
+- If the result already exists, it's delivered immediately
+- As the result updates, subscribers receive each change
+- When the result reaches a terminal state, the subscription closes
 
-### ResultPublisher Interface
+Subscriptions are push-based — you receive a channel and read from it. No polling.
 
-```go
-type ResultPublisher interface {
-    // Publish stores or updates a task result.
-    // If the result already exists, it is updated.
-    Publish(ctx context.Context, taskID string, result Result) error
+![Subscribe Flow Sequence](images/results-subscribe-flow.png)
 
-    // Get retrieves a result by task ID.
-    // Returns ErrNotFound if the result doesn't exist.
-    Get(ctx context.Context, taskID string) (*Result, error)
+### Filtering
 
-    // Subscribe returns a channel that receives updates for a task.
-    // The channel is closed when the task reaches a terminal state
-    // or when the subscription is cancelled.
-    // If the result already exists, it is sent immediately.
-    Subscribe(taskID string) (<-chan *Result, error)
-
-    // List returns results matching the filter criteria.
-    List(filter ResultFilter) ([]*Result, error)
-
-    // Delete removes a result by task ID.
-    // Returns ErrNotFound if the result doesn't exist.
-    Delete(ctx context.Context, taskID string) error
-
-    // Close shuts down the publisher and releases resources.
-    Close() error
-}
-```
-
-### ResultFilter
-
-```go
-type ResultFilter struct {
-    Status        ResultStatus       // Filter by status (empty = all)
-    TaskIDPrefix  string             // Filter by task ID prefix
-    CreatedAfter  time.Time          // Results created after this time
-    CreatedBefore time.Time          // Results created before this time
-    Limit         int                // Max results (0 = unlimited)
-    Metadata      map[string]string  // All pairs must match
-}
-```
+You can list results matching criteria:
+- By status (only pending, only failed)
+- By task ID prefix (all tasks starting with "batch-123-")
+- By time range (created in the last hour)
+- By metadata (all tasks with `type=email`)
 
 ## Architecture
 
 ![Results Architecture](images/results-architecture.png)
 
-## Result Lifecycle and Status Transitions
+Two implementations:
 
-Results follow a simple state machine with pending as the initial state and success/failed as terminal states:
+**MemoryPublisher** — In-memory storage and notifications. Results live only in this process. Good for testing and single-process workflows.
 
-![Result Lifecycle State Machine](images/results-lifecycle.png)
+**BusPublisher** — Uses the message bus for notifications. Each process has its own result cache, but publishes/subscribes go through the bus. Good for distributed systems where multiple agents need to coordinate.
 
-**State descriptions:**
+## Common Patterns
 
-| Status | Description | Terminal |
-|--------|-------------|----------|
-| `pending` | Task is in progress, may receive updates | No |
-| `success` | Task completed successfully | Yes |
-| `failed` | Task failed with error | Yes |
+### Wait for Completion
 
-**Lifecycle behavior:**
+Subscribe to a task, then block until you receive a terminal result:
 
-1. **Create**: First `Publish()` creates result with `CreatedAt` timestamp
-2. **Update**: Subsequent `Publish()` calls update result, preserving `CreatedAt`
-3. **Terminal**: When status becomes terminal, all subscriptions auto-close
-4. **Immutable after terminal**: Results can still be updated after terminal (e.g., adding metadata), but subscriptions won't reopen
+1. Subscribe to task ID
+2. Read from channel
+3. Check if status is terminal
+4. If terminal, you have the final result
+5. If not, keep reading
 
-## Implementations
+### Fire and Forget with Callback
 
-### MemoryPublisher
+Start a task, register a subscription, then continue with other work. When the result arrives on the channel, handle it (or use a goroutine to wait).
 
-In-memory implementation for testing and single-process scenarios.
+### Progress Updates
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | `map[string]*Result` with RWMutex |
-| Subscriptions | `map[string][]*memorySub` with buffered channels |
-| Notifications | Direct channel sends, non-blocking |
-| Terminal handling | Closes all task subscriptions on terminal status |
-| Buffer size | 16 messages per subscription |
+Publish intermediate results with metadata (e.g., "50% complete"). Subscribers see each update. Final publish sets terminal status.
 
-**Use cases:** Unit tests, embedded agents, single-process pipelines
+### Batch Monitoring
 
-### BusPublisher
+Subscribe to multiple task IDs. As each completes, update your tracking. Useful for coordinators managing many parallel tasks.
 
-Distributed implementation using a message bus for notifications.
+## Error Scenarios
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | Local `map[string]*Result` (each instance has own copy) |
-| Notifications | Broadcasts via MessageBus |
-| Subject format | `{prefix}.{taskID}` (default: `results.task-123`) |
-| Relay goroutine | Forwards bus messages to local subscribers |
-| Cache sync | Relayed messages update local result cache |
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Task doesn't exist | Subscribe waits indefinitely | Set a timeout, or check if task was submitted |
+| Publisher closed | All subscriptions close | Expected during shutdown |
+| Result not found | Get/Delete return error | Task may not have published yet |
+| Network partition (BusPublisher) | Notifications delayed | Results still work locally |
 
-**Configuration:**
+## Design Decisions
 
-```go
-type BusPublisherConfig struct {
-    SubjectPrefix string  // Default: "results"
-    BufferSize    int     // Default: 16
-}
-```
+### Why auto-close on terminal?
 
-**Use cases:** Distributed agents, multi-process coordination, cross-network notification
+Once a result is final, there are no more updates to send. Keeping subscriptions open would leak resources. Auto-close is the clean pattern.
 
-## Subscription Model
+### Why not persist results?
 
-### Subscribe Flow
+Results serve coordination, not storage. If you need durability, publish results AND store them in the state package. This keeps the results package simple.
 
-![Subscribe Flow Sequence](images/results-subscribe-flow.png)
+### Why local cache in BusPublisher?
 
-### Subscription Behavior
+Performance. Reads come from local cache (fast). Writes go to the bus (distributed). The cache is eventually consistent — writes propagate via bus notifications.
 
-| Scenario | Behavior |
-|----------|----------|
-| Subscribe before result exists | Channel waits, receives all updates |
-| Subscribe after pending result | Immediate delivery, then updates |
-| Subscribe to terminal result | Immediate delivery, channel closes |
-| Multiple subscribers | Each gets independent channel |
-| Publisher close | All subscription channels close |
+## Integration Notes
 
-### Auto-close on Terminal
+### With Tasks Package
 
-Subscriptions automatically close when a terminal result is received:
+Tasks track work items with claims and retries. Results track outputs. A typical flow:
+1. Coordinator submits task (tasks package)
+2. Worker claims and processes task
+3. Worker publishes result (results package)
+4. Coordinator receives notification
 
-```go
-ch, _ := pub.Subscribe("task-123")
-for result := range ch {
-    fmt.Printf("Status: %s\n", result.Status)
-    // Channel closes automatically when result.Status is terminal
-}
-// Loop exits when task completes
-```
+### With Bus Package
 
-## Package Structure
+BusPublisher uses the bus for notifications. Subject format: `results.{taskID}`. Subscribers listen for updates on these subjects.
 
-```
-results/
-├── results.go       # Interface, Result, ResultStatus, ResultFilter, errors
-├── memory.go        # MemoryPublisher implementation
-├── bus.go           # BusPublisher implementation
-├── results_test.go  # Comprehensive tests
-└── doc.go           # Package documentation
-```
+### With Shutdown
 
-## Usage Patterns
-
-### Basic Publish and Get
-
-```go
-pub := results.NewMemoryPublisher()
-defer pub.Close()
-
-// Producer publishes result
-err := pub.Publish(ctx, "task-123", results.Result{
-    TaskID:   "task-123",
-    Status:   results.StatusSuccess,
-    Output:   []byte(`{"answer": 42}`),
-    Metadata: map[string]string{"model": "gpt-4"},
-})
-
-// Consumer retrieves result
-result, err := pub.Get(ctx, "task-123")
-if err == results.ErrNotFound {
-    // Task not complete yet
-}
-```
-
-### Async Task Pipeline
-
-```go
-// Worker publishes progress
-pub.Publish(ctx, taskID, results.Result{
-    TaskID: taskID,
-    Status: results.StatusPending,
-    Metadata: map[string]string{"progress": "50%"},
-})
-
-// ... do work ...
-
-// Publish final result
-pub.Publish(ctx, taskID, results.Result{
-    TaskID: taskID,
-    Status: results.StatusSuccess,
-    Output: outputData,
-})
-```
-
-### Subscribe and Wait
-
-```go
-ch, err := pub.Subscribe("task-123")
-if err != nil {
-    return err
-}
-
-for result := range ch {
-    switch result.Status {
-    case results.StatusPending:
-        log.Printf("Progress: %s", result.Metadata["progress"])
-    case results.StatusSuccess:
-        processOutput(result.Output)
-        return nil  // Channel will close
-    case results.StatusFailed:
-        return errors.New(result.Error)
-    }
-}
-```
-
-### Filtering Results
-
-```go
-// Find all failed tasks from the batch
-failed, err := pub.List(results.ResultFilter{
-    TaskIDPrefix: "batch-2024-",
-    Status:       results.StatusFailed,
-    Limit:        100,
-})
-
-// Find recent pending tasks
-pending, err := pub.List(results.ResultFilter{
-    Status:       results.StatusPending,
-    CreatedAfter: time.Now().Add(-1 * time.Hour),
-})
-
-// Filter by metadata
-prod, err := pub.List(results.ResultFilter{
-    Metadata: map[string]string{"env": "production"},
-})
-```
-
-### Distributed Results with Bus
-
-```go
-// Create bus-backed publisher
-nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
-pub := results.NewBusPublisher(nbus, results.BusPublisherConfig{
-    SubjectPrefix: "agent.results",
-    BufferSize:    32,
-})
-defer pub.Close()
-
-// On Agent A: publish result
-pub.Publish(ctx, "task-123", results.Result{
-    TaskID: "task-123",
-    Status: results.StatusSuccess,
-    Output: outputData,
-})
-
-// On Agent B: receive notification via bus
-ch, _ := pub.Subscribe("task-123")
-result := <-ch  // Receives update from Agent A
-```
-
-### Error Result with Details
-
-```go
-pub.Publish(ctx, taskID, results.Result{
-    TaskID: taskID,
-    Status: results.StatusFailed,
-    Error:  "API rate limit exceeded",
-    Metadata: map[string]string{
-        "retry_after": "60s",
-        "attempt":     "3",
-        "error_code":  "429",
-    },
-})
-```
-
-## Error Handling
-
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrNotFound` | Result doesn't exist | Wait and retry, or subscribe |
-| `ErrAlreadyExists` | (Reserved for future use) | — |
-| `ErrClosed` | Publisher has been closed | Create new publisher |
-| `ErrInvalidTaskID` | Empty task ID | Validate before calling |
-| `ErrInvalidStatus` | Unknown status value | Use defined constants |
-
-### Validation Functions
-
-```go
-// Validate task ID
-if err := results.ValidateTaskID(taskID); err != nil {
-    return err  // ErrInvalidTaskID
-}
-
-// Validate complete result
-if err := results.ValidateResult(result); err != nil {
-    return err  // ErrInvalidTaskID or ErrInvalidStatus
-}
-```
-
-## Thread Safety
-
-- All operations are goroutine-safe
-- Results are cloned on read/write to prevent external mutation
-- Subscriptions use buffered channels with non-blocking sends
-- Atomic flags track closed state
+On shutdown, call `Close()`. This closes all subscription channels and releases resources. Subscribers receive channel close and can exit cleanly.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Status validation, filter matching, result cloning |
-| Integration | Publish/subscribe flows, terminal handling |
-| Concurrency | Concurrent publishes, multiple subscribers |
-| Error paths | Invalid inputs, closed publisher |
-| Bus integration | Cross-publisher notification |
+| Unit | Publish/get/subscribe/delete operations |
+| Lifecycle | Pending → success/failed transitions |
+| Subscription | Immediate delivery, updates, auto-close |
+| Concurrency | Multiple subscribers, concurrent publishes |
+| Filter | Status, prefix, time range, metadata |
