@@ -14,6 +14,7 @@ Reusable Go packages for building AI agents.
 | `security` | Taint tracking, content verification, audit trail |
 | `credentials` | Credential management (TOML-based) |
 | `transport` | Pluggable transports (stdio, WebSocket, SSE) with JSON-RPC 2.0 |
+| `bus` | Message bus clients (NATS, in-memory) for pub/sub and request/reply |
 | `policy` | Security policy enforcement |
 | `logging` | Structured logging |
 | `telemetry` | Observability (OpenTelemetry) |
@@ -80,6 +81,34 @@ for msg := range t.Recv() {
 ```
 
 All transports use channel-based APIs for Go-idiomatic concurrent use.
+
+## Message Bus
+
+The bus package provides pub/sub and request/reply messaging for agent communication:
+
+```go
+import "github.com/vinayprograms/agentkit/bus"
+
+// NATS bus (production)
+nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+
+// Memory bus (testing)
+mbus := bus.NewMemoryBus(bus.DefaultConfig())
+
+// Pub/Sub
+sub, _ := nbus.Subscribe("events.user")
+for msg := range sub.Messages() {
+    fmt.Printf("Received: %s\n", msg.Data)
+}
+
+// Queue groups (load balanced)
+sub, _ := nbus.QueueSubscribe("tasks", "workers")
+
+// Request/Reply
+reply, _ := nbus.Request("service.echo", []byte("ping"), 5*time.Second)
+```
+
+Queue groups enable natural scaling: messages are load-balanced across agents subscribed to the same queue.
 
 ## Used By
 

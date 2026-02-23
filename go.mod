@@ -52,7 +52,11 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
+	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
+	github.com/nats-io/nats.go v1.48.0 // indirect
+	github.com/nats-io/nkeys v0.4.11 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
