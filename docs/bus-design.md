@@ -69,31 +69,19 @@ type Message struct {
 
 All subscribers receive every message. Used for broadcasts and events.
 
-```
-Publisher ──publish──▶ Subject ──deliver──▶ Subscriber A
-                              ──deliver──▶ Subscriber B
-                              ──deliver──▶ Subscriber C
-```
+![Publish/Subscribe pattern - all subscribers receive every message](images/bus-pubsub.png)
 
 ### Queue Groups (Load Balance)
 
 Messages distributed round-robin within a queue group. Used for work distribution.
 
-```
-Publisher ──publish──▶ Subject ──queue:workers──▶ Worker 1
-                                              ▶ Worker 2 (gets next msg)
-                                              ▶ Worker 3
-```
+![Queue Groups pattern - messages load-balanced across workers](images/bus-queue.png)
 
 ### Request/Reply (RPC)
 
 Synchronous request with single response. Uses ephemeral reply subjects.
 
-```
-Requester ──request──▶ Subject ──deliver──▶ Responder
-                                               │
-          ◀──reply─────────────────────────────┘
-```
+![Request/Reply pattern - synchronous RPC with reply](images/bus-reqreply.png)
 
 ## Implementations
 

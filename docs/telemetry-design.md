@@ -26,54 +26,7 @@ The telemetry package provides observability for agent workflows through OpenTel
 
 ## Architecture
 
-```dot
-digraph telemetry {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_agent {
-        label="Agent Process"
-        style=dashed
-        
-        LLM [label="LLM Calls"]
-        Tools [label="Tool Execution"]
-        MCP [label="MCP Calls"]
-        Security [label="Security Checks"]
-        Policy [label="Policy Checks"]
-    }
-    
-    subgraph cluster_telemetry {
-        label="telemetry package"
-        style=filled
-        fillcolor=lightgray
-        
-        Tracer [label="Tracer\n(span helpers)"]
-        Provider [label="Provider\n(initialization)"]
-        Exporter [label="Exporter\n(events/messages)"]
-    }
-    
-    subgraph cluster_backends {
-        label="Backends"
-        style=dashed
-        
-        OTLP [label="OTLP Endpoint\n(Jaeger, Tempo)"]
-        File [label="File Export\n(JSONL)"]
-        HTTP [label="HTTP Endpoint"]
-    }
-    
-    LLM -> Tracer [label="StartLLMSpan"]
-    Tools -> Tracer [label="StartToolSpan"]
-    MCP -> Tracer [label="StartMCPSpan"]
-    Security -> Tracer [label="StartSecuritySpan"]
-    Policy -> Tracer [label="StartPolicySpan"]
-    
-    Provider -> Tracer [label="creates"]
-    Provider -> OTLP [label="gRPC/HTTP"]
-    
-    Exporter -> File
-    Exporter -> HTTP
-}
-```
+![Telemetry Architecture - showing agent process components (LLM, Tools, MCP, Security, Policy) connecting to the telemetry package (Tracer, Provider, Exporter) which exports to backends (OTLP, File, HTTP)](images/telemetry-architecture.png)
 
 ## Core Types
 

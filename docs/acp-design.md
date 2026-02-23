@@ -25,36 +25,7 @@ The acp package implements the Agent Client Protocol, a JSON-RPC based standard 
 
 ## Architecture
 
-```dot
-digraph ACP {
-    rankdir=LR
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_editor {
-        label="Code Editor"
-        style=dashed
-        Editor [label="Editor UI"]
-        Client [label="ACP Client"]
-    }
-    
-    subgraph cluster_agent {
-        label="Agent Process"
-        style=dashed
-        Server [label="ACP Server"]
-        Handler [label="Prompt Handler"]
-        Tools [label="Tool Execution"]
-    }
-    
-    Editor -> Client [label="user input"]
-    Client -> Server [label="stdin\n(JSON-RPC)"]
-    Server -> Client [label="stdout\n(JSON-RPC)"]
-    Server -> Handler [label="prompt request"]
-    Handler -> Tools [label="execute"]
-    Tools -> Handler [label="result"]
-    Handler -> Server [label="notifications"]
-    Client -> Editor [label="display"]
-}
-```
+![ACP Architecture - Communication flow between Code Editor (UI, Client) and Agent Process (Server, Handler, Tools) over stdio JSON-RPC](images/acp-architecture.png)
 
 ## Core Types
 
@@ -140,34 +111,11 @@ type Notification struct {
 
 ### Initialization Handshake
 
-```
-Editor                              Agent
-   │                                   │
-   │──initialize(protocolVersion)─────▶│
-   │                                   │  validate version
-   │◀──agentInfo + capabilities────────│
-   │                                   │
-   │  (connection established)         │
-```
+![Initialization Handshake - Editor sends initialize request, Agent validates and responds with capabilities](images/acp-init-handshake.png)
 
 ### Session Lifecycle
 
-```
-Editor                              Agent
-   │                                   │
-   │──session/new(metadata)───────────▶│
-   │◀──session(id, metadata)───────────│
-   │                                   │
-   │──session/prompt(sessionId)───────▶│
-   │                                   │  processing...
-   │◀──session/update(messageChunk)────│
-   │◀──session/update(toolCall)────────│
-   │◀──session/update(messageChunk)────│
-   │◀──promptResponse(stopReason)──────│
-   │                                   │
-   │──session/cancel───────────────────▶│
-   │◀──{}─────────────────────────────│
-```
+![Session Lifecycle - Full flow from session creation through prompts, streaming updates, and cancellation](images/acp-session-lifecycle.png)
 
 ## Protocol Messages
 

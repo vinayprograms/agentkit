@@ -26,42 +26,7 @@ The errors package provides a structured error taxonomy for swarm coordination i
 
 ## Architecture
 
-```dot
-digraph errors_architecture {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_interface {
-        label="Interface Layer"
-        AgentError [label="AgentError\n(interface)"]
-    }
-    
-    subgraph cluster_impl {
-        label="Implementation"
-        Error [label="Error\n(struct)"]
-    }
-    
-    subgraph cluster_classification {
-        label="Error Classification"
-        ErrorCode [label="ErrorCode\n(25+ codes)"]
-        ErrorCategory [label="ErrorCategory\n(4 categories)"]
-    }
-    
-    subgraph cluster_utilities {
-        label="Utilities"
-        Wrap [label="Wrap/Wrapf"]
-        Inspect [label="Is/IsCategory\nIsRetryable"]
-        Construct [label="Timeout/NotFound\nRateLimited/etc"]
-    }
-    
-    AgentError -> Error [label="implements"]
-    Error -> ErrorCode [label="has"]
-    Error -> ErrorCategory [label="has"]
-    Wrap -> Error [label="creates"]
-    Construct -> Error [label="creates"]
-    Inspect -> Error [label="inspects"]
-}
-```
+![Errors Package Architecture](images/errors-architecture.png)
 
 ## Error Taxonomy
 
@@ -222,15 +187,7 @@ func Wrap(err error, message string, opts ...Option) *Error
 - Detects `context.Canceled` → `CANCELED` code
 - Unknown errors default to `INTERNAL` category
 
-```
-Original Error ────wrap────▶ Wrapped Error
-    │                            │
-    │ Code: NOT_FOUND           │ Code: NOT_FOUND (preserved)
-    │ Category: permanent       │ Category: permanent (preserved)
-    │ Message: "user missing"   │ Message: "fetch failed"
-    │                            │ Cause: original error
-    └────────────────────────────┘
-```
+![Error Wrapping Flow](images/errors-wrapping.png)
 
 ### WrapWithCode
 
@@ -254,28 +211,7 @@ if errors.As(err, &agentErr) {
 
 ## Retry Semantics by Category
 
-```
-                          ┌─────────────────────────────────────────┐
-                          │           Error Occurs                   │
-                          └──────────────────┬──────────────────────┘
-                                             │
-                          ┌──────────────────▼──────────────────────┐
-                          │        Check IsRetryable(err)           │
-                          └──────────────────┬──────────────────────┘
-                                             │
-                    ┌────────────────────────┴────────────────────────┐
-                    │                                                  │
-           ┌────────▼────────┐                              ┌─────────▼─────────┐
-           │   Retryable     │                              │   Not Retryable   │
-           │ (transient,     │                              │ (permanent,       │
-           │  resource)      │                              │  internal)        │
-           └────────┬────────┘                              └─────────┬─────────┘
-                    │                                                  │
-           ┌────────▼────────┐                              ┌─────────▼─────────┐
-           │ Apply backoff   │                              │ Return error      │
-           │ Retry operation │                              │ immediately       │
-           └─────────────────┘                              └───────────────────┘
-```
+![Retry Semantics by Category](images/errors-retry-semantics.png)
 
 ### Default Retryability
 
@@ -575,14 +511,7 @@ if !limiter.Allow() {
 
 ## Package Structure
 
-```
-errors/
-├── doc.go         # Package documentation
-├── errors.go      # AgentError interface, Error struct, constructors
-├── codes.go       # ErrorCode, ErrorCategory definitions
-├── wrap.go        # Wrap, inspection, and utility functions
-└── errors_test.go # Comprehensive test coverage
-```
+![Package Structure](images/errors-package-structure.png)
 
 ## Error Handling Best Practices
 

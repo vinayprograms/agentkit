@@ -93,36 +93,7 @@ type Lock interface {
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         StateStore                                │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                    Key-Value Storage                         │ │
-│  │                                                              │ │
-│  │   config.agent-a  ──▶ {settings...}                         │ │
-│  │   tasks.pending   ──▶ [task1, task2]                        │ │
-│  │   cache.results   ──▶ {cached data}  [TTL: 5m]              │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                    Distributed Locks                         │ │
-│  │                                                              │ │
-│  │   _lock.resource.db     ──▶ held by agent-a [TTL: 30s]      │ │
-│  │   _lock.task.123        ──▶ held by agent-b [TTL: 60s]      │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                      Watchers                                │ │
-│  │                                                              │ │
-│  │   config.* ──▶ [watcher1, watcher2]                         │ │
-│  │   tasks.*  ──▶ [watcher3]                                   │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-```
+![StateStore Architecture](images/state-architecture.png)
 
 ## Implementations
 
@@ -159,15 +130,7 @@ Production implementation using NATS JetStream KV.
 
 ## Package Structure
 
-```
-state/
-├── state.go       # Interface + types + validation
-├── memory.go      # MemoryStore implementation
-├── memory_test.go
-├── nats.go        # NATSStore implementation
-├── nats_test.go
-└── doc.go         # Package documentation
-```
+![Package Structure](images/state-package-structure.png)
 
 ## Distributed Locking Design
 
@@ -175,36 +138,11 @@ Locks prevent concurrent access to resources across agents.
 
 ### Lock Acquisition
 
-```
-Agent A                      StateStore
-   │                              │
-   │──Lock("resource", 30s)──────▶│
-   │                              │  check: _lock.resource exists?
-   │                              │  no → create with TTL
-   │◀──────────Lock handle────────│
-   │                              │
-   │  (do protected work)         │
-   │                              │
-   │──Unlock()───────────────────▶│
-   │                              │  delete _lock.resource
-```
+![Lock Acquisition Flow](images/state-lock-acquisition.png)
 
 ### Lock Contention
 
-```
-Agent A holds lock              Agent B
-       │                            │
-       │                            │──Lock("resource", 30s)
-       │                            │
-       │    StateStore checks: lock exists and not expired
-       │                            │
-       │                            │◀──ErrLockHeld
-       │                            │
-       │  (30s pass, lock expires)  │
-       │                            │
-       │                            │──Lock("resource", 30s)
-       │                            │◀──Lock handle (success)
-```
+![Lock Contention Scenario](images/state-lock-contention.png)
 
 ### Lock Best Practices
 

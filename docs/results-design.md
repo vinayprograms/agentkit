@@ -116,73 +116,13 @@ type ResultFilter struct {
 
 ## Architecture
 
-```dot
-digraph ResultsArchitecture {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_publisher {
-        label="ResultPublisher"
-        style=dashed
-        
-        interface [label="ResultPublisher\nInterface", shape=ellipse]
-        
-        subgraph cluster_storage {
-            label="Result Storage"
-            results [label="map[taskID]*Result"]
-        }
-        
-        subgraph cluster_subs {
-            label="Subscriptions"
-            subs [label="map[taskID][]*Subscription"]
-        }
-    }
-    
-    subgraph cluster_impls {
-        label="Implementations"
-        style=dashed
-        
-        memory [label="MemoryPublisher\n(testing/single-process)"]
-        buspub [label="BusPublisher\n(distributed)"]
-    }
-    
-    bus [label="MessageBus\n(NATS/Memory)", shape=cylinder]
-    
-    producer [label="Producer Agent", shape=house]
-    consumer1 [label="Consumer Agent 1", shape=house]
-    consumer2 [label="Consumer Agent 2", shape=house]
-    
-    producer -> interface [label="Publish()"]
-    interface -> memory
-    interface -> buspub
-    buspub -> bus [label="broadcast"]
-    bus -> consumer1 [label="notify", style=dashed]
-    bus -> consumer2 [label="notify", style=dashed]
-    consumer1 -> interface [label="Subscribe()"]
-    consumer2 -> interface [label="Get()"]
-}
-```
+![Results Architecture](images/results-architecture.png)
 
 ## Result Lifecycle and Status Transitions
 
 Results follow a simple state machine with pending as the initial state and success/failed as terminal states:
 
-```dot
-digraph ResultLifecycle {
-    rankdir=LR
-    node [shape=circle]
-    
-    start [shape=point, width=0.1]
-    pending [label="pending"]
-    success [label="success", peripheries=2]
-    failed [label="failed", peripheries=2]
-    
-    start -> pending [label="create"]
-    pending -> pending [label="update"]
-    pending -> success [label="complete"]
-    pending -> failed [label="error"]
-}
-```
+![Result Lifecycle State Machine](images/results-lifecycle.png)
 
 **State descriptions:**
 
@@ -242,25 +182,7 @@ type BusPublisherConfig struct {
 
 ### Subscribe Flow
 
-```
-Agent                         Publisher                    Bus (if BusPublisher)
-  │                              │                              │
-  │──Subscribe("task-1")────────▶│                              │
-  │                              │──bus.Subscribe(subject)─────▶│
-  │                              │                              │
-  │                              │  check: result exists?       │
-  │                              │  yes → send immediately      │
-  │◀──────────chan *Result───────│                              │
-  │                              │                              │
-  │         (relay goroutine started)                           │
-  │                              │                              │
-  │  ... wait for updates ...    │                              │
-  │                              │                              │
-  │◀─────────*Result─────────────│◀──────message────────────────│
-  │                              │                              │
-  │  (terminal result received)  │                              │
-  │◀─────channel closed──────────│                              │
-```
+![Subscribe Flow Sequence](images/results-subscribe-flow.png)
 
 ### Subscription Behavior
 

@@ -120,63 +120,13 @@ type TaskManager interface {
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         TaskManager                               │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                    Task Storage                              │ │
-│  │                                                              │ │
-│  │   tasks.task.abc123    ──▶ {id, status, payload...}         │ │
-│  │   tasks.task.def456    ──▶ {id, status, payload...}         │ │
-│  │   tasks.task.ghi789    ──▶ {id, status, payload...}         │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                 Idempotency Index                            │ │
-│  │                                                              │ │
-│  │   tasks.idem.order-123-process  ──▶ "abc123"                │ │
-│  │   tasks.idem.email-456-send     ──▶ "def456"                │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                    State Backend                             │ │
-│  │                                                              │ │
-│  │   MemoryStore (testing) │ NATSStore (production)            │ │
-│  │                                                              │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-```
+![TaskManager Architecture](images/tasks-architecture.png)
 
 ## Task Lifecycle
 
 Tasks move through four states:
 
-```
-                    ┌──────────────────────────────────────────┐
-                    │                                          │
-                    ▼                                          │
-┌─────────┐    ┌─────────┐    ┌───────────┐                   │
-│ Submit  │───▶│ Pending │───▶│  Claimed  │                   │
-└─────────┘    └─────────┘    └───────────┘                   │
-                    ▲              │    │                      │
-                    │              │    │                      │
-               (retry)         Complete()  Fail()              │
-                    │              │    │                      │
-                    │              ▼    ▼                      │
-                    │      ┌───────────────────┐              │
-                    │      │                   │              │
-                    │      ▼                   ▼              │
-                    │  ┌───────────┐    ┌──────────┐          │
-                    │  │ Completed │    │  Failed  │──────────┘
-                    │  └───────────┘    └──────────┘  (if retries
-                    │       ▲                ▲         available)
-                    │       │                │
-                    └───────┴────────────────┘
-                         (Terminal States)
-```
+![Task Lifecycle State Machine](images/tasks-lifecycle.png)
 
 ### State Transitions
 
@@ -203,24 +153,7 @@ Idempotency keys enable safe retry semantics and deduplication.
 
 ### How It Works
 
-```
-Client                        TaskManager                    State Store
-   │                               │                              │
-   │──Submit(key="order-123")─────▶│                              │
-   │                               │──Get("tasks.idem.order-123")─▶│
-   │                               │◀──────(not found)────────────│
-   │                               │                              │
-   │                               │──Put(task data)─────────────▶│
-   │                               │──Put(idem mapping)──────────▶│
-   │◀──────taskID="abc123"─────────│                              │
-   │                               │                              │
-   │  (network timeout, retry)     │                              │
-   │                               │                              │
-   │──Submit(key="order-123")─────▶│                              │
-   │                               │──Get("tasks.idem.order-123")─▶│
-   │                               │◀──────"abc123"───────────────│
-   │◀──────taskID="abc123"─────────│  (existing task returned)    │
-```
+![Idempotency Key Deduplication Flow](images/tasks-idempotency.png)
 
 ### Key Design Guidelines
 
@@ -267,24 +200,7 @@ if task.MaxAttempts > 0 && task.Attempts >= task.MaxAttempts {
 
 ### Retry Flow
 
-```
-Worker A                       TaskManager                      Worker B
-   │                               │                                │
-   │──Claim(task, "worker-a")─────▶│                                │
-   │◀──────(OK, Attempts=1)────────│                                │
-   │                               │                                │
-   │  (work fails)                 │                                │
-   │                               │                                │
-   │──Fail(task, err)─────────────▶│                                │
-   │◀──────(OK, back to Pending)───│                                │
-   │                               │                                │
-   │                               │◀──Claim(task, "worker-b")──────│
-   │                               │──────(OK, Attempts=2)─────────▶│
-   │                               │                                │
-   │                               │  (work succeeds)               │
-   │                               │                                │
-   │                               │◀──Complete(task, result)───────│
-```
+![Task Retry Flow Between Workers](images/tasks-retry-flow.png)
 
 ## State Backend Integration
 
@@ -327,18 +243,7 @@ Each worker must provide a unique `workerID` when claiming tasks. This enables:
 
 ### Claim Conflicts
 
-```
-Worker A                       TaskManager                      Worker B
-   │                               │                                │
-   │──Claim(task, "worker-a")─────▶│                                │
-   │◀──────(OK)────────────────────│                                │
-   │                               │                                │
-   │                               │◀──Claim(task, "worker-b")──────│
-   │                               │──────ErrTaskAlreadyClaimed────▶│
-   │                               │                                │
-   │──Claim(task, "worker-a")─────▶│  (re-claim same worker)        │
-   │◀──────(OK, idempotent)────────│                                │
-```
+![Claim Ownership and Conflict Resolution](images/tasks-claim-conflicts.png)
 
 ### Conflict Resolution
 

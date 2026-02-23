@@ -98,74 +98,13 @@ type Content struct {
 
 ## Architecture
 
-```dot
-digraph MCP {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_agent {
-        label="Agent Process"
-        style=dashed
-        
-        Manager [label="Manager\n(multi-server)"]
-        ClientA [label="Client\n(server-a)"]
-        ClientB [label="Client\n(server-b)"]
-        
-        Manager -> ClientA
-        Manager -> ClientB
-    }
-    
-    subgraph cluster_servers {
-        label="External Processes"
-        style=dashed
-        
-        ServerA [label="MCP Server A\n(filesystem)"]
-        ServerB [label="MCP Server B\n(memory)"]
-    }
-    
-    ClientA -> ServerA [label="stdio\nJSON-RPC"]
-    ClientB -> ServerB [label="stdio\nJSON-RPC"]
-    
-    subgraph cluster_flow {
-        label="Protocol Flow"
-        style=invis
-        
-        Init [label="1. initialize" shape=ellipse]
-        Notify [label="2. notifications/initialized" shape=ellipse]
-        List [label="3. tools/list" shape=ellipse]
-        Call [label="4. tools/call" shape=ellipse]
-        
-        Init -> Notify -> List -> Call [style=dashed]
-    }
-}
-```
+![MCP Architecture - Manager coordinates multiple clients connecting to external MCP servers via stdio JSON-RPC](images/mcp-architecture.png)
 
 ## Client Lifecycle
 
 ### Connection Flow
 
-```
-Agent                          MCP Server
-  │                                 │
-  │────spawn process───────────────▶│
-  │                                 │
-  │──{"method":"initialize"}───────▶│
-  │◀─{"result":{capabilities}}──────│
-  │                                 │
-  │──{"method":"notifications/      │
-  │    initialized"}───────────────▶│
-  │                                 │
-  │──{"method":"tools/list"}───────▶│
-  │◀─{"result":{tools:[...]}}───────│
-  │                                 │
-  │         (ready for calls)       │
-  │                                 │
-  │──{"method":"tools/call"}───────▶│
-  │◀─{"result":{content:[...]}}─────│
-  │                                 │
-  │────close stdin──────────────────│
-  │◀───process exits────────────────│
-```
+![MCP Connection Flow - Sequence of JSON-RPC messages between Agent and MCP Server](images/mcp-connection-flow.png)
 
 ### Lifecycle Methods
 
@@ -179,14 +118,7 @@ Agent                          MCP Server
 
 ### State Machine
 
-```
-Created ──Initialize()──▶ Ready ──Close()──▶ Closed
-    │                       │
-    │                       ├── ListTools()
-    │                       └── CallTool()
-    │
-    └── (error) ──▶ Failed
-```
+![MCP Client State Machine - Created to Ready to Closed, with error path to Failed](images/mcp-state-machine.png)
 
 ## Manager for Multiple Servers
 
@@ -215,19 +147,7 @@ type Manager struct {
 
 ### Tool Aggregation
 
-```
-Manager.AllTools()
-     │
-     ├── Server "filesystem" ──▶ [read_file, write_file, list_dir]
-     │                               (deny: write_file)
-     │                               returns: [read_file, list_dir]
-     │
-     └── Server "memory" ──▶ [store, retrieve, list]
-                              returns: [store, retrieve, list]
-
-     Result: [{filesystem, read_file}, {filesystem, list_dir},
-              {memory, store}, {memory, retrieve}, {memory, list}]
-```
+![MCP Tool Aggregation - Manager.AllTools() collects tools from all servers, respecting deny lists](images/mcp-tool-aggregation.png)
 
 ## JSON-RPC Protocol Details
 

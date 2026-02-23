@@ -25,26 +25,7 @@ The heartbeat package provides liveness detection for distributed agents. It con
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                           Swarm                                   │
-│                                                                   │
-│   ┌─────────────────┐       MessageBus        ┌────────────────┐ │
-│   │    Agent A      │                         │    Monitor     │ │
-│   │  ┌───────────┐  │──heartbeat.agent-a─────▶│  (Supervisor)  │ │
-│   │  │  Sender   │  │                         │                │ │
-│   │  └───────────┘  │                         │  tracks:       │ │
-│   └─────────────────┘                         │  - lastSeen[]  │ │
-│                                               │  - callbacks   │ │
-│   ┌─────────────────┐                         │                │ │
-│   │    Agent B      │                         │  detects:      │ │
-│   │  ┌───────────┐  │──heartbeat.agent-b─────▶│  - timeouts    │ │
-│   │  │  Sender   │  │                         │  - deaths      │ │
-│   │  └───────────┘  │                         │                │ │
-│   └─────────────────┘                         └────────────────┘ │
-│                                                                   │
-└──────────────────────────────────────────────────────────────────┘
-```
+![Heartbeat Architecture - Agents with Senders publish heartbeats via MessageBus to the Monitor](images/heartbeat-architecture.png)
 
 ## Heartbeat Message Format
 

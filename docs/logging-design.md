@@ -64,54 +64,7 @@ type Logger struct {
 
 ## Architecture
 
-```dot
-digraph logging_architecture {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_sources {
-        label="Event Sources"
-        executor [label="Executor"]
-        supervisor [label="Supervisor"]
-        security [label="Security Layer"]
-        tools [label="Tool Handlers"]
-    }
-    
-    subgraph cluster_logger {
-        label="Logger"
-        style=filled
-        fillcolor=lightgray
-        
-        levels [label="Level Filter\n(DEBUG→INFO→WARN→ERROR)"]
-        formatter [label="Formatter\n(LEVEL TIMESTAMP [component] msg key=value)"]
-        mutex [label="Mutex\n(thread-safe writes)"]
-    }
-    
-    subgraph cluster_output {
-        label="Output"
-        stdout [label="stdout\n(console)"]
-        buffer [label="io.Writer\n(testing)"]
-    }
-    
-    executor -> levels
-    supervisor -> levels
-    security -> levels
-    tools -> levels
-    
-    levels -> formatter
-    formatter -> mutex
-    mutex -> stdout
-    mutex -> buffer
-    
-    subgraph cluster_forensics {
-        label="Forensics (Separate)"
-        style=dashed
-        session [label="Session JSON\n(event store)"]
-    }
-    
-    executor -> session [style=dashed, label="events"]
-}
-```
+![Logging Architecture](images/logging-architecture.png)
 
 ## Log Levels
 
@@ -398,22 +351,7 @@ logger.SetOutput(io.Discard)  // Silence all output
 
 The logging package integrates with other AgentKit components:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Agent Execution                         │
-│                                                              │
-│  ┌──────────┐    events    ┌─────────────┐                  │
-│  │ Executor │─────────────▶│   Session   │ ← Forensic       │
-│  └──────────┘              │    JSON     │   Record         │
-│       │                    └─────────────┘                  │
-│       │                                                      │
-│       │ derived            ┌─────────────┐                  │
-│       │ logging            │   Logger    │ ← Real-time      │
-│       └───────────────────▶│  (stdout)   │   Monitoring     │
-│                            └─────────────┘                  │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+![Logging Integration with AgentKit](images/logging-integration.png)
 
 ## Testing Strategy
 

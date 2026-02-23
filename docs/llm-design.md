@@ -26,67 +26,7 @@ The llm package provides a unified interface for interacting with multiple Large
 
 ## Architecture
 
-```dot
-digraph llm_architecture {
-    rankdir=TB;
-    node [shape=box, style=rounded];
-    
-    subgraph cluster_interface {
-        label="Core Interface";
-        style=dashed;
-        Provider [label="Provider\ninterface"];
-        ChatRequest [label="ChatRequest"];
-        ChatResponse [label="ChatResponse"];
-    }
-    
-    subgraph cluster_providers {
-        label="Provider Implementations";
-        style=dashed;
-        Anthropic [label="AnthropicProvider\n(official SDK)"];
-        OpenAI [label="OpenAIProvider\n(official SDK)"];
-        Google [label="GoogleProvider\n(official SDK)"];
-        OllamaCloud [label="OllamaCloudProvider\n(native API)"];
-        OpenAICompat [label="OpenAICompatProvider\n(HTTP client)"];
-    }
-    
-    subgraph cluster_compat {
-        label="OpenAI-Compatible";
-        style=dashed;
-        Groq [label="Groq"];
-        Mistral [label="Mistral"];
-        XAI [label="xAI (Grok)"];
-        OpenRouter [label="OpenRouter"];
-        OllamaLocal [label="Ollama Local"];
-        LMStudio [label="LM Studio"];
-    }
-    
-    subgraph cluster_support {
-        label="Supporting Components";
-        style=dashed;
-        Thinking [label="Thinking\n(adaptive levels)"];
-        Adapters [label="Adapters\n(provider factory)"];
-        Tracing [label="TracingProvider\n(OpenTelemetry)"];
-        Summarizer [label="Summarizer\n(content extraction)"];
-    }
-    
-    Provider -> Anthropic;
-    Provider -> OpenAI;
-    Provider -> Google;
-    Provider -> OllamaCloud;
-    Provider -> OpenAICompat;
-    
-    OpenAICompat -> Groq;
-    OpenAICompat -> Mistral;
-    OpenAICompat -> XAI;
-    OpenAICompat -> OpenRouter;
-    OpenAICompat -> OllamaLocal;
-    OpenAICompat -> LMStudio;
-    
-    Adapters -> Provider [label="creates"];
-    Thinking -> Provider [label="configures"];
-    Tracing -> Provider [label="wraps"];
-}
-```
+![LLM Package Architecture](images/llm-architecture.png)
 
 ## Core Types
 
@@ -438,23 +378,7 @@ type ThinkingConfig struct {
 
 ## Package Structure
 
-```
-llm/
-├── provider.go       # Core interface, types, MockProvider
-├── adapters.go       # NewProvider factory, provider inference
-├── anthropic.go      # AnthropicProvider implementation
-├── openai.go         # OpenAIProvider implementation
-├── google.go         # GoogleProvider implementation
-├── ollama_cloud.go   # OllamaCloudProvider implementation
-├── openaicompat.go   # OpenAICompatProvider + variants
-├── thinking.go       # Thinking level classification
-├── tracing.go        # TracingProvider wrapper
-├── summarizer.go     # Content summarization helper
-├── provider_test.go
-├── providers_test.go
-├── thinking_test.go
-└── ollama_cloud_test.go
-```
+![LLM Package Structure](images/llm-package-structure.png)
 
 ## Usage Patterns
 

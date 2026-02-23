@@ -99,66 +99,7 @@ type FILResult struct {
 
 ## Architecture
 
-```dot
-digraph memory_architecture {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_api {
-        label="Store Interface"
-        style=dashed
-        
-        remember [label="RememberObservation\nRememberFIL"]
-        recall [label="Recall\nRecallFIL\nRecallByCategory"]
-        retrieve [label="RetrieveByID"]
-        kv [label="Get/Set/List/Search"]
-    }
-    
-    subgraph cluster_extraction {
-        label="Observation Extraction"
-        style=dashed
-        
-        extractor [label="ObservationExtractor"]
-        llm [label="LLM Provider"]
-        extractor -> llm [label="Extract FIL"]
-    }
-    
-    subgraph cluster_storage {
-        label="Storage Backends"
-        style=dashed
-        
-        bleve [label="BleveStore\n(Production)"]
-        inmem [label="InMemoryStore\n(Testing)"]
-        
-        bleveIdx [label="Bleve Index\n(BM25)"]
-        bleveKV [label="KV JSON File"]
-        
-        bleve -> bleveIdx
-        bleve -> bleveKV
-    }
-    
-    subgraph cluster_adapters {
-        label="Adapters"
-        style=dashed
-        
-        tools [label="ToolsAdapter"]
-        obsstore [label="BleveObservationStore"]
-    }
-    
-    remember -> bleve
-    remember -> inmem
-    recall -> bleve
-    recall -> inmem
-    retrieve -> bleve
-    retrieve -> inmem
-    kv -> bleve
-    kv -> inmem
-    
-    tools -> bleve [style=dashed]
-    obsstore -> bleve [style=dashed]
-    extractor -> obsstore [label="Store"]
-}
-```
+![Memory Package Architecture](images/memory-architecture.png)
 
 ## BM25 Text Search (Bleve Integration)
 

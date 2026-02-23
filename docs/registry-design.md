@@ -103,18 +103,7 @@ type Event struct {
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Registry Interface                     │
-└─────────────────────────────────────────────────────────────┘
-                    │                       │
-         ┌──────────┴──────────┐   ┌───────┴────────┐
-         │    MemoryRegistry   │   │  NATSRegistry  │
-         │  (single process)   │   │ (distributed)  │
-         └─────────────────────┘   └────────────────┘
-                    │                       │
-              Go maps + RWMutex      JetStream KV bucket
-```
+![Registry Architecture](images/registry-architecture.png)
 
 ## Implementations
 
@@ -266,24 +255,7 @@ for event := range events {
 
 Registry and heartbeat work together for liveness detection:
 
-```
-Agent                    Heartbeat              Registry
-  │                          │                      │
-  │──register────────────────│──────────────────────▶
-  │                          │                      │
-  │──heartbeat.Start()──────▶│                      │
-  │                          │                      │
-  │  (periodic heartbeat)    │                      │
-  │◀─────────────────────────│                      │
-  │                          │                      │
-  │──update load/status──────│──────────────────────▶
-  │                          │                      │
-  │                     [missed heartbeats]         │
-  │                          │                      │
-  │               (monitor detects death)           │
-  │                          │──deregister─────────▶│
-  │                          │                      │
-```
+![Heartbeat Integration Flow](images/registry-heartbeat-integration.png)
 
 Typically:
 - Heartbeat sender updates registry on each beat

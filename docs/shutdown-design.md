@@ -26,18 +26,7 @@ The shutdown package provides graceful shutdown coordination for distributed age
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                      ShutdownCoordinator                         │
-├──────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │  Handler A  │→ │  Handler B  │→ │  Handler C  │  (ordered)   │
-│  │  (Phase 10) │  │  (Phase 20) │  │  (Phase 30) │              │
-│  └─────────────┘  └─────────────┘  └─────────────┘              │
-└──────────────────────────────────────────────────────────────────┘
-                              ↑
-                    SIGTERM / SIGINT / Shutdown()
-```
+![ShutdownCoordinator Architecture](images/shutdown-architecture.png)
 
 ## Interface Design
 
@@ -118,14 +107,7 @@ type ShutdownResult struct {
 
 Phases control shutdown order. Lower phase numbers execute first. This ensures dependencies are respected—components that depend on others shut down before their dependencies.
 
-```
-Phase 10 (Frontend)     ──▶  Phase 20 (Services)     ──▶  Phase 30 (Backend)
-┌─────────────────────┐      ┌─────────────────────┐      ┌─────────────────────┐
-│ HTTP Server         │      │ Worker Pool         │      │ Database            │
-│ API Gateway         │      │ Task Queue          │      │ Cache               │
-│ WebSocket Handler   │      │ Message Consumer    │      │ Message Bus         │
-└─────────────────────┘      └─────────────────────┘      └─────────────────────┘
-```
+![Phase-based Shutdown Ordering](images/shutdown-phases.png)
 
 ### Execution Model
 
@@ -173,15 +155,7 @@ handlers := []registration{
 
 ### Signal Flow
 
-```
-OS Signal ──▶ signal.Notify() ──▶ signalChan ──▶ ShutdownWithTimeout()
-                                                        │
-                                                        ▼
-                                            Execute handlers by phase
-                                                        │
-                                                        ▼
-                                                 Close Done()
-```
+![Signal Handling Flow](images/shutdown-signal-flow.png)
 
 ### Implementation
 

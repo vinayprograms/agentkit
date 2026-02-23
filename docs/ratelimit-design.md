@@ -25,48 +25,7 @@ The ratelimit package provides rate limit coordination for shared resources acro
 
 ## Architecture
 
-```dot
-digraph ratelimit {
-    rankdir=TB
-    node [shape=box, style=rounded]
-    
-    subgraph cluster_agent1 {
-        label="Agent 1"
-        style=dashed
-        
-        app1 [label="Application Code"]
-        dl1 [label="DistributedLimiter"]
-        ml1 [label="MemoryLimiter\n(local buckets)"]
-        
-        app1 -> dl1 [label="Acquire/Release"]
-        dl1 -> ml1 [label="delegates"]
-    }
-    
-    subgraph cluster_agent2 {
-        label="Agent 2"
-        style=dashed
-        
-        app2 [label="Application Code"]
-        dl2 [label="DistributedLimiter"]
-        ml2 [label="MemoryLimiter\n(local buckets)"]
-        
-        app2 -> dl2 [label="Acquire/Release"]
-        dl2 -> ml2 [label="delegates"]
-    }
-    
-    bus [label="Message Bus\nratelimit.capacity", shape=ellipse]
-    
-    dl1 -> bus [label="AnnounceReduced", style=dashed]
-    dl2 -> bus [label="AnnounceReduced", style=dashed]
-    bus -> dl1 [label="CapacityUpdate", style=dashed]
-    bus -> dl2 [label="CapacityUpdate", style=dashed]
-    
-    api [label="Shared API\n(rate limited)", shape=cylinder]
-    
-    ml1 -> api [label="requests"]
-    ml2 -> api [label="requests"]
-}
-```
+![Rate Limiter Architecture](images/ratelimit-architecture.png)
 
 ## Core Types
 
@@ -186,34 +145,7 @@ ratelimit/
 
 ### Token Bucket Mechanics
 
-```
-Initial State:
-┌─────────────────────────────────────────┐
-│ Resource: "openai-api"                  │
-│ Capacity: 60 tokens                     │
-│ Window: 1 minute                        │
-│ Available: 60 ████████████████████████  │
-│ InFlight: 0                             │
-└─────────────────────────────────────────┘
-
-After 30 Acquires:
-┌─────────────────────────────────────────┐
-│ Resource: "openai-api"                  │
-│ Capacity: 60 tokens                     │
-│ Window: 1 minute                        │
-│ Available: 30 ████████████              │
-│ InFlight: 30                            │
-└─────────────────────────────────────────┘
-
-After 30 seconds (refill ~30 tokens):
-┌─────────────────────────────────────────┐
-│ Resource: "openai-api"                  │
-│ Capacity: 60 tokens                     │
-│ Window: 1 minute                        │
-│ Available: 60 ████████████████████████  │
-│ InFlight: 30                            │
-└─────────────────────────────────────────┘
-```
+![Token Bucket State Transitions](images/ratelimit-token-bucket.png)
 
 ### Capacity Configuration
 
@@ -237,19 +169,7 @@ limiter.SetCapacity("old-api", 0, time.Minute)
 
 ### Message Flow
 
-```
-Agent A detects 429      Agent B               Agent C
-    │                       │                     │
-    │─AnnounceReduced───────┼─────────────────────┤
-    │                       │                     │
-    │    CapacityUpdate     │   CapacityUpdate    │
-    │◀──────────────────────┼─────────────────────┤
-    │   (ignored: own msg)  │                     │
-    │                       │                     │
-    │                       │  Apply reduced      │
-    │                       │  capacity locally   │
-    │                       │                     │
-```
+![Distributed Message Flow](images/ratelimit-message-flow.png)
 
 ### Subject Convention
 
