@@ -33,6 +33,17 @@ type Error struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+// Error implements the error interface.
+func (e *Error) Error() string {
+	if e.Data != nil {
+		if s, ok := e.Data.(string); ok {
+			return e.Message + ": " + s
+		}
+		return e.Message
+	}
+	return e.Message
+}
+
 // Standard error codes
 const (
 	ParseError     = -32700

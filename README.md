@@ -13,7 +13,7 @@ Reusable Go packages for building AI agents.
 | `acp` | Agent Communication Protocol (agent-to-agent messaging) |
 | `security` | Taint tracking, content verification, audit trail |
 | `credentials` | Credential management (TOML-based) |
-| `transport` | Transport adapters (stdio, future: HTTP/WebSocket) |
+| `transport` | Pluggable transports (stdio, WebSocket, SSE) with JSON-RPC 2.0 |
 | `policy` | Security policy enforcement |
 | `logging` | Structured logging |
 | `telemetry` | Observability (OpenTelemetry) |
@@ -51,6 +51,35 @@ registry := tools.NewRegistry()
 registry.SetScratchpad(tools.NewInMemoryStore(), false)
 registry.SetSemanticMemory(memory.NewToolsAdapter(store))
 ```
+
+## Transport Layer
+
+The transport package provides pluggable transports for JSON-RPC 2.0 communication:
+
+```go
+import "github.com/vinayprograms/agentkit/transport"
+
+// Stdio transport (for CLI tools)
+t := transport.NewStdioTransport(os.Stdin, os.Stdout, transport.DefaultConfig())
+
+// WebSocket transport (for real-time UIs)
+conn, _ := upgrader.Upgrade(w, r, nil)
+t := transport.NewWebSocketTransport(conn, transport.DefaultWebSocketConfig())
+
+// SSE transport (for web clients)
+t := transport.NewSSETransport(transport.DefaultSSEConfig())
+http.HandleFunc("/events", t.HandleSSE)  // Server→Client
+http.HandleFunc("/rpc", t.HandlePost)    // Client→Server
+
+// Common usage pattern
+go t.Run(ctx)
+for msg := range t.Recv() {
+    // Handle request
+    t.Send(&transport.OutboundMessage{Response: resp})
+}
+```
+
+All transports use channel-based APIs for Go-idiomatic concurrent use.
 
 ## Used By
 
