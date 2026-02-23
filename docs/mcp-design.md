@@ -1,414 +1,212 @@
 # MCP Client Design
 
-## Overview
+## What This Package Does
 
-The mcp package provides Model Context Protocol (MCP) client support for connecting to external tool servers. MCP enables agents to discover and invoke tools from any MCP-compliant server using JSON-RPC 2.0 over stdio.
+The `mcp` package connects your agent to external tool servers using the Model Context Protocol (MCP). MCP servers provide tools (filesystem access, web search, custom APIs) that your agent can discover and invoke.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| External tools | Connect to MCP servers that provide tools (filesystem, memory, custom) |
-| Tool discovery | Automatically discover available tools from connected servers |
-| Multi-server | Manage connections to multiple MCP servers simultaneously |
-| Standard protocol | Implement MCP specification using JSON-RPC 2.0 |
-| Tool filtering | Allow denying specific tools from being exposed to LLMs |
+Agents need tools to interact with the world:
+- Read/write files
+- Search the web
+- Access databases
+- Call external APIs
 
-## Non-Goals
+You could build these tools into your agent, but that's limiting:
+- Every agent would need to implement the same tools
+- Adding new tools requires agent changes
+- Tools can't be shared across different agent frameworks
 
-| Non-Goal | Reason |
-|----------|--------|
-| Server implementation | Only client-side; servers are external processes |
-| HTTP transport | stdio-only; HTTP/SSE transport out of scope |
-| Resource/prompt support | Focus on tool invocation only |
-| Server process management | Just start/stop; no health monitoring or restart |
+MCP solves this by standardizing tool communication. Your agent connects to MCP servers (separate processes) that provide tools. The agent discovers available tools and calls them as needed.
 
-## Core Types
+## When to Use It
 
-### Tool
+**Use MCP for:**
+- Connecting to existing MCP tool servers
+- Accessing tools without building them yourself
+- Sharing tools across multiple agents
+- Using community-provided MCP servers
 
-```go
-// Tool represents an MCP tool definition.
-type Tool struct {
-    Name        string                 `json:"name"`
-    Description string                 `json:"description"`
-    InputSchema map[string]interface{} `json:"inputSchema"`
-}
-```
+**Don't use MCP for:**
+- Tools that must be built into your agent
+- Very high-frequency tool calls (process IPC has overhead)
+- Custom protocols (MCP is JSON-RPC specific)
 
-### ServerConfig
+## Core Concepts
 
-```go
-// ServerConfig configures an MCP server connection.
-type ServerConfig struct {
-    Command string            `json:"command"`  // Executable to run
-    Args    []string          `json:"args"`     // Command arguments
-    Env     map[string]string `json:"env"`      // Environment variables
-}
-```
+### MCP Servers
 
-### JSON-RPC Types
+An MCP server is an external process that provides tools. You configure it with:
+- **Command** — The executable to run
+- **Args** — Command-line arguments
+- **Env** — Environment variables
 
-```go
-// Request is a JSON-RPC 2.0 request.
-type Request struct {
-    JSONRPC string      `json:"jsonrpc"`
-    ID      int64       `json:"id"`
-    Method  string      `json:"method"`
-    Params  interface{} `json:"params,omitempty"`
-}
+The agent spawns the server process and communicates via stdin/stdout using JSON-RPC.
 
-// Response is a JSON-RPC 2.0 response.
-type Response struct {
-    JSONRPC string          `json:"jsonrpc"`
-    ID      int64           `json:"id"`
-    Result  json.RawMessage `json:"result,omitempty"`
-    Error   *RPCError       `json:"error,omitempty"`
-}
+### Tool Discovery
 
-// RPCError represents a JSON-RPC error.
-type RPCError struct {
-    Code    int    `json:"code"`
-    Message string `json:"message"`
-}
-```
+When the agent connects to an MCP server, it asks "what tools do you have?" The server responds with a list of tools, each with:
+- **Name** — Identifier for calling the tool
+- **Description** — What the tool does (shown to LLMs)
+- **Input schema** — JSON schema for the tool's parameters
 
-### Tool Call Types
+The agent caches this list and exposes tools to the LLM.
 
-```go
-// ToolCallParams are the parameters for tools/call.
-type ToolCallParams struct {
-    Name      string                 `json:"name"`
-    Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
+### Tool Invocation
 
-// ToolCallResult is the result of tools/call.
-type ToolCallResult struct {
-    Content []Content `json:"content"`
-    IsError bool      `json:"isError"`
-}
+When the LLM decides to use a tool:
+1. Agent sends `tools/call` request to the MCP server
+2. Server executes the tool
+3. Server returns result (text, images, or error)
+4. Agent passes result back to LLM
 
-// Content represents content in a tool result.
-type Content struct {
-    Type string `json:"type"`           // "text" or "image"
-    Text string `json:"text,omitempty"` // For text content
-    Data string `json:"data,omitempty"` // Base64 for images
-}
-```
+The agent is the bridge between LLM and MCP servers.
 
 ## Architecture
 
 ![MCP Architecture - Manager coordinates multiple clients connecting to external MCP servers via stdio JSON-RPC](images/mcp-architecture.png)
 
-## Client Lifecycle
+Two main components:
 
-### Connection Flow
+**Client** — Handles one MCP server connection. Manages the subprocess, sends requests, receives responses.
+
+**Manager** — Coordinates multiple clients. Aggregates tools from all connected servers. Routes tool calls to the right server.
+
+### Multi-Server Support
+
+An agent can connect to multiple MCP servers simultaneously:
+- Filesystem server (file operations)
+- Memory server (knowledge storage)
+- Custom server (your application's API)
+
+The manager exposes all tools as if they came from one source.
+
+## Connection Lifecycle
+
+### Startup Flow
 
 ![MCP Connection Flow - Sequence of JSON-RPC messages between Agent and MCP Server](images/mcp-connection-flow.png)
 
-### Lifecycle Methods
-
-| Method | Description |
-|--------|-------------|
-| `NewClient(config)` | Spawns server process, sets up stdio pipes |
-| `Initialize(ctx)` | Performs MCP handshake, sends initialized notification |
-| `ListTools(ctx)` | Fetches and caches available tools |
-| `CallTool(ctx, name, args)` | Invokes a tool and returns result |
-| `Close()` | Closes stdin, waits for process exit |
+1. Agent spawns MCP server process
+2. Agent sends `initialize` request
+3. Server responds with capabilities
+4. Agent sends `initialized` notification
+5. Agent sends `tools/list` request
+6. Server responds with available tools
+7. Connection is ready
 
 ### State Machine
 
-![MCP Client State Machine - Created to Ready to Closed, with error path to Failed](images/mcp-state-machine.png)
+![MCP Client State Machine](images/mcp-state-machine.png)
 
-## Manager for Multiple Servers
+Clients move through states:
+- **Created** — Process spawned but not initialized
+- **Ready** — Handshake complete, can call tools
+- **Closed** — Connection terminated
 
-The Manager coordinates connections to multiple MCP servers:
+### Shutdown
 
-```go
-type Manager struct {
-    clients     map[string]*Client        // server name -> client
-    deniedTools map[string]map[string]bool // server -> tool -> denied
-    mu          sync.RWMutex
-}
-```
+1. Agent closes stdin to server
+2. Server detects EOF and exits
+3. Agent waits for process to terminate
 
-### Manager Operations
+## Tool Aggregation
 
-| Method | Description |
-|--------|-------------|
-| `Connect(ctx, name, config)` | Connect to a server, initialize, and fetch tools |
-| `Disconnect(name)` | Close connection to a specific server |
-| `AllTools()` | Get all tools from all servers (excluding denied) |
-| `FindTool(name)` | Find which server provides a tool |
-| `CallTool(ctx, server, tool, args)` | Call a tool on a specific server |
-| `SetDeniedTools(server, tools)` | Exclude tools from being exposed |
-| `Servers()` | List connected server names |
-| `Close()` | Disconnect all servers |
+When you have multiple MCP servers, the manager combines their tools:
 
-### Tool Aggregation
+![Tool Aggregation Flow](images/mcp-tool-aggregation.png)
 
-![MCP Tool Aggregation - Manager.AllTools() collects tools from all servers, respecting deny lists](images/mcp-tool-aggregation.png)
+You can also filter tools:
+- **Deny list** — Block specific tools from being exposed
+- **Per-server filtering** — Different rules for different servers
 
-## JSON-RPC Protocol Details
+This prevents accidentally exposing dangerous tools to the LLM.
 
-### Message Format
+## Common Patterns
 
-All messages are newline-delimited JSON over stdio:
+### Basic Tool Server
 
-```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
-{"jsonrpc":"2.0","id":1,"result":{...}}
-```
+Configure a server, connect, discover tools, use them:
+1. Create client with server config
+2. Initialize connection
+3. List tools
+4. Call tools as needed
+5. Close when done
 
-### Request ID Management
+### Multiple Servers
 
-- Atomic counter generates unique IDs
-- Pending requests tracked in `map[int64]chan *Response`
-- Responses matched to requests by ID
-- Context cancellation supported
+Use the Manager to coordinate:
+1. Add multiple server configs
+2. Connect all
+3. Get aggregated tool list
+4. Manager routes calls automatically
 
-### Notifications vs Requests
+### Tool Filtering
 
-| Type | Has ID | Expects Response |
-|------|--------|------------------|
-| Request | Yes | Yes |
-| Notification | No | No |
-
-```go
-// Request - expects response
-{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-
-// Notification - fire and forget
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-```
-
-### Protocol Version
-
-The client uses protocol version `2024-11-05` during initialization.
-
-## Tool Discovery and Invocation
-
-### Discovery
-
-```go
-// 1. Connect and initialize
-client, _ := mcp.NewClient(config)
-client.Initialize(ctx)
-
-// 2. List tools
-tools, _ := client.ListTools(ctx)
-
-// 3. Tools include JSON Schema for input validation
-for _, tool := range tools {
-    fmt.Printf("%s: %s\n", tool.Name, tool.Description)
-    fmt.Printf("  Schema: %v\n", tool.InputSchema)
-}
-```
-
-### Invocation
-
-```go
-// Call a tool with arguments
-result, err := client.CallTool(ctx, "read_file", map[string]interface{}{
-    "path": "/tmp/example.txt",
-})
-
-// Result contains content array
-for _, content := range result.Content {
-    switch content.Type {
-    case "text":
-        fmt.Println(content.Text)
-    case "image":
-        // content.Data is base64-encoded
-    }
-}
-```
-
-### ToolWithServer
-
-When using Manager, tools are paired with their server:
-
-```go
-type ToolWithServer struct {
-    Server string
-    Tool   Tool
-}
-
-// Find and call
-if server, found := manager.FindTool("read_file"); found {
-    result, _ := manager.CallTool(ctx, server, "read_file", args)
-}
-```
+Some tools are dangerous (arbitrary code execution, system access). Use deny lists to prevent the LLM from seeing or calling them.
 
 ## Error Handling
 
-### Error Types
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| Server won't start | Client creation fails | Check command path and permissions |
+| Initialize timeout | Connection fails | Server may be slow or stuck |
+| Tool not found | Call returns error | Check tool name spelling |
+| Tool execution error | IsError=true in result | Check tool arguments |
+| Server crashed | Subsequent calls fail | Reconnect or exit |
 
-| Error | Source | Meaning |
-|-------|--------|---------|
-| `RPCError` | Server | JSON-RPC error with code and message |
-| Process error | Client | Server process failed to start/crashed |
-| Context error | Client | Request cancelled or timed out |
-| "not initialized" | Client | Called method before Initialize() |
-| "server not connected" | Manager | Unknown server name |
+## Protocol Details
 
-### JSON-RPC Error Codes
+MCP uses JSON-RPC 2.0:
+- **Requests** have ID, method, params
+- **Responses** have ID and result/error
+- **Notifications** have no ID, no response expected
 
-| Code | Meaning |
-|------|---------|
-| -32700 | Parse error |
-| -32600 | Invalid request |
-| -32601 | Method not found |
-| -32602 | Invalid params |
-| -32603 | Internal error |
+Messages are newline-delimited JSON over stdio.
 
-### Tool-Level Errors
+### Key Methods
 
-Tools can indicate errors via `IsError` field:
+| Method | Purpose |
+|--------|---------|
+| `initialize` | Start protocol, negotiate capabilities |
+| `initialized` | Acknowledge initialization complete |
+| `tools/list` | Get available tools |
+| `tools/call` | Invoke a tool |
 
-```go
-result, err := client.CallTool(ctx, "read_file", args)
-if err != nil {
-    // RPC or transport error
-    return err
-}
-if result.IsError {
-    // Tool returned an error (e.g., file not found)
-    return fmt.Errorf("tool error: %s", result.Content[0].Text)
-}
-```
+## Integration Notes
 
-## Package Structure
+### With LLM Package
 
-```
-mcp/
-├── client.go      # Client, Tool, Request/Response types
-├── manager.go     # Manager for multiple servers
-└── mcp_test.go    # Unit tests
-```
-
-## Usage Patterns
-
-### Single Server
-
-```go
-// Configure server
-config := mcp.ServerConfig{
-    Command: "npx",
-    Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/home"},
-}
-
-// Connect
-client, err := mcp.NewClient(config)
-if err != nil {
-    return err
-}
-defer client.Close()
-
-// Initialize
-ctx := context.Background()
-if err := client.Initialize(ctx); err != nil {
-    return err
-}
-
-// Discover tools
-tools, _ := client.ListTools(ctx)
-for _, t := range tools {
-    log.Printf("Tool: %s - %s", t.Name, t.Description)
-}
-
-// Use a tool
-result, _ := client.CallTool(ctx, "list_directory", map[string]interface{}{
-    "path": "/home",
-})
-fmt.Println(result.Content[0].Text)
-```
-
-### Multiple Servers with Manager
-
-```go
-// Create manager
-manager := mcp.NewManager()
-defer manager.Close()
-
-ctx := context.Background()
-
-// Connect to multiple servers
-manager.Connect(ctx, "filesystem", mcp.ServerConfig{
-    Command: "npx",
-    Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
-})
-
-manager.Connect(ctx, "memory", mcp.ServerConfig{
-    Command: "npx",
-    Args:    []string{"-y", "@modelcontextprotocol/server-memory"},
-})
-
-// Optionally deny certain tools
-manager.SetDeniedTools("filesystem", []string{"write_file", "delete_file"})
-
-// Get all available tools (for LLM)
-allTools := manager.AllTools()
-for _, t := range allTools {
-    fmt.Printf("[%s] %s: %s\n", t.Server, t.Tool.Name, t.Tool.Description)
-}
-
-// Find and call a tool
-if server, found := manager.FindTool("store"); found {
-    result, _ := manager.CallTool(ctx, server, "store", map[string]interface{}{
-        "key":   "greeting",
-        "value": "Hello, MCP!",
-    })
-    fmt.Println(result.Content[0].Text)
-}
-```
-
-### With Custom Environment
-
-```go
-config := mcp.ServerConfig{
-    Command: "node",
-    Args:    []string{"my-mcp-server.js"},
-    Env: map[string]string{
-        "API_KEY":  os.Getenv("MY_API_KEY"),
-        "DEBUG":    "true",
-        "LOG_LEVEL": "info",
-    },
-}
-```
+The LLM receives tool definitions (from MCP tool list) and may request tool calls. The agent executes those calls via MCP and feeds results back to the LLM.
 
 ### With Telemetry
 
-The Manager automatically integrates with the telemetry package:
+Tool calls can be traced via the telemetry package. Each MCP call becomes a span with tool name, arguments, and result.
 
-```go
-// Spans are created for each tool call
-result, err := manager.CallTool(ctx, "filesystem", "read_file", args)
-// Creates span: mcp.filesystem.read_file
-```
+### With Shutdown
 
-## Thread Safety
+On agent shutdown, close all MCP clients. This terminates server processes cleanly.
 
-| Component | Safety |
-|-----------|--------|
-| Client.send | Mutex-protected writes to stdin |
-| Client.pending | Mutex-protected request tracking |
-| Manager.clients | RWMutex-protected map access |
-| Manager.deniedTools | RWMutex-protected map access |
+## Design Decisions
+
+### Why stdio?
+
+Simple, universal, no network configuration. The agent spawns the server — stdin/stdout is the natural communication channel.
+
+### Why separate servers?
+
+Isolation. A buggy tool server can't crash the agent. Tools can be developed independently and shared.
+
+### Why tool filtering?
+
+Safety. LLMs might try to use tools inappropriately. Filtering is the last line of defense before execution.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | Type definitions, Manager without servers |
-| Integration | Full client lifecycle with real MCP server |
-| Concurrency | Parallel tool calls, concurrent connections |
-
-Integration tests require actual MCP servers (skipped by default):
-
-```go
-func TestClientIntegration(t *testing.T) {
-    t.Skip("requires actual MCP server")
-    // ...
-}
-```
+| Unit | Message parsing, state transitions |
+| Protocol | Initialize sequence, tool listing |
+| Tool calls | Successful calls, error handling |
+| Multi-server | Manager aggregation, routing |
+| Failure | Server crashes, timeouts |
