@@ -1,466 +1,173 @@
 # Shutdown Coordination Design
 
-## Overview
+## What This Package Does
 
-The shutdown package provides graceful shutdown coordination for distributed agents. It ensures that in-progress tasks complete, pending work is re-queued, and the system remains consistent during termination. The package handles OS signals (SIGTERM, SIGINT) and provides ordered shutdown with phase-based dependency management.
+The `shutdown` package manages graceful shutdown for agents. When an agent receives a termination signal (Ctrl+C, SIGTERM), this package ensures in-progress work completes, resources are released, and the system exits cleanly.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Graceful termination | Complete in-flight work before exiting |
-| Phase ordering | Shut down components in dependency order |
-| Concurrent execution | Handlers in same phase run concurrently |
-| Signal handling | Automatic SIGTERM/SIGINT handling |
-| Timeout enforcement | Prevent indefinite shutdown hangs |
-| Progress visibility | Track and report shutdown progress |
+Abrupt termination causes problems:
 
-## Non-Goals
+- **Lost work** — Tasks in progress are abandoned mid-execution
+- **Corrupted state** — Files and databases may be left inconsistent
+- **Resource leaks** — Connections and locks aren't released
+- **Downstream failures** — Other agents waiting on responses never get them
 
-| Non-Goal | Reason |
-|----------|--------|
-| Restart coordination | Out of scope; handled by process supervisors |
-| Distributed shutdown | Single-process coordination only |
-| Work re-queueing logic | Handler responsibility, not coordinator |
-| Health check integration | Separate concern (use registry package) |
+Graceful shutdown solves these by giving components time to finish what they're doing before the process exits.
+
+## When to Use It
+
+**Use shutdown coordination for:**
+- Any long-running agent process
+- Agents that handle stateful tasks
+- Systems where work must complete or be safely re-queued
+- Production deployments (Kubernetes sends SIGTERM before killing pods)
+
+**You don't need this for:**
+- Short-lived scripts
+- Stateless request handlers (if a request dies, client retries)
+- Development/testing (though it's still good practice)
+
+## Core Concepts
+
+### Shutdown Handlers
+
+Components that need cleanup register a **shutdown handler**. When shutdown begins, the coordinator calls each handler, giving it time to finish gracefully.
+
+A handler might:
+- Stop accepting new requests
+- Finish in-progress tasks
+- Re-queue pending work for other agents
+- Close database connections
+- Flush logs
+
+### Phases
+
+Not all components can shut down simultaneously. A worker processing tasks needs the database connection to stay open. The database can't close until workers are done.
+
+**Phases** solve this ordering problem. Lower phase numbers shut down first:
+
+- **Phase 10** — Stop accepting work (HTTP servers, registries)
+- **Phase 20** — Drain in-flight work (task processors, message handlers)
+- **Phase 30** — Close backends (databases, message bus, caches)
+
+Handlers in the same phase run concurrently. The coordinator waits for all handlers in a phase to complete before starting the next phase.
+
+![Phase-based Shutdown Ordering](images/shutdown-phases.png)
+
+### Timeouts
+
+Shutdown can't wait forever. A **timeout** ensures the process eventually exits, even if a handler hangs. When the timeout expires, remaining handlers are cancelled and the process terminates.
+
+Typical timeouts: 30-60 seconds. Long enough for normal cleanup, short enough to not delay deployments.
 
 ## Architecture
 
 ![ShutdownCoordinator Architecture](images/shutdown-architecture.png)
 
-## Interface Design
+The coordinator:
+1. Receives shutdown signal (SIGTERM, SIGINT, or programmatic trigger)
+2. Groups handlers by phase
+3. Executes each phase sequentially
+4. Waits for all handlers in a phase before proceeding
+5. Enforces timeout across the entire shutdown
+6. Reports results (success, errors, timing)
 
-### ShutdownHandler
+## Signal Handling
 
-Components that need graceful shutdown implement this interface:
+The coordinator can automatically handle OS signals:
 
-```go
-// ShutdownHandler is implemented by components that need graceful shutdown.
-type ShutdownHandler interface {
-    // OnShutdown is called when shutdown is initiated.
-    // The context will be cancelled when the timeout is reached.
-    // Implementations should:
-    // - Stop accepting new work
-    // - Finish in-progress tasks (if time permits)
-    // - Re-queue pending work
-    // - Release resources
-    OnShutdown(ctx context.Context) error
-}
+- **SIGTERM** — Sent by process managers (Kubernetes, systemd) before killing
+- **SIGINT** — Sent when user presses Ctrl+C
 
-// ShutdownFunc is a convenience type for simple shutdown functions.
-type ShutdownFunc func(ctx context.Context) error
-```
-
-### ShutdownCoordinator
-
-The coordinator manages the shutdown lifecycle:
-
-```go
-// ShutdownCoordinator manages graceful shutdown for multiple components.
-type ShutdownCoordinator interface {
-    // Register adds a handler to be called during shutdown.
-    Register(name string, handler ShutdownHandler)
-
-    // RegisterWithPhase adds a handler with a specific phase.
-    // Lower phase numbers are shut down first.
-    RegisterWithPhase(name string, handler ShutdownHandler, phase int)
-
-    // Shutdown initiates graceful shutdown.
-    Shutdown(ctx context.Context) error
-
-    // ShutdownWithTimeout initiates shutdown with a timeout.
-    ShutdownWithTimeout(timeout time.Duration) error
-
-    // HandleSignals registers handlers for SIGTERM and SIGINT.
-    HandleSignals()
-
-    // Done returns a channel that is closed when shutdown is complete.
-    Done() <-chan struct{}
-
-    // Err returns any error that occurred during shutdown.
-    Err() error
-}
-```
-
-### Result Types
-
-```go
-// HandlerResult contains the result of a single handler's shutdown.
-type HandlerResult struct {
-    Name     string        // Handler name
-    Phase    int           // Phase number
-    Duration time.Duration // Time taken
-    Err      error         // Any error
-}
-
-// ShutdownResult contains the complete shutdown result.
-type ShutdownResult struct {
-    TotalDuration time.Duration
-    Results       []HandlerResult
-    Err           error
-}
-```
-
-## Phase-Based Ordering Design
-
-### Phase Concept
-
-Phases control shutdown order. Lower phase numbers execute first. This ensures dependencies are respected—components that depend on others shut down before their dependencies.
-
-![Phase-based Shutdown Ordering](images/shutdown-phases.png)
-
-### Execution Model
-
-| Behavior | Description |
-|----------|-------------|
-| Inter-phase | Phases execute sequentially (10 → 20 → 30) |
-| Intra-phase | Handlers within same phase execute concurrently |
-| Blocking | Each phase completes before next phase starts |
-| Error handling | Configurable: continue or stop on error |
-
-### Recommended Phase Assignments
-
-| Phase | Category | Examples |
-|-------|----------|----------|
-| 10 | Frontend | HTTP servers, API gateways, load balancers |
-| 20 | Application | Workers, task processors, message handlers |
-| 30 | Backend | Databases, caches, message buses |
-| 100 | Default | Handlers registered without explicit phase |
-
-### Phase Grouping Algorithm
-
-```go
-// Handlers sorted by phase, then grouped
-handlers := []registration{
-    {name: "http", phase: 10},
-    {name: "grpc", phase: 10},     // Same phase as http
-    {name: "workers", phase: 20},
-    {name: "db", phase: 30},
-}
-
-// Results in groups:
-// Group 1 (phase 10): [http, grpc]      ← execute concurrently
-// Group 2 (phase 20): [workers]         ← waits for Group 1
-// Group 3 (phase 30): [db]              ← waits for Group 2
-```
-
-## Signal Handling Integration
-
-### Supported Signals
-
-| Signal | Behavior |
-|--------|----------|
-| SIGTERM | Initiates graceful shutdown with default timeout |
-| SIGINT | Same as SIGTERM (Ctrl+C) |
-
-### Signal Flow
+When a signal arrives, the coordinator starts graceful shutdown with the configured timeout.
 
 ![Signal Handling Flow](images/shutdown-signal-flow.png)
 
-### Implementation
+## Error Handling
 
-```go
-func (c *Coordinator) HandleSignals() {
-    signal.Notify(c.signalChan, syscall.SIGTERM, syscall.SIGINT)
+### Handler Errors
 
-    go func() {
-        <-c.signalChan
-        c.ShutdownWithTimeout(c.config.DefaultTimeout)
-    }()
-}
-```
+If a handler fails, the coordinator can either:
+- **Continue** (default) — Execute remaining handlers, collect errors
+- **Stop** — Abort shutdown, skip remaining handlers
 
-### Usage Pattern
+Continuing is usually better — you want to clean up as much as possible even if one component has problems.
 
-```go
-coord := shutdown.NewCoordinator(shutdown.DefaultConfig())
-coord.HandleSignals() // Must call before signals expected
+### Timeout Exceeded
 
-// Register handlers...
+If shutdown takes longer than the timeout:
+- All pending handlers receive context cancellation
+- Handlers should check for cancellation and exit promptly
+- The coordinator returns a timeout error
 
-// Block until shutdown complete
-<-coord.Done()
-```
+Well-behaved handlers check context cancellation frequently and return quickly when cancelled.
 
-## Timeout and Error Handling
+## Common Patterns
 
-### Timeout Behavior
+### Stop-Drain-Close
 
-| Scenario | Behavior |
-|----------|----------|
-| Handler completes in time | Normal completion, no error |
-| Handler exceeds timeout | Context cancelled, ErrTimeout returned |
-| All handlers complete | Done() closed, Err() returns nil or aggregate error |
+The most common pattern:
 
-### Error Types
+1. **Stop** (phase 10) — Stop accepting new work
+2. **Drain** (phase 20) — Finish in-progress work
+3. **Close** (phase 30) — Release resources
 
-```go
-var (
-    ErrAlreadyShutdown = errors.New("shutdown already initiated")
-    ErrTimeout         = errors.New("shutdown timeout exceeded")
-    ErrHandlerFailed   = errors.New("one or more handlers failed")
-    ErrInvalidConfig   = errors.New("invalid configuration")
-)
-```
-
-### Error Handling Modes
-
-The `ContinueOnError` configuration controls behavior:
-
-| Mode | Behavior |
-|------|----------|
-| `ContinueOnError: true` (default) | All handlers execute; errors collected |
-| `ContinueOnError: false` | Stop on first error; skip remaining handlers |
-
-### Handler Error Contract
-
-Handlers should:
-1. Check context cancellation frequently
-2. Return `ctx.Err()` if context is cancelled
-3. Return other errors for handler-specific failures
-4. Never block indefinitely
-
-```go
-func (s *Service) OnShutdown(ctx context.Context) error {
-    for _, task := range s.pending {
-        select {
-        case <-ctx.Done():
-            return ctx.Err() // Timeout reached
-        default:
-            task.Finish()
-        }
-    }
-    return nil
-}
-```
-
-## Configuration
-
-```go
-type Config struct {
-    // DefaultTimeout for ShutdownWithTimeout (default: 30s)
-    DefaultTimeout time.Duration
-
-    // DefaultPhase for handlers without explicit phase (default: 100)
-    DefaultPhase int
-
-    // ContinueOnError: keep going if a handler fails (default: true)
-    ContinueOnError bool
-
-    // OnProgress: callback for each handler completion
-    OnProgress func(result HandlerResult)
-}
-
-func DefaultConfig() Config {
-    return Config{
-        DefaultTimeout:  30 * time.Second,
-        DefaultPhase:    100,
-        ContinueOnError: true,
-    }
-}
-```
-
-## Usage Patterns
-
-### Basic Signal Handling
-
-```go
-coord := shutdown.NewCoordinator(shutdown.DefaultConfig())
-coord.HandleSignals()
-
-coord.RegisterWithPhase("http-server", httpServer, 10)
-coord.RegisterWithPhase("workers", workerPool, 20)
-coord.RegisterWithPhase("database", db, 30)
-
-// Run application...
-
-<-coord.Done()
-if err := coord.Err(); err != nil {
-    log.Printf("Shutdown error: %v", err)
-}
-```
-
-### Function-Based Handlers
-
-```go
-coord.RegisterFunc("cleanup", func(ctx context.Context) error {
-    return os.RemoveAll(tempDir)
-})
-
-coord.RegisterFuncWithPhase("flush-logs", func(ctx context.Context) error {
-    return logger.Sync()
-}, 30)
-```
+This ensures no new work arrives while draining, and backends stay available until work is done.
 
 ### Progress Logging
 
-```go
-config := shutdown.DefaultConfig()
-config.OnProgress = func(r shutdown.HandlerResult) {
-    if r.Err != nil {
-        log.Printf("✗ %s failed: %v (took %v)", r.Name, r.Err, r.Duration)
-    } else {
-        log.Printf("✓ %s completed (took %v)", r.Name, r.Duration)
-    }
-}
+Configure a progress callback to log each handler's completion. This helps diagnose slow or stuck handlers in production.
 
-coord := shutdown.NewCoordinator(config)
-```
+### Re-queue Before Exit
 
-### Manual Shutdown with Timeout
+Task processors should re-queue unfinished work before completing shutdown. This ensures tasks aren't lost — another agent can pick them up.
 
-```go
-// Programmatic shutdown (e.g., from admin endpoint)
-if err := coord.ShutdownWithTimeout(60 * time.Second); err != nil {
-    log.Printf("Shutdown incomplete: %v", err)
-    // Force exit or log for investigation
-}
-```
+### Deregister Early
 
-### Checking Results
+Remove the agent from the registry early in shutdown (phase 10). This stops new work being assigned while the agent is shutting down.
 
-```go
-<-coord.Done()
+## Integration with Other Packages
 
-result := coord.Result()
-log.Printf("Shutdown took %v", result.TotalDuration)
+| Package | Shutdown Integration |
+|---------|---------------------|
+| Transport | Close connections, stop accepting requests (phase 10) |
+| Bus | Close after message handlers finish (phase 30) |
+| Registry | Deregister early to stop receiving work (phase 10) |
+| State | Close after everything using it (phase 30) |
+| Heartbeat | Stop sending before exit (any phase) |
 
-for _, hr := range result.Results {
-    log.Printf("  %s (phase %d): %v", hr.Name, hr.Phase, hr.Duration)
-}
+## Design Decisions
 
-if result.Failed() {
-    log.Printf("Failed handlers: %v", result.FailedHandlers())
-}
-```
+### Why phases instead of dependencies?
 
-## Integration with Other Agentkit Packages
+Explicit dependencies create complex graphs. Phases are simpler — just pick a number. Most systems only need 3-4 phases. If you need more granularity, use intermediate numbers (15, 25).
 
-### Transport Package
+### Why concurrent within phase?
 
-Transports implement graceful shutdown via their `Close()` method:
+Independent components can shut down simultaneously. Running them concurrently reduces total shutdown time. Only the ordering between phases matters.
 
-```go
-// In application startup
-coord.RegisterFuncWithPhase("transport", func(ctx context.Context) error {
-    return transport.Close()
-}, 10)
-```
+### Why continue on error by default?
 
-### Bus Package
-
-Message bus connections should close after handlers that use them:
-
-```go
-// Workers use the bus (phase 20)
-coord.RegisterWithPhase("workers", workerPool, 20)
-
-// Bus closes after workers (phase 30)
-coord.RegisterFuncWithPhase("bus", func(ctx context.Context) error {
-    return messageBus.Close()
-}, 30)
-```
-
-### Registry Package
-
-Deregister from registry early in shutdown:
-
-```go
-coord.RegisterFuncWithPhase("registry", func(ctx context.Context) error {
-    return registry.Deregister(ctx, agentID)
-}, 10) // Early phase - stop receiving work
-```
-
-### Typical Full Integration
-
-```go
-func main() {
-    coord := shutdown.NewCoordinator(shutdown.DefaultConfig())
-    coord.HandleSignals()
-
-    // Phase 10: Stop accepting work
-    coord.RegisterFuncWithPhase("http", httpServer.Shutdown, 10)
-    coord.RegisterFuncWithPhase("registry", registry.Deregister, 10)
-
-    // Phase 20: Drain in-flight work
-    coord.RegisterWithPhase("task-processor", taskProcessor, 20)
-    coord.RegisterWithPhase("message-handler", messageHandler, 20)
-
-    // Phase 30: Close backends
-    coord.RegisterFuncWithPhase("bus", messageBus.Close, 30)
-    coord.RegisterFuncWithPhase("database", db.Close, 30)
-    coord.RegisterFuncWithPhase("cache", cache.Close, 30)
-
-    // Run application
-    go httpServer.ListenAndServe()
-
-    <-coord.Done()
-    os.Exit(exitCode(coord.Err()))
-}
-```
-
-## Package Structure
-
-```
-shutdown/
-├── shutdown.go       # Interface definitions + errors + Config
-├── coordinator.go    # Coordinator implementation
-├── coordinator_test.go
-└── doc.go            # Package documentation
-```
-
-## Thread Safety
-
-| Operation | Safety |
-|-----------|--------|
-| Register/RegisterWithPhase | Safe during setup, not during shutdown |
-| Shutdown | Safe to call from any goroutine |
-| HandleSignals | Call once at startup |
-| Done/Err/Result | Safe to call anytime |
-
-## Testing Considerations
-
-| Scenario | Approach |
-|----------|----------|
-| Unit tests | Use `Reset()` between tests |
-| Manual trigger | Use `Trigger()` to simulate signal |
-| Timeout testing | Use short timeouts, slow handlers |
-| Error handling | Inject failing handlers |
-
-```go
-func TestShutdownOrder(t *testing.T) {
-    coord := shutdown.NewCoordinator(shutdown.DefaultConfig())
-
-    var order []string
-    var mu sync.Mutex
-
-    record := func(name string) shutdown.ShutdownFunc {
-        return func(ctx context.Context) error {
-            mu.Lock()
-            order = append(order, name)
-            mu.Unlock()
-            return nil
-        }
-    }
-
-    coord.RegisterFuncWithPhase("third", record("third"), 30)
-    coord.RegisterFuncWithPhase("first", record("first"), 10)
-    coord.RegisterFuncWithPhase("second", record("second"), 20)
-
-    coord.ShutdownWithTimeout(time.Second)
-    <-coord.Done()
-
-    assert.Equal(t, []string{"first", "second", "third"}, order)
-}
-```
+Partial cleanup is better than no cleanup. If the HTTP server fails to close, you still want to flush logs and close the database.
 
 ## Best Practices
 
 | Practice | Rationale |
 |----------|-----------|
-| Always set a timeout | Prevent indefinite hangs (30-60s typical) |
-| Respect context cancellation | Allow graceful timeout handling |
+| Always set a timeout | Prevent indefinite hangs |
+| Check context cancellation | Allow graceful timeout handling |
 | Re-queue unfinished work | Prevent work loss |
-| Use explicit phases | Make dependencies clear |
-| Log shutdown progress | Aid debugging in production |
-| Register early, before signals | Ensure all handlers are captured |
+| Use explicit phases | Make dependencies obvious |
+| Log shutdown progress | Aid production debugging |
+| Test shutdown paths | They're often neglected |
+
+## Testing Strategy
+
+| Level | Focus |
+|-------|-------|
+| Unit | Phase ordering, timeout enforcement |
+| Integration | Full shutdown with real components |
+| Timeout | Handlers that exceed timeout |
+| Error | Handlers that fail, error modes |
+| Signal | SIGTERM/SIGINT handling |
