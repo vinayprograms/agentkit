@@ -1,232 +1,130 @@
 # Message Bus Design
 
-## Overview
+## What This Package Does
 
-The bus package provides a pub/sub and request/reply messaging abstraction for agent-to-agent communication. It supports multiple backends (NATS, in-memory) while maintaining a consistent channel-based API.
+The `bus` package lets agents send messages to each other. It's the communication backbone of a swarm — agents publish messages, subscribe to topics, and make requests that expect responses.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Backend agnostic | Single interface works with NATS, memory, or future backends |
-| Go idiomatic | Channel-based API for concurrent use |
-| Load balancing | Queue groups distribute work across agent instances |
-| Request/reply | Built-in support for RPC-style interactions |
-| Testing friendly | In-memory implementation for unit tests |
+Agents in a swarm need to communicate:
 
-## Non-Goals
+- **Broadcasting events** — "I finished task X" or "Config changed"
+- **Distributing work** — Send tasks to a pool of workers
+- **Requesting information** — "What's the status of task Y?"
 
-| Non-Goal | Reason |
-|----------|--------|
-| Message persistence | Use state package or NATS JetStream directly |
-| Exactly-once delivery | At-most-once is sufficient for heartbeats/events |
-| Complex routing | Keep it simple; use multiple subjects instead |
-| Message ordering guarantees | Out of scope for this abstraction |
+Without a message bus, agents would need direct connections to each other, creating a tangled web that doesn't scale. The bus provides a central communication layer where agents publish to topics and subscribe to what they care about.
 
-## Interface Design
+## When to Use It
 
-```go
-// MessageBus provides pub/sub and request/reply messaging.
-type MessageBus interface {
-    // Publish sends a message to all subscribers of a subject.
-    Publish(subject string, data []byte) error
+**Use the bus for:**
+- Event notifications between agents
+- Work distribution across worker pools
+- Request/reply interactions (RPC-style)
+- Heartbeats and status broadcasts
 
-    // Subscribe creates a subscription to a subject.
-    // All subscribers receive all messages.
-    Subscribe(subject string) (Subscription, error)
+**Don't use the bus for:**
+- Storing data (use `state` package)
+- Large file transfers (too much overhead)
+- Guaranteed delivery (messages can be dropped if buffers fill)
 
-    // QueueSubscribe creates a queue subscription.
-    // Messages are load-balanced across queue members.
-    QueueSubscribe(subject, queue string) (Subscription, error)
+## Core Concepts
 
-    // Request sends a request and waits for a single reply.
-    Request(subject string, data []byte, timeout time.Duration) (*Message, error)
+### Subjects
 
-    // Close shuts down the bus connection.
-    Close() error
-}
-
-// Subscription represents an active subscription.
-type Subscription interface {
-    // Messages returns channel for incoming messages.
-    Messages() <-chan *Message
-
-    // Unsubscribe cancels the subscription.
-    Unsubscribe() error
-}
-
-// Message represents a message from the bus.
-type Message struct {
-    Subject string
-    Data    []byte
-    Reply   string // For request/reply pattern
-}
-```
-
-## Messaging Patterns
+Messages are sent to **subjects** — string identifiers like `events.task.completed` or `heartbeat.agent-a`. Agents subscribe to subjects they care about. Dots are conventional separators but have no special meaning.
 
 ### Publish/Subscribe (Fan-out)
 
-All subscribers receive every message. Used for broadcasts and events.
+When you publish to a subject, **all subscribers receive the message**. This is broadcast semantics — useful for events where everyone needs to know.
 
 ![Publish/Subscribe pattern - all subscribers receive every message](images/bus-pubsub.png)
 
-### Queue Groups (Load Balance)
+### Queue Groups (Load Balancing)
 
-Messages distributed round-robin within a queue group. Used for work distribution.
+Sometimes you want only **one subscriber** to handle each message (work distribution). Queue groups solve this — multiple subscribers join a named group, and messages are distributed round-robin among them.
 
 ![Queue Groups pattern - messages load-balanced across workers](images/bus-queue.png)
 
+This enables horizontal scaling: add more workers to the queue group, and work automatically distributes across them.
+
 ### Request/Reply (RPC)
 
-Synchronous request with single response. Uses ephemeral reply subjects.
+For synchronous interactions, the bus supports request/reply. You send a request and wait for a single response. Under the hood, this uses a temporary reply subject.
 
 ![Request/Reply pattern - synchronous RPC with reply](images/bus-reqreply.png)
 
-## Implementations
+This is useful when an agent needs information from another agent and can't proceed without it.
 
-### MemoryBus
+## Architecture
 
-In-memory implementation for testing and single-process scenarios.
+The `MessageBus` interface has two implementations:
 
-| Feature | Implementation |
-|---------|----------------|
-| Storage | Go maps protected by RWMutex |
-| Queue groups | Round-robin delivery to first available |
-| Request/reply | Internal reply subject registry |
-| Cleanup | Subscriptions tracked and closed on Close() |
+**MemoryBus** — In-memory implementation for testing and single-process scenarios. All subscriptions and routing happen in Go maps protected by mutexes. No network involved.
 
-**Use cases:** Unit tests, embedded agents, prototyping
+**NATSBus** — Production implementation using NATS messaging server. Provides clustering, persistence options, and battle-tested reliability. This is what you'd use in a real deployment.
 
-### NATSBus
+Both implement the same interface, so code works unchanged whether you're testing locally or running in production.
 
-Production implementation using NATS messaging.
+## Message Flow
 
-| Feature | Implementation |
-|---------|----------------|
-| Connection | Wraps nats.Conn with reconnection |
-| Queue groups | Native NATS queue subscribe |
-| Request/reply | Native NATS request/reply |
-| Auth | Token, user/password supported |
+1. **Publisher** calls `Publish(subject, data)`
+2. **Bus** routes message to all matching subscribers
+3. **Subscribers** receive message on their channel
+4. For queue groups, only one member receives each message
 
-**Configuration:**
-- `URL` - NATS server URL
-- `ReconnectWait` - Time between reconnection attempts
-- `MaxReconnects` - Retry limit (-1 = unlimited)
-- `ConnectTimeout` - Initial connection timeout
+Messages are fire-and-forget from the publisher's perspective. The bus handles routing, but doesn't guarantee delivery if subscribers are slow or offline.
 
-## Package Structure
-
-```
-bus/
-├── bus.go         # Interface + Message type + errors
-├── memory.go      # MemoryBus implementation
-├── memory_test.go
-├── nats.go        # NATSBus implementation
-├── nats_test.go
-└── doc.go         # Package documentation
-```
-
-## Queue Groups for Load Balancing
-
-Queue groups enable horizontal scaling of message handlers:
-
-```go
-// Multiple workers share a queue - each message goes to exactly one
-sub1, _ := bus.QueueSubscribe("tasks.process", "workers")
-sub2, _ := bus.QueueSubscribe("tasks.process", "workers")
-sub3, _ := bus.QueueSubscribe("tasks.process", "workers")
-
-// Publishing 100 messages distributes ~33 to each worker
-for i := 0; i < 100; i++ {
-    bus.Publish("tasks.process", taskData)
-}
-```
-
-**Selection algorithm:**
-- MemoryBus: Round-robin to first subscriber with buffer space
-- NATSBus: NATS server handles distribution (random with affinity)
-
-## Usage Patterns
+## Common Patterns
 
 ### Event Broadcasting
 
-```go
-// Publisher
-bus.Publish("events.agent.started", eventData)
+One agent publishes events; many agents subscribe to react. Example: an agent completes a task and broadcasts the result. Other agents (UI, logging, dependent tasks) all receive the notification.
 
-// Subscribers (all receive)
-sub, _ := bus.Subscribe("events.agent.started")
-for msg := range sub.Messages() {
-    handleEvent(msg)
-}
-```
+### Work Queue
 
-### Work Distribution
+A coordinator publishes tasks to a subject. Multiple workers subscribe via a queue group. Each task goes to exactly one worker. As workers finish, they're automatically given more work.
 
-```go
-// Workers (queue group)
-sub, _ := bus.QueueSubscribe("tasks.analyze", "analyzer-pool")
-for msg := range sub.Messages() {
-    result := analyze(msg.Data)
-    if msg.Reply != "" {
-        bus.Publish(msg.Reply, result)
-    }
-}
+### Service Discovery
 
-// Dispatcher
-bus.Publish("tasks.analyze", taskData)
-```
+Agents periodically publish heartbeats to a known subject. A monitor subscribes and tracks which agents are alive. If heartbeats stop, the monitor knows the agent died.
 
-### Synchronous RPC
+### Scatter/Gather
 
-```go
-// Service
-sub, _ := bus.Subscribe("rpc.calculate")
-for msg := range sub.Messages() {
-    result := calculate(msg.Data)
-    bus.Publish(msg.Reply, result)
-}
+Publisher sends a request to multiple agents (via pub/sub). Each responds to the reply subject. Publisher collects responses until timeout. Useful for "ask everyone and aggregate results."
 
-// Client
-reply, err := bus.Request("rpc.calculate", requestData, 5*time.Second)
-if err == ErrTimeout {
-    // Handle timeout
-}
-```
+## Error Scenarios
 
-## Error Handling
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| No subscribers | Message is dropped | Expected for some subjects |
+| Subscriber buffer full | Message dropped for that subscriber | Increase buffer or process faster |
+| Request timeout | No response received in time | Retry or fail gracefully |
+| Bus closed | All operations fail | Reconnect or shut down |
+| NATS disconnected | NATSBus auto-reconnects | Configure reconnect settings |
 
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| `ErrClosed` | Bus has been closed | Reconnect or exit |
-| `ErrTimeout` | Request timed out | Retry or fail |
-| `ErrNoResponders` | No subscribers for request | Check service availability |
-| `ErrInvalidSubject` | Empty or invalid subject | Fix subject string |
+## Delivery Guarantees
 
-## Implementation Notes
+The bus provides **at-most-once delivery**:
+- Messages might not arrive (network issues, full buffers)
+- Messages never arrive twice
+- No ordering guarantees across subjects
 
-### Buffer Sizing
-- Default channel buffer: 256 messages
-- Full buffers drop messages (non-blocking publish)
-- Configurable via `Config.BufferSize`
+If you need guaranteed delivery, use the `state` package for persistence or implement acknowledgment on top of the bus.
 
-### Thread Safety
-- All operations are goroutine-safe
-- Subscription channels can be read by multiple goroutines
-- Close() waits for cleanup before returning
+## Choosing Between Patterns
 
-### Graceful Shutdown
-1. `Close()` marks bus as closed
-2. Active subscriptions are cancelled
-3. Subscription channels are closed
-4. Pending messages are dropped
+| Need | Pattern | Why |
+|------|---------|-----|
+| Everyone should know | Pub/Sub | Fan-out to all subscribers |
+| One handler per message | Queue Group | Load balancing |
+| Need a response | Request/Reply | Synchronous RPC |
+| Broadcast + one handler | Both | Pub/sub for events, queue for work |
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
 | Unit | Message routing, queue group distribution |
-| Integration | End-to-end pub/sub flows |
+| Integration | Multi-agent communication flows |
 | Concurrency | Race conditions, deadlocks |
-| Failure | Connection drops, timeouts |
+| Failure | Connection drops, timeouts, buffer overflow |
