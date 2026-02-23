@@ -1,420 +1,181 @@
 # Memory Package Design
 
-## Overview
+## What This Package Does
 
-The memory package provides persistent semantic memory storage with BM25 full-text search for AI agents. It enables agents to remember observations (findings, insights, lessons) across sessions and retrieve them based on relevance to current context.
+The `memory` package gives agents persistent memory that survives restarts. Agents can store observations (things they learned) and recall them later based on relevance to the current task.
 
-## Goals
+## Why It Exists
 
-| Goal | Description |
-|------|-------------|
-| Semantic recall | Retrieve relevant memories based on meaning, not just keywords |
-| Knowledge persistence | Survive process restarts and session boundaries |
-| Categorized storage | Organize knowledge as Findings, Insights, and Lessons (FIL) |
-| Observation extraction | Automatically extract knowledge from agent step outputs |
-| Backend agnostic | Single interface for testing (in-memory) and production (Bleve) |
-| Scratchpad support | Simple key-value storage for transient working memory |
+LLMs have limited context windows. An agent can't keep everything it's ever learned in the prompt. But agents need to remember:
 
-## Non-Goals
+- **Findings** — Facts discovered ("API rate limit is 100/min")
+- **Insights** — Conclusions reached ("REST works better here than GraphQL")
+- **Lessons** — Knowledge for future ("Avoid library X, it lacks TypeScript support")
 
-| Non-Goal | Reason |
-|----------|--------|
-| Vector embeddings | BM25 provides sufficient relevance; avoids embedding costs |
-| Complex relationships | Not a knowledge graph; flat observation storage |
-| Multi-agent sharing | Single-agent memory store; use state package for sharing |
-| Versioning | No history tracking; observations are append-only |
+This package provides:
+1. Storage for observations (persists to disk)
+2. Relevance-based recall (find memories related to current task)
+3. Categorization (distinguish findings from insights from lessons)
 
-## Core Types
+The agent stores knowledge as it works. Later, when facing a similar task, it retrieves relevant memories to inform its approach.
 
-### Memory
+## When to Use It
 
-```go
-// Memory represents a stored memory with metadata.
-type Memory struct {
-    ID        string    `json:"id"`
-    Content   string    `json:"content"`
-    Category  string    `json:"category"` // "finding" | "insight" | "lesson"
-    Source    string    `json:"source"`   // "GOAL:step-name", "session:xyz", etc.
-    CreatedAt time.Time `json:"created_at"`
-}
-```
+**Use memory for:**
+- Agents that run multiple sessions and should learn over time
+- Long-running agents that need to offload knowledge from context
+- Agents that should remember past mistakes and successes
 
-### Observation (FIL Model)
+**Don't use memory for:**
+- Short-lived scripts (no persistence needed)
+- Shared knowledge across agents (use `state` package)
+- Structured data storage (use a proper database)
 
-```go
-// Observation represents extracted observations from a step.
-type Observation struct {
-    // Findings: Factual discoveries (e.g., "API rate limit is 100/min")
-    Findings []string `json:"findings,omitempty"`
+## Core Concepts
 
-    // Insights: Conclusions or inferences (e.g., "REST is better than GraphQL")
-    Insights []string `json:"insights,omitempty"`
+### Observations (FIL Model)
 
-    // Lessons: Learnings for future (e.g., "Avoid library X - lacks TypeScript")
-    Lessons []string `json:"lessons,omitempty"`
+The package organizes knowledge into three categories:
 
-    StepName string `json:"step_name,omitempty"` // Source step identifier
-    StepType string `json:"step_type,omitempty"` // GOAL, AGENT, RUN
-}
-```
+**Findings** — Factual discoveries. Things the agent observed to be true.
+- "The user prefers Python over JavaScript"
+- "This API requires authentication"
 
-### Store Interface
+**Insights** — Conclusions or inferences. Things the agent figured out.
+- "Batch processing is faster than one-by-one"
+- "The error is caused by a race condition"
 
-```go
-type Store interface {
-    // Observation storage (primary API)
-    RememberObservation(ctx context.Context, content, category, source string) (string, error)
-    RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error)
-    RetrieveByID(ctx context.Context, id string) (*ObservationItem, error)
-    RecallByCategory(ctx context.Context, query, category string, limit int) ([]string, error)
-    RecallFIL(ctx context.Context, query string, limitPerCategory int) (*FILResult, error)
+**Lessons** — Learnings for the future. Things to remember next time.
+- "Always check file permissions before writing"
+- "This library has a memory leak, use alternative"
 
-    // Generic recall (returns all categories mixed)
-    Recall(ctx context.Context, query string, opts RecallOpts) ([]MemoryResult, error)
+This FIL model helps agents recall the right type of knowledge for the situation.
 
-    // Key-value operations (scratchpad)
-    Get(key string) (string, error)
-    Set(key, value string) error
-    List(prefix string) ([]string, error)
-    Search(query string) ([]SearchResult, error)
+### BM25 Search
 
-    // Session consolidation
-    ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error
+Recall uses BM25 text search (via Bleve). You ask "what do I know about database connections?" and get ranked results based on text relevance.
 
-    // Lifecycle
-    Close() error
-}
-```
+Why BM25 instead of vector embeddings?
+- No embedding model required (simpler, cheaper)
+- Fast and well-understood algorithm
+- Good enough for most agent memory use cases
 
-### FILResult
+### Scratchpad
 
-```go
-// FILResult holds categorized observation results.
-type FILResult struct {
-    Findings []string `json:"findings"`
-    Insights []string `json:"insights"`
-    Lessons  []string `json:"lessons"`
-}
-```
+Besides long-term observations, the package provides a simple key-value scratchpad for working memory. Store temporary values during a task, retrieve them later.
 
 ## Architecture
 
 ![Memory Package Architecture](images/memory-architecture.png)
 
-## BM25 Text Search (Bleve Integration)
+### Implementations
 
-The memory package uses [Bleve](https://blevesearch.com) for BM25 full-text search, providing relevance-ranked retrieval without requiring vector embeddings.
+**BleveStore** — Production implementation using Bleve search engine. Observations are indexed for full-text search. Data persists to disk.
 
-### Index Configuration
+**InMemoryStore** — Testing implementation. Same interface but data lives only in memory. No persistence.
 
-```go
-// Document mapping for observations
-obsMapping := bleve.NewDocumentMapping()
+### Storage Layout
 
-// Text field: analyzed for full-text search (tokenized, stemmed)
-textFieldMapping := bleve.NewTextFieldMapping()
-textFieldMapping.Analyzer = standard.Name
-obsMapping.AddFieldMappingsAt("content", textFieldMapping)
+The store manages two types of data:
+- **Observations** — Full-text indexed in Bleve
+- **Key-value pairs** — JSON file for scratchpad
 
-// Keyword field: exact match only (category filtering)
-keywordFieldMapping := bleve.NewKeywordFieldMapping()
-obsMapping.AddFieldMappingsAt("category", keywordFieldMapping)
-obsMapping.AddFieldMappingsAt("source", keywordFieldMapping)
+## Common Patterns
 
-// Date field: for time-based filtering
-dateFieldMapping := bleve.NewDateTimeFieldMapping()
-obsMapping.AddFieldMappingsAt("created_at", dateFieldMapping)
-```
+### Remember After Processing
 
-### Query Construction
+As the agent completes tasks, extract observations and store them:
+1. Agent finishes a task step
+2. Observation extraction identifies findings/insights/lessons
+3. Store observations with source metadata
+4. Observations are now searchable
 
-Category-filtered search combines content matching with category filtering:
+### Recall Before Acting
 
-```go
-// BM25 content match
-contentQuery := bleve.NewMatchQuery(queryText)
-
-// Category filter (exact match)
-categoryQuery := bleve.NewTermQuery(category)
-categoryQuery.SetField("category")
-
-// Combined query
-boolQuery := bleve.NewBooleanQuery()
-boolQuery.AddMust(contentQuery)
-boolQuery.AddMust(categoryQuery)
-```
-
-### Score Normalization
-
-BM25 scores can exceed 1.0, so results are normalized:
-
-```go
-score := float32(hit.Score)
-if score > 1 {
-    score = 1 - (1 / (1 + score)) // Maps high scores to 0.5-1.0 range
-}
-```
-
-## Observation Extraction and Categorization
-
-### The FIL Model
-
-Observations are categorized into three types:
-
-| Category | Purpose | Examples |
-|----------|---------|----------|
-| **Findings** | Factual discoveries | "API rate limit is 100/min", "Auth uses OAuth2" |
-| **Insights** | Conclusions/decisions | "REST is simpler than GraphQL for this use case" |
-| **Lessons** | Future guidance | "Avoid library X - it lacks TypeScript support" |
-
-### LLM-Based Extraction
-
-The `ObservationExtractor` uses an LLM to extract structured observations from step outputs:
-
-```go
-extractor := NewObservationExtractor(llmProvider)
-
-obs, err := extractor.Extract(ctx, "deploy-api", "GOAL", stepOutput)
-// Returns: *Observation with populated Findings, Insights, Lessons
-```
-
-**Extraction behavior:**
-- Skips outputs shorter than 50 characters
-- Truncates outputs longer than 4000 characters
-- Returns nil (not error) if extraction fails
-- Handles JSON wrapped in markdown code blocks
-
-### Extraction Prompt
-
-The system prompt instructs the LLM to:
-1. Identify factual discoveries as Findings
-2. Extract conclusions and decisions as Insights  
-3. Capture learnings for future as Lessons
-4. Return only a JSON object with these arrays
-
-## Storage Backends
-
-### BleveStore (Production)
-
-Persistent storage using Bleve index and JSON key-value file.
-
-| Component | Storage | Purpose |
-|-----------|---------|---------|
-| `observations.bleve/` | Directory | Bleve index for BM25 search |
-| `kv.json` | File | Key-value scratchpad |
-
-**Configuration:**
-
-```go
-store, err := NewBleveStore(BleveStoreConfig{
-    BasePath: "/path/to/storage",
-})
-```
-
-**Features:**
-- Thread-safe (RWMutex protected)
-- Automatic index creation on first run
-- Parallel category queries with WaitGroup
-- Persistence across process restarts
-
-### InMemoryStore (Testing)
-
-Non-persistent implementation for unit tests.
-
-| Feature | Implementation |
-|---------|----------------|
-| Observations | `map[string]*Memory` |
-| KV store | `map[string]string` |
-| Search | Simple substring matching with term counting |
-| Persistence | None (data lost on Close) |
-
-```go
-store := NewInMemoryStore()
-// Use in tests, data lost when test ends
-```
-
-## Adapters
-
-### ToolsAdapter
-
-Bridges `memory.Store` to the tools package interface:
-
-```go
-adapter := NewToolsAdapter(store)
-
-// Tools package can now use memory features
-ids, _ := adapter.RememberFIL(ctx, findings, insights, lessons, source)
-results, _ := adapter.Recall(ctx, "query", 10)
-```
-
-### BleveObservationStore
-
-Adapter for the executor package's observation storage interface:
-
-```go
-obsStore := NewBleveObservationStore(bleveStore)
-
-// Store extracted observations
-obsStore.StoreObservation(ctx, observation)
-
-// Query relevant observations
-results, _ := obsStore.QueryRelevantObservations(ctx, "query", 5)
-```
-
-## Package Structure
-
-```
-memory/
-├── memory.go          # Store interface, core types, RecallOpts
-├── observation.go     # Observation type, LLM extractor, BleveObservationStore
-├── bleve_store.go     # BleveStore implementation (production)
-├── bleve_store_test.go
-├── inmemory.go        # InMemoryStore implementation (testing)
-├── memory_test.go
-└── adapter.go         # ToolsAdapter for tools package integration
-```
-
-## Usage Patterns
-
-### Basic Observation Storage
-
-```go
-store, _ := NewBleveStore(BleveStoreConfig{BasePath: "./memory"})
-defer store.Close()
-
-ctx := context.Background()
-
-// Store individual observations
-id, _ := store.RememberObservation(ctx,
-    "PostgreSQL version is 15.2",
-    "finding",
-    "GOAL:check-database",
-)
-
-// Store batch as FIL
-ids, _ := store.RememberFIL(ctx,
-    []string{"API uses OAuth2", "Rate limit is 100/min"},  // Findings
-    []string{"REST is better for this use case"},          // Insights
-    []string{"Always check rate limits first"},            // Lessons
-    "GOAL:api-analysis",
-)
-```
-
-### Semantic Recall
-
-```go
-// Recall all categories, ranked by relevance
-results, _ := store.Recall(ctx, "database configuration", RecallOpts{
-    Limit:    10,
-    MinScore: 0.1,
-})
-
-for _, r := range results {
-    fmt.Printf("[%s] %.2f: %s\n", r.Category, r.Score, r.Content)
-}
-
-// Recall specific category
-findings, _ := store.RecallByCategory(ctx, "database", "finding", 5)
-
-// Recall all categories as FIL structure
-fil, _ := store.RecallFIL(ctx, "API integration", 5)
-fmt.Printf("Findings: %v\n", fil.Findings)
-fmt.Printf("Insights: %v\n", fil.Insights)
-fmt.Printf("Lessons: %v\n", fil.Lessons)
-```
-
-### LLM Observation Extraction
-
-```go
-// Create extractor with LLM provider
-extractor := NewObservationExtractor(llmProvider)
-
-// Extract from step output
-obs, err := extractor.Extract(ctx, "deploy-api", "GOAL", stepOutput)
-if err != nil || obs == nil {
-    return // Extraction failed or nothing to extract
-}
-
-// Store extracted observations
-obsStore := NewBleveObservationStore(bleveStore)
-obsStore.StoreObservation(ctx, obs)
-```
+Before starting work, check what the agent knows:
+1. Identify key concepts in the current task
+2. Query memory for relevant observations
+3. Include relevant memories in the prompt
+4. Agent benefits from past experience
 
 ### Session Consolidation
 
-```go
-// Extract insights from conversation transcript
-transcript := []Message{
-    {Role: "user", Content: "How should we handle auth?"},
-    {Role: "assistant", Content: "We decided to use OAuth2 because..."},
-}
+At session end, consolidate important learnings:
+1. Review transcript of what happened
+2. Extract significant observations
+3. Store for future sessions
+4. Agent learns from each session
 
-store.ConsolidateSession(ctx, "session-123", transcript)
-// Extracts messages containing decision language and stores as insights
-```
+### Scratchpad for Working Memory
 
-### Key-Value Scratchpad
+During a complex task:
+1. Store intermediate results in scratchpad
+2. Retrieve as needed within the task
+3. Clear when task completes
+4. Keeps context window focused
 
-```go
-// Store working data
-store.Set("current_task", "implement-api")
-store.Set("api.endpoint", "https://api.example.com")
+## Observation Extraction
 
-// Retrieve
-endpoint, _ := store.Get("api.endpoint")
+The package can automatically extract observations from agent outputs. Given text from a step's completion, it identifies:
+- What facts were discovered
+- What conclusions were drawn
+- What should be remembered
 
-// List by prefix
-keys, _ := store.List("api.")  // Returns: ["api.endpoint"]
+This is typically done via an LLM call — ask a small model to extract FIL from the text.
 
-// Search across keys and values
-results, _ := store.Search("example.com")
-```
+## Error Scenarios
 
-## Session Consolidation Heuristics
+| Situation | What Happens | What to Do |
+|-----------|--------------|------------|
+| No relevant memories | Recall returns empty | Normal, agent proceeds without past knowledge |
+| Store unavailable | Operations fail | Check disk permissions, disk space |
+| Corrupted index | Search may fail | Rebuild index from observations |
+| Query too broad | Many irrelevant results | Use more specific queries |
 
-The `ConsolidateSession` method extracts insights using keyword detection:
+## Design Decisions
 
-| Trigger Words | Indication |
-|---------------|------------|
-| "decided", "conclusion" | Decision made |
-| "important", "remember" | Key information |
-| "note that", "key insight" | Explicit insight |
-| "learned that" | Lesson learned |
-| "will use", "should use", "agreed" | Choice made |
+### Why FIL categories?
 
-Additionally, the last assistant message over 100 characters is stored as a summary.
+Different situations need different knowledge:
+- Debugging? Recall lessons about past bugs
+- Planning? Recall insights about approaches
+- Researching? Recall findings about facts
 
-## Error Handling
+Categories enable targeted recall.
 
-| Error | Meaning | Recovery |
-|-------|---------|----------|
-| Index open failure | Corrupted Bleve index | Delete and recreate |
-| Key not found | KV key doesn't exist | Expected for queries |
-| Search failure | Query parsing error | Simplify query |
-| Close failure | Index write error | Check disk space |
+### Why not vector embeddings?
 
-**Design principle:** Extraction and consolidation failures are non-fatal. The package returns `nil` rather than errors for graceful degradation.
+Simplicity and cost:
+- No embedding model to run or pay for
+- BM25 is fast and works offline
+- For agent memory, text search is usually sufficient
+
+Vector search could be added as an alternative backend if needed.
+
+### Why separate from state?
+
+Memory is single-agent, long-term, semantic. State is multi-agent, transient, key-value. Different use cases, different designs.
+
+## Integration Notes
+
+### With LLM Package
+
+Observation extraction uses an LLM. Configure a small, fast model for extraction to minimize cost.
+
+### With Telemetry
+
+Memory operations can be traced — store and recall become spans with query details.
+
+### With Shutdown
+
+Call `Close()` to flush any pending writes and release resources.
 
 ## Testing Strategy
 
 | Level | Focus |
 |-------|-------|
-| Unit | CRUD operations, recall relevance |
-| Integration | Persistence across Close/Open |
-| Concurrency | Thread safety of stores |
-| Extraction | JSON parsing, markdown handling |
-
-## Performance Considerations
-
-| Operation | Complexity | Notes |
-|-----------|------------|-------|
-| RememberObservation | O(log n) | Bleve index insert |
-| RecallByCategory | O(log n) | BM25 search |
-| RecallFIL | O(log n) | Three parallel queries |
-| KV Get/Set | O(1) | In-memory map |
-| KV Search | O(n) | Linear scan |
-
-**Optimization notes:**
-- RecallFIL uses goroutines for parallel category queries
-- BM25 provides good relevance without embedding overhead
-- Semantic graph expansion was removed (hurt recall quality by diluting queries)
+| Unit | Store/recall operations, FIL categorization |
+| Search | BM25 relevance, query handling |
+| Persistence | Data survives restart |
+| Extraction | Observation extraction from text |
+| Integration | Full memory workflow |
