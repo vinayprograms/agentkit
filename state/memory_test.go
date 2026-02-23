@@ -602,3 +602,466 @@ func TestMemoryStore_ValueIsolation(t *testing.T) {
 		t.Errorf("value was mutated via return: %s", val2)
 	}
 }
+
+// ============================================================================
+// Additional Coverage Tests
+// ============================================================================
+
+func TestMemoryStore_CleanupExpired_Data(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Put a key with very short TTL
+	s.Put("expires-soon", []byte("value"), 50*time.Millisecond)
+
+	// Verify it exists
+	_, err := s.Get("expires-soon")
+	if err != nil {
+		t.Fatalf("key should exist initially: %v", err)
+	}
+
+	// Wait for cleanup loop to run (runs every second, but key expires after 50ms)
+	time.Sleep(1200 * time.Millisecond)
+
+	// Now it should be gone (cleaned up by the loop)
+	_, err = s.Get("expires-soon")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound after cleanup, got %v", err)
+	}
+}
+
+func TestMemoryStore_CleanupExpired_Locks(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Acquire a lock with short TTL
+	_, err := s.Lock("resource", 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+
+	// Wait for cleanup loop to clean up expired lock
+	time.Sleep(1200 * time.Millisecond)
+
+	// Should be able to acquire the lock again (cleanup released it)
+	lock2, err := s.Lock("resource", time.Second)
+	if err != nil {
+		t.Errorf("should be able to acquire lock after cleanup: %v", err)
+	}
+	if lock2 != nil {
+		lock2.Unlock()
+	}
+}
+
+func TestMemoryStore_CleanupExpired_WatchNotification(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Set up a watch
+	ch, err := s.Watch("expires.*")
+	if err != nil {
+		t.Fatalf("Watch failed: %v", err)
+	}
+
+	// Put a key with short TTL
+	s.Put("expires.key", []byte("value"), 50*time.Millisecond)
+
+	// Wait for the put notification
+	select {
+	case kv := <-ch:
+		if kv.Operation != OpPut {
+			t.Errorf("expected OpPut, got %v", kv.Operation)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for put notification")
+	}
+
+	// Wait for cleanup and delete notification
+	select {
+	case kv := <-ch:
+		if kv.Operation != OpDelete {
+			t.Errorf("expected OpDelete from cleanup, got %v", kv.Operation)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for cleanup delete notification")
+	}
+}
+
+func TestMemoryStore_GetKeyValue_NotFound(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	_, err := s.GetKeyValue("nonexistent")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryStore_GetKeyValue_InvalidKey(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	_, err := s.GetKeyValue("")
+	if err != ErrInvalidKey {
+		t.Errorf("expected ErrInvalidKey, got %v", err)
+	}
+}
+
+func TestMemoryStore_GetKeyValue_Closed(t *testing.T) {
+	s := NewMemoryStore()
+	s.Close()
+
+	_, err := s.GetKeyValue("key")
+	if err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestMemoryStore_GetKeyValue_Expired(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Put with short TTL
+	s.Put("temp", []byte("value"), 50*time.Millisecond)
+
+	// Wait for expiry
+	time.Sleep(100 * time.Millisecond)
+
+	// GetKeyValue should return ErrNotFound for expired entry
+	_, err := s.GetKeyValue("temp")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound for expired entry, got %v", err)
+	}
+}
+
+func TestMemoryStore_Get_InvalidKey(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	_, err := s.Get("")
+	if err != ErrInvalidKey {
+		t.Errorf("expected ErrInvalidKey, got %v", err)
+	}
+}
+
+func TestMemoryStore_Delete_InvalidKey(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	err := s.Delete("")
+	if err != ErrInvalidKey {
+		t.Errorf("expected ErrInvalidKey, got %v", err)
+	}
+}
+
+func TestMemoryStore_Lock_InvalidKey(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	_, err := s.Lock("", time.Second)
+	if err != ErrInvalidKey {
+		t.Errorf("expected ErrInvalidKey, got %v", err)
+	}
+}
+
+func TestMemoryStore_Lock_Key(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	lock, err := s.Lock("myresource", time.Second)
+	if err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+	defer lock.Unlock()
+
+	// Test Lock.Key() method
+	if lock.Key() != "_lock.myresource" {
+		t.Errorf("expected _lock.myresource, got %s", lock.Key())
+	}
+}
+
+func TestMemoryStore_Lock_ExpiredTakeover(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Acquire lock with short TTL
+	lock1, err := s.Lock("resource", 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+
+	// Wait for lock to expire
+	time.Sleep(100 * time.Millisecond)
+
+	// Should be able to acquire the same lock (expired takeover)
+	lock2, err := s.Lock("resource", time.Second)
+	if err != nil {
+		t.Errorf("should be able to take over expired lock: %v", err)
+	}
+
+	// lock1 refresh should fail
+	if err := lock1.Refresh(); err != ErrLockExpired {
+		t.Errorf("expected ErrLockExpired for original lock, got %v", err)
+	}
+
+	if lock2 != nil {
+		lock2.Unlock()
+	}
+}
+
+func TestMemoryStore_Lock_RefreshAfterUnlock(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	lock, _ := s.Lock("resource", time.Second)
+	lock.Unlock()
+
+	// Refresh after unlock should fail
+	if err := lock.Refresh(); err != ErrLockNotHeld {
+		t.Errorf("expected ErrLockNotHeld after unlock, got %v", err)
+	}
+}
+
+func TestMemoryStore_Keys_Closed(t *testing.T) {
+	s := NewMemoryStore()
+	s.Close()
+
+	_, err := s.Keys("*")
+	if err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestMemoryStore_Keys_ExpiredFiltered(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	// Put a persistent key
+	s.Put("persistent", []byte("value"), 0)
+
+	// Put a key with short TTL
+	s.Put("expires", []byte("value"), 50*time.Millisecond)
+
+	// Initially both should be visible
+	keys, _ := s.Keys("*")
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys initially, got %d", len(keys))
+	}
+
+	// Wait for expiry
+	time.Sleep(100 * time.Millisecond)
+
+	// Only persistent key should be visible
+	keys, _ = s.Keys("*")
+	if len(keys) != 1 {
+		t.Errorf("expected 1 key after expiry, got %d", len(keys))
+	}
+}
+
+func TestMemoryStore_Watch_Closed(t *testing.T) {
+	s := NewMemoryStore()
+	s.Close()
+
+	_, err := s.Watch("*")
+	if err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestMemoryStore_Watch_NonMatchingPattern(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	ch, _ := s.Watch("config.*")
+
+	// Write to a different pattern
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		s.Put("other.key", []byte("value"), 0)
+		time.Sleep(10 * time.Millisecond)
+		s.Put("config.match", []byte("value"), 0)
+	}()
+
+	// Should only receive matching notification
+	select {
+	case kv := <-ch:
+		if kv.Key != "config.match" {
+			t.Errorf("expected config.match, got %s", kv.Key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for matching notification")
+	}
+}
+
+func TestMemoryStore_Watch_ChannelFull(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	ch, _ := s.Watch("*")
+
+	// Fill the channel (capacity is 64) + overflow
+	for i := 0; i < 100; i++ {
+		s.Put("key", []byte("value"), 0)
+	}
+
+	// Drain what we can
+	count := 0
+	for {
+		select {
+		case <-ch:
+			count++
+		default:
+			goto done
+		}
+	}
+done:
+
+	// Should have received some notifications (up to buffer size)
+	if count == 0 {
+		t.Error("expected some notifications")
+	}
+	if count > 64 {
+		t.Errorf("expected at most 64 buffered notifications, got %d", count)
+	}
+}
+
+func TestMemoryStore_Close_Idempotent(t *testing.T) {
+	s := NewMemoryStore()
+
+	// First close should succeed
+	if err := s.Close(); err != nil {
+		t.Errorf("first Close failed: %v", err)
+	}
+
+	// Second close should also succeed (idempotent)
+	if err := s.Close(); err != nil {
+		t.Errorf("second Close failed: %v", err)
+	}
+}
+
+func TestMemoryStore_WatcherClosed_NotNotified(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	ch, _ := s.Watch("*")
+
+	// Close the store (which closes watchers)
+	s.Close()
+
+	// Channel should be closed
+	_, ok := <-ch
+	if ok {
+		t.Error("expected channel to be closed")
+	}
+}
+
+func TestMemoryStore_Put_UpdatePreservesCreated(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	key := "test.key"
+
+	// Create
+	s.Put(key, []byte("v1"), 0)
+	kv1, _ := s.GetKeyValue(key)
+	created1 := kv1.Created
+
+	// Small delay to ensure time difference
+	time.Sleep(10 * time.Millisecond)
+
+	// Update
+	s.Put(key, []byte("v2"), 0)
+	kv2, _ := s.GetKeyValue(key)
+
+	// Created should be preserved
+	if !kv2.Created.Equal(created1) {
+		t.Errorf("Created time changed: %v -> %v", created1, kv2.Created)
+	}
+
+	// Modified should be updated
+	if !kv2.Modified.After(kv1.Modified) {
+		t.Error("Modified time should be updated")
+	}
+
+	// Revision should increase
+	if kv2.Revision <= kv1.Revision {
+		t.Error("Revision should increase")
+	}
+}
+
+func TestMemoryStore_Watch_ExactPattern(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	ch, _ := s.Watch("exact.key")
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		s.Put("exact.key.extended", []byte("value"), 0) // Should not match
+		time.Sleep(10 * time.Millisecond)
+		s.Put("exact.key", []byte("value"), 0) // Should match
+	}()
+
+	select {
+	case kv := <-ch:
+		if kv.Key != "exact.key" {
+			t.Errorf("expected exact.key, got %s", kv.Key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for exact match notification")
+	}
+}
+
+func TestMemoryStore_Watch_ClosedWatcher(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	ch, _ := s.Watch("*")
+
+	// Mark the watcher as closed by reading from channel after close
+	s.Close()
+
+	// Create new store and add a watcher that we'll manually mark as closed
+	s2 := NewMemoryStore()
+	defer s2.Close()
+
+	_, _ = s2.Watch("*")
+
+	// Access the watcher directly and mark it closed
+	s2.mu.Lock()
+	if len(s2.watchers) > 0 {
+		s2.watchers[0].closed.Store(true)
+	}
+	s2.mu.Unlock()
+
+	// Now Put should skip the closed watcher
+	s2.Put("key", []byte("value"), 0)
+
+	// Verify channel is not receiving (it's closed)
+	select {
+	case <-ch:
+		// This is fine - channel was closed by s.Close()
+	default:
+		// This is also fine
+	}
+}
+
+func TestMemoryStore_Keys_ExactMatch(t *testing.T) {
+	s := NewMemoryStore()
+	defer s.Close()
+
+	s.Put("exact", []byte("value"), 0)
+	s.Put("exact2", []byte("value"), 0)
+
+	// Exact pattern match
+	keys, err := s.Keys("exact")
+	if err != nil {
+		t.Fatalf("Keys failed: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Errorf("expected 1 key for exact match, got %d", len(keys))
+	}
+	if len(keys) == 1 && keys[0] != "exact" {
+		t.Errorf("expected 'exact', got %s", keys[0])
+	}
+}

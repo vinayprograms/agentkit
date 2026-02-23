@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func getNATSConn(t *testing.T) *nats.Conn {
 
 // uniqueBucket generates a unique bucket name for test isolation.
 func uniqueBucket() string {
-	return "test-registry-" + time.Now().Format("20060102-150405.000")
+	return "test-" + time.Now().Format("150405") + "-" + fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
 }
 
 // --- Integration Tests ---
@@ -549,5 +550,281 @@ func TestNATSRegistry_CapabilityInjection(t *testing.T) {
 	agents, _ = r.FindByCapability("admin")
 	if len(agents) != 0 {
 		t.Errorf("partial match should not work, got %d agents", len(agents))
+	}
+}
+
+// --- Additional Coverage Tests ---
+
+func TestNATSRegistry_DeregisterEmptyID(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	err = r.Deregister("")
+	if err != ErrInvalidID {
+		t.Errorf("Deregister empty ID: expected ErrInvalidID, got %v", err)
+	}
+}
+
+func TestNATSRegistry_DeregisterAfterClose(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+
+	r.Register(AgentInfo{ID: "agent-1"})
+	r.Close()
+
+	err = r.Deregister("agent-1")
+	if err != ErrClosed {
+		t.Errorf("Deregister after close: expected ErrClosed, got %v", err)
+	}
+}
+
+func TestNATSRegistry_GetEmptyID(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	_, err = r.Get("")
+	if err != ErrInvalidID {
+		t.Errorf("Get empty ID: expected ErrInvalidID, got %v", err)
+	}
+}
+
+func TestNATSRegistry_FindByCapabilityAfterClose(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+
+	r.Register(AgentInfo{ID: "agent-1", Capabilities: []string{"test"}})
+	r.Close()
+
+	_, err = r.FindByCapability("test")
+	if err != ErrClosed {
+		t.Errorf("FindByCapability after close: expected ErrClosed, got %v", err)
+	}
+}
+
+func TestNATSRegistry_Conn(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	// Conn() should return the underlying connection
+	gotConn := r.Conn()
+	if gotConn != conn {
+		t.Error("Conn() should return the underlying NATS connection")
+	}
+}
+
+func TestNATSRegistry_ConfigDefaults(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	// Test that empty config values get defaults applied
+	cfg := NATSRegistryConfig{
+		BucketName: uniqueBucket(), // Use unique bucket for isolation
+		Replicas:   0,              // Should default to 1
+	}
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	// Should work with default-applied config
+	err = r.Register(AgentInfo{ID: "agent-1"})
+	if err != nil {
+		t.Errorf("Register with default config failed: %v", err)
+	}
+}
+
+func TestNATSRegistry_ListEmpty(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	// List on empty registry should return empty slice, not error
+	agents, err := r.List(nil)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("List on empty registry returned %d agents, want 0", len(agents))
+	}
+}
+
+func TestNATSRegistry_FindByCapabilityEmpty(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	// FindByCapability on empty registry should return empty slice
+	agents, err := r.FindByCapability("nonexistent")
+	if err != nil {
+		t.Fatalf("FindByCapability error: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("FindByCapability on empty registry returned %d agents, want 0", len(agents))
+	}
+}
+
+func TestNATSRegistry_WatchEvents(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	watch, err := r.Watch()
+	if err != nil {
+		t.Fatalf("Watch error: %v", err)
+	}
+
+	// Give watcher time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Update triggers EventUpdated
+	r.Register(AgentInfo{ID: "agent-update"})
+
+	select {
+	case event := <-watch:
+		if event.Type != EventAdded {
+			t.Errorf("First register: Type = %v, want %v", event.Type, EventAdded)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("timeout waiting for first event")
+	}
+
+	// Update the same agent
+	r.Register(AgentInfo{ID: "agent-update", Status: StatusBusy})
+
+	select {
+	case event := <-watch:
+		if event.Type != EventUpdated {
+			t.Errorf("Update: Type = %v, want %v", event.Type, EventUpdated)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("timeout waiting for update event")
+	}
+
+	// Delete triggers EventRemoved
+	r.Deregister("agent-update")
+
+	select {
+	case event := <-watch:
+		if event.Type != EventRemoved {
+			t.Errorf("Delete: Type = %v, want %v", event.Type, EventRemoved)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("timeout waiting for remove event")
+	}
+}
+
+func TestNATSRegistry_MultipleWatchers(t *testing.T) {
+	conn := getNATSConn(t)
+	defer conn.Close()
+
+	cfg := DefaultNATSRegistryConfig()
+	cfg.BucketName = uniqueBucket()
+
+	r, err := NewNATSRegistry(conn, cfg)
+	if err != nil {
+		t.Fatalf("NewNATSRegistry error: %v", err)
+	}
+	defer r.Close()
+
+	watch1, _ := r.Watch()
+	watch2, _ := r.Watch()
+
+	time.Sleep(100 * time.Millisecond)
+
+	r.Register(AgentInfo{ID: "agent-1"})
+
+	// Both should receive the event
+	for i, watch := range []<-chan Event{watch1, watch2} {
+		select {
+		case event := <-watch:
+			if event.Agent.ID != "agent-1" {
+				t.Errorf("watcher %d: Agent.ID = %q, want %q", i, event.Agent.ID, "agent-1")
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("watcher %d: timeout waiting for event", i)
+		}
+	}
+}
+
+func TestDefaultNATSRegistryConfig(t *testing.T) {
+	cfg := DefaultNATSRegistryConfig()
+
+	if cfg.BucketName != "agent-registry" {
+		t.Errorf("BucketName = %q, want %q", cfg.BucketName, "agent-registry")
+	}
+	if cfg.TTL != 30*time.Second {
+		t.Errorf("TTL = %v, want %v", cfg.TTL, 30*time.Second)
+	}
+	if cfg.Replicas != 1 {
+		t.Errorf("Replicas = %d, want %d", cfg.Replicas, 1)
 	}
 }

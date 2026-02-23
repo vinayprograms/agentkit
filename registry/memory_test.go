@@ -499,3 +499,288 @@ func TestMatchesFilter(t *testing.T) {
 		t.Error("load over max should not match")
 	}
 }
+
+// --- Additional Coverage Tests ---
+
+func TestMemoryRegistry_DeregisterEmptyID(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	err := r.Deregister("")
+	if err != ErrInvalidID {
+		t.Errorf("Deregister empty ID: expected ErrInvalidID, got %v", err)
+	}
+}
+
+func TestMemoryRegistry_DeregisterAfterClose(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	r.Register(AgentInfo{ID: "agent-1"})
+	r.Close()
+
+	err := r.Deregister("agent-1")
+	if err != ErrClosed {
+		t.Errorf("Deregister after close: expected ErrClosed, got %v", err)
+	}
+}
+
+func TestMemoryRegistry_GetEmptyID(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	_, err := r.Get("")
+	if err != ErrInvalidID {
+		t.Errorf("Get empty ID: expected ErrInvalidID, got %v", err)
+	}
+}
+
+func TestMemoryRegistry_GetStaleEntry(t *testing.T) {
+	// Use TTL > 0 but don't rely on cleanup loop timing
+	// Instead, directly modify LastSeen to simulate a stale entry
+	r := NewMemoryRegistry(MemoryConfig{TTL: 10 * time.Second}) // Long TTL to avoid cleanup
+	defer r.Close()
+
+	r.Register(AgentInfo{ID: "agent-1"})
+
+	// Manually make the entry stale by setting LastSeen to the past
+	r.mu.Lock()
+	if agent, ok := r.agents["agent-1"]; ok {
+		agent.LastSeen = time.Now().Add(-20 * time.Second) // 20s ago, way past TTL
+		r.agents["agent-1"] = agent
+	}
+	r.mu.Unlock()
+
+	// Get should return ErrNotFound for stale entry (TTL check in Get)
+	_, err := r.Get("agent-1")
+	if err != ErrNotFound {
+		t.Errorf("Get stale entry: expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryRegistry_ListWithStaleEntries(t *testing.T) {
+	// Use long TTL to avoid cleanup interference
+	r := NewMemoryRegistry(MemoryConfig{TTL: 10 * time.Second})
+	defer r.Close()
+
+	// Register agents
+	r.Register(AgentInfo{ID: "agent-1"})
+	r.Register(AgentInfo{ID: "agent-2"})
+
+	// Make agent-1 stale by setting LastSeen to the past
+	r.mu.Lock()
+	if agent, ok := r.agents["agent-1"]; ok {
+		agent.LastSeen = time.Now().Add(-20 * time.Second) // 20s ago, past TTL
+		r.agents["agent-1"] = agent
+	}
+	r.mu.Unlock()
+
+	// List should only return fresh agent (stale entries filtered in List)
+	agents, err := r.List(nil)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Errorf("List returned %d agents, want 1 (only fresh)", len(agents))
+	}
+	if len(agents) == 1 && agents[0].ID != "agent-2" {
+		t.Errorf("List returned agent %s, want agent-2", agents[0].ID)
+	}
+}
+
+func TestMemoryRegistry_FindByCapabilityAfterClose(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	r.Register(AgentInfo{ID: "agent-1", Capabilities: []string{"test"}})
+	r.Close()
+
+	_, err := r.FindByCapability("test")
+	if err != ErrClosed {
+		t.Errorf("FindByCapability after close: expected ErrClosed, got %v", err)
+	}
+}
+
+func TestMemoryRegistry_FindByCapabilityWithStaleEntries(t *testing.T) {
+	// Use long TTL to avoid cleanup interference
+	r := NewMemoryRegistry(MemoryConfig{TTL: 10 * time.Second})
+	defer r.Close()
+
+	// Register agents with same capability
+	r.Register(AgentInfo{ID: "agent-1", Capabilities: []string{"test"}, Load: 0.3})
+	r.Register(AgentInfo{ID: "agent-2", Capabilities: []string{"test"}, Load: 0.5})
+
+	// Make agent-1 stale by setting LastSeen to the past
+	r.mu.Lock()
+	if agent, ok := r.agents["agent-1"]; ok {
+		agent.LastSeen = time.Now().Add(-20 * time.Second) // 20s ago, past TTL
+		r.agents["agent-1"] = agent
+	}
+	r.mu.Unlock()
+
+	// FindByCapability should only return fresh agent (stale entries filtered)
+	agents, err := r.FindByCapability("test")
+	if err != nil {
+		t.Fatalf("FindByCapability error: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Errorf("FindByCapability returned %d agents, want 1 (only fresh)", len(agents))
+	}
+	if len(agents) == 1 && agents[0].ID != "agent-2" {
+		t.Errorf("FindByCapability returned agent %s, want agent-2", agents[0].ID)
+	}
+}
+
+func TestMemoryRegistry_DoubleClose(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+
+	// First close
+	err := r.Close()
+	if err != nil {
+		t.Errorf("First close: unexpected error %v", err)
+	}
+
+	// Second close should return nil (not panic or error)
+	err = r.Close()
+	if err != nil {
+		t.Errorf("Second close: unexpected error %v", err)
+	}
+}
+
+func TestMemoryRegistry_WatcherChannelOverflow(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	watch, err := r.Watch()
+	if err != nil {
+		t.Fatalf("Watch error: %v", err)
+	}
+
+	// Fill the channel buffer (64) without reading
+	for i := 0; i < 100; i++ {
+		r.Register(AgentInfo{ID: "agent-overflow"})
+	}
+
+	// Verify we can still drain some events
+	eventCount := 0
+	timeout := time.After(100 * time.Millisecond)
+drainLoop:
+	for {
+		select {
+		case <-watch:
+			eventCount++
+		case <-timeout:
+			break drainLoop
+		}
+	}
+
+	// Channel should have received up to 64 events (buffer size)
+	if eventCount == 0 {
+		t.Error("Expected at least some events in the channel")
+	}
+	if eventCount > 64 {
+		t.Errorf("Channel received %d events, but buffer is only 64", eventCount)
+	}
+}
+
+func TestMemoryRegistry_CleanupLoopRemovesStaleEntries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping cleanup loop test in short mode")
+	}
+
+	// Create registry with TTL - cleanup runs at TTL/2 interval
+	r := NewMemoryRegistry(MemoryConfig{TTL: 100 * time.Millisecond})
+	defer r.Close()
+
+	watch, _ := r.Watch()
+
+	r.Register(AgentInfo{ID: "agent-stale"})
+
+	// Drain added event
+	select {
+	case <-watch:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for added event")
+	}
+
+	// Wait for TTL + cleanup interval (TTL/2)
+	time.Sleep(200 * time.Millisecond)
+
+	// Entry should be removed by cleanup loop
+	agents, _ := r.List(nil)
+	if len(agents) != 0 {
+		t.Errorf("Expected 0 agents after cleanup, got %d", len(agents))
+	}
+
+	// Should receive removal event from cleanup
+	select {
+	case event := <-watch:
+		if event.Type != EventRemoved {
+			t.Errorf("Expected EventRemoved, got %v", event.Type)
+		}
+		if event.Agent.ID != "agent-stale" {
+			t.Errorf("Expected agent-stale, got %s", event.Agent.ID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timeout waiting for removal event from cleanup")
+	}
+}
+
+func TestMemoryRegistry_ListEmptyRegistry(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	agents, err := r.List(nil)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("List on empty registry returned %d agents, want 0", len(agents))
+	}
+}
+
+func TestMemoryRegistry_FindByCapabilityEmpty(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	agents, err := r.FindByCapability("nonexistent")
+	if err != nil {
+		t.Fatalf("FindByCapability error: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("FindByCapability on empty registry returned %d agents, want 0", len(agents))
+	}
+}
+
+func TestMemoryRegistry_ConcurrentReadWrite(t *testing.T) {
+	r := NewMemoryRegistry(MemoryConfig{})
+	defer r.Close()
+
+	var wg sync.WaitGroup
+
+	// Start readers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				r.List(nil)
+				r.FindByCapability("test")
+				r.Get("agent-1")
+			}
+		}()
+	}
+
+	// Start writers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				r.Register(AgentInfo{
+					ID:           "agent-1",
+					Capabilities: []string{"test"},
+					Load:         float64(j%100) / 100.0,
+				})
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}

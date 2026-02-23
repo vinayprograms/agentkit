@@ -18,6 +18,11 @@ Reusable Go packages for building AI agents.
 | `heartbeat` | Agent liveness detection and death detection for swarms |
 | `state` | Shared state (KV store, distributed locks) for agent coordination |
 | `registry` | Agent registration and discovery for swarm coordination |
+| `ratelimit` | Rate limit coordination across agents in a swarm |
+| `results` | Task result publication and retrieval for agent coordination |
+| `tasks` | Idempotent task handling with deduplication for safe retries |
+| `errors` | Structured error taxonomy with codes, categories, and retry semantics |
+| `shutdown` | Graceful shutdown coordination with signal handling |
 | `policy` | Security policy enforcement |
 | `logging` | Structured logging |
 | `telemetry` | Observability (OpenTelemetry) |
@@ -226,6 +231,220 @@ lock.Refresh() // Extend TTL if needed
 ```
 
 Supports TTL-based expiry, pattern-based key listing and watch, and distributed locks with automatic expiry.
+
+## Rate Limiting
+
+The ratelimit package provides coordinated rate limiting across agents in a swarm:
+
+```go
+import "github.com/vinayprograms/agentkit/ratelimit"
+
+// In-memory limiter (single process)
+limiter := ratelimit.NewMemoryLimiter()
+limiter.SetCapacity("openai-api", 60, time.Minute) // 60 requests per minute
+
+// Distributed limiter (swarm coordination)
+nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+limiter, _ := ratelimit.NewDistributedLimiter(ratelimit.DistributedConfig{
+    Bus:     nbus,
+    AgentID: "agent-1",
+})
+limiter.SetCapacity("shared-api", 100, time.Minute)
+
+// Acquire a token (blocks until available)
+if err := limiter.Acquire(ctx, "openai-api"); err != nil {
+    return err // context cancelled
+}
+defer limiter.Release("openai-api")
+
+// Non-blocking attempt
+if limiter.TryAcquire("openai-api") {
+    defer limiter.Release("openai-api")
+    // Make request
+} else {
+    // Handle rate limit (queue, retry later, etc.)
+}
+
+// Announce reduced capacity (after 429 response)
+limiter.AnnounceReduced("shared-api", "received 429 from API")
+
+// Check current capacity
+cap := limiter.GetCapacity("shared-api")
+fmt.Printf("Available: %d/%d\n", cap.Available, cap.Total)
+```
+
+The distributed limiter coordinates across agents via the message bus. When any agent announces reduced capacity (e.g., after receiving a 429 response), all agents automatically adjust their limits. Capacity gradually recovers over time.
+
+## Result Publication
+
+The results package provides task result publication and retrieval for agent coordination:
+
+```go
+import "github.com/vinayprograms/agentkit/results"
+
+// In-memory publisher (testing)
+pub := results.NewMemoryPublisher()
+
+// Bus-backed publisher (distributed)
+nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+pub := results.NewBusPublisher(nbus, results.BusPublisherConfig{
+    SubjectPrefix: "results",
+})
+
+// Publish a result
+err := pub.Publish(ctx, "task-123", results.Result{
+    TaskID:   "task-123",
+    Status:   results.StatusSuccess,
+    Output:   []byte(`{"answer": 42}`),
+    Metadata: map[string]string{"model": "gpt-4"},
+})
+
+// Retrieve a result
+result, err := pub.Get(ctx, "task-123")
+
+// Subscribe to result updates (non-blocking)
+ch, _ := pub.Subscribe("task-456")
+for result := range ch {
+    fmt.Printf("Result update: %s -> %s\n", result.TaskID, result.Status)
+    if result.Status.IsTerminal() {
+        break // Channel closes on terminal state
+    }
+}
+
+// List results with filters
+pending, _ := pub.List(results.ResultFilter{
+    Status:       results.StatusPending,
+    TaskIDPrefix: "batch-",
+    Limit:        10,
+})
+```
+
+The bus-backed publisher enables distributed subscribers to receive real-time result notifications without polling.
+
+## Idempotent Task Handling
+
+The tasks package provides safe task retries with deduplication:
+
+```go
+import "github.com/vinayprograms/agentkit/tasks"
+
+// Create task manager backed by state store
+store := state.NewMemoryStore()
+mgr := tasks.NewManager(store)
+
+// Submit a task with an idempotency key
+task := tasks.Task{
+    IdempotencyKey: "order-123-process",
+    Payload:        []byte(`{"order_id": "123"}`),
+    MaxAttempts:    3,
+}
+taskID, _ := mgr.Submit(ctx, task)
+
+// Duplicate submissions return the same task ID (idempotent)
+taskID2, _ := mgr.Submit(ctx, tasks.Task{
+    IdempotencyKey: "order-123-process",
+    Payload:        []byte(`{"order_id": "123"}`),
+})
+// taskID == taskID2
+
+// Worker claims and processes the task
+err := mgr.Claim(ctx, taskID, "worker-1")
+// ... do work ...
+
+// Complete on success
+err = mgr.Complete(ctx, taskID, []byte(`{"status": "processed"}`))
+
+// Or fail with automatic retry
+err = mgr.Fail(ctx, taskID, errors.New("temporary failure"))
+// Task moves back to pending if attempts < MaxAttempts
+
+// List pending tasks for processing
+pending, _ := mgr.List(ctx, tasks.StatusPending)
+```
+
+The idempotency key ensures duplicate task submissions (e.g., from retried network requests) don't create duplicate work. Tasks support configurable retry limits with automatic state transitions.
+
+## Graceful Shutdown
+
+The shutdown package provides graceful shutdown coordination with signal handling:
+
+```go
+import "github.com/vinayprograms/agentkit/shutdown"
+
+// Create coordinator
+coord := shutdown.NewCoordinator(shutdown.DefaultConfig())
+
+// Handle OS signals (SIGTERM, SIGINT)
+coord.HandleSignals()
+
+// Register shutdown handlers with phases (lower = earlier)
+coord.RegisterWithPhase("http-server", httpServer, 10)   // Stop accepting requests
+coord.RegisterWithPhase("workers", workerPool, 20)       // Drain work queues
+coord.RegisterWithPhase("database", dbConn, 30)          // Close connections
+
+// Or use a function directly
+coord.RegisterFunc("cleanup", func(ctx context.Context) error {
+    // Finish current task
+    // Re-queue pending work
+    // Release resources
+    return nil
+})
+
+// Wait for shutdown to complete
+<-coord.Done()
+if err := coord.Err(); err != nil {
+    log.Printf("Shutdown error: %v", err)
+}
+
+// Or trigger manually with timeout
+if err := coord.ShutdownWithTimeout(30 * time.Second); err != nil {
+    log.Printf("Shutdown incomplete: %v", err)
+}
+```
+
+Handlers in the same phase are shut down concurrently. Lower phase numbers shut down first, ensuring dependencies are respected (e.g., stop accepting requests before draining workers, close database last).
+
+## Structured Errors
+
+The errors package provides a comprehensive error taxonomy for swarm coordination:
+
+```go
+import "github.com/vinayprograms/agentkit/errors"
+
+// Create typed errors
+err := errors.New(errors.ErrCodeTimeout, "operation timed out")
+err := errors.NotFound("agent agent-1 not found")
+err := errors.RateLimited("API quota exceeded", errors.WithMetadata("retry_after", "60s"))
+
+// Wrap existing errors with context
+if err := doSomething(); err != nil {
+    return errors.Wrap(err, "processing request")
+}
+
+// Check error properties for retry decisions
+if agentErr := errors.AsAgentError(err); agentErr != nil {
+    if agentErr.Retryable() {
+        // Safe to retry
+    }
+    fmt.Printf("Code: %s, Category: %s\n", agentErr.Code(), agentErr.Category())
+}
+
+// Convenience checks
+if errors.IsRetryable(err) { /* retry */ }
+if errors.Is(err, errors.ErrCodeRateLimit) { /* backoff */ }
+if errors.IsTransient(err) { /* temporary failure */ }
+
+// JSON serialization for cross-agent communication
+data, _ := json.Marshal(err)
+var received errors.Error
+json.Unmarshal(data, &received)
+```
+
+Error categories enable automatic retry decisions:
+- **Transient**: Temporary failures (timeout, network) — retry may succeed
+- **Permanent**: Non-recoverable (not found, invalid input) — don't retry
+- **Resource**: Quota/limit issues (rate limit, capacity) — retry with backoff
+- **Internal**: Bugs or unexpected errors — investigate
 
 ## Used By
 
