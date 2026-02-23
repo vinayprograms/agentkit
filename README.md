@@ -15,6 +15,8 @@ Reusable Go packages for building AI agents.
 | `credentials` | Credential management (TOML-based) |
 | `transport` | Pluggable transports (stdio, WebSocket, SSE) with JSON-RPC 2.0 |
 | `bus` | Message bus clients (NATS, in-memory) for pub/sub and request/reply |
+| `heartbeat` | Agent liveness detection and death detection for swarms |
+| `state` | Shared state (KV store, distributed locks) for agent coordination |
 | `registry` | Agent registration and discovery for swarm coordination |
 | `policy` | Security policy enforcement |
 | `logging` | Structured logging |
@@ -149,6 +151,81 @@ for event := range events {
 ```
 
 Agents self-register with capabilities, status, and load. The registry enables capability-based routing with load-aware selection.
+
+## Heartbeat System
+
+The heartbeat package provides agent liveness detection for distributed swarms:
+
+```go
+import "github.com/vinayprograms/agentkit/heartbeat"
+
+// Create sender (from agent)
+sender, _ := heartbeat.NewBusSender(heartbeat.SenderConfig{
+    Bus:      nbus,
+    AgentID:  "agent-1",
+    Interval: 5 * time.Second,
+})
+sender.SetStatus("busy")
+sender.SetLoad(0.75)
+sender.SetMetadata("version", "1.0.0")
+sender.Start(ctx)
+
+// Create monitor (from coordinator)
+monitor, _ := heartbeat.NewBusMonitor(heartbeat.MonitorConfig{
+    Bus:     nbus,
+    Timeout: 15 * time.Second, // 3 missed heartbeats
+})
+monitor.OnDead(func(agentID string) {
+    log.Printf("Agent %s presumed dead, triggering failover", agentID)
+})
+ch, _ := monitor.WatchAll()
+for hb := range ch {
+    fmt.Printf("Heartbeat from %s: status=%s load=%.2f\n", hb.AgentID, hb.Status, hb.Load)
+}
+
+// Check if specific agent is alive
+if monitor.IsAlive("agent-1", 15*time.Second) {
+    // Agent is responsive
+}
+```
+
+Heartbeats enable swarm coordinators to detect dead agents and trigger failover automatically.
+
+## Shared State
+
+The state package provides distributed key-value storage with locking for agent coordination:
+
+```go
+import "github.com/vinayprograms/agentkit/state"
+
+// In-memory store (testing)
+store := state.NewMemoryStore()
+
+// NATS JetStream KV (production)
+nbus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+store, _ := state.NewNATSStore(state.NATSStoreConfig{
+    Conn:   nbus.Conn(),
+    Bucket: "agent-state",
+})
+
+// Key-value operations
+store.Put("config.timeout", []byte("30s"), time.Hour) // with TTL
+val, _ := store.Get("config.timeout")
+
+// Watch for changes
+ch, _ := store.Watch("config.*")
+for kv := range ch {
+    fmt.Printf("Key %s changed: %s\n", kv.Key, kv.Value)
+}
+
+// Distributed locking
+lock, _ := store.Lock("resource.mutex", 30*time.Second)
+defer lock.Unlock()
+// ... critical section ...
+lock.Refresh() // Extend TTL if needed
+```
+
+Supports TTL-based expiry, pattern-based key listing and watch, and distributed locks with automatic expiry.
 
 ## Used By
 
