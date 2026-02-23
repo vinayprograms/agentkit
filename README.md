@@ -2,80 +2,13 @@
 
 Reusable Go packages for building AI agent swarms.
 
-## What Is This?
+## Quick Start
 
-AgentKit provides the building blocks for distributed AI agents:
-
-- **LLM integration** — Unified interface for Claude, GPT, Gemini, and more
-- **Agent coordination** — Registry, heartbeat, message bus for swarm behavior
-- **Distributed state** — Shared key-value storage with locking
-- **Task management** — Idempotent tasks with retry semantics
-- **Observability** — Structured logging and OpenTelemetry tracing
-
-## Documentation
-
-📚 **[Design Docs](docs/)** — Understand how each package works before using it.
-
-| Package | Purpose | Design Doc |
-|---------|---------|------------|
-| [llm](llm/) | LLM provider abstraction | [llm-design.md](docs/llm-design.md) |
-| [bus](bus/) | Message bus (pub/sub, request/reply) | [bus-design.md](docs/bus-design.md) |
-| [registry](registry/) | Agent registration and discovery | [registry-design.md](docs/registry-design.md) |
-| [heartbeat](heartbeat/) | Liveness detection | [heartbeat-design.md](docs/heartbeat-design.md) |
-| [state](state/) | Distributed key-value store | [state-design.md](docs/state-design.md) |
-| [tasks](tasks/) | Idempotent task handling | [tasks-design.md](docs/tasks-design.md) |
-| [results](results/) | Result publication | [results-design.md](docs/results-design.md) |
-| [ratelimit](ratelimit/) | Coordinated rate limiting | [ratelimit-design.md](docs/ratelimit-design.md) |
-| [shutdown](shutdown/) | Graceful shutdown | [shutdown-design.md](docs/shutdown-design.md) |
-| [errors](errors/) | Structured error taxonomy | [errors-design.md](docs/errors-design.md) |
-| [transport](transport/) | JSON-RPC transports | [transport-design.md](docs/transport-design.md) |
-| [mcp](mcp/) | MCP client for external tools | [mcp-design.md](docs/mcp-design.md) |
-| [acp](acp/) | Editor integration protocol | [acp-design.md](docs/acp-design.md) |
-| [memory](memory/) | Semantic memory (FIL model) | [memory-design.md](docs/memory-design.md) |
-| [logging](logging/) | Structured logging | [logging-design.md](docs/logging-design.md) |
-| [telemetry](telemetry/) | OpenTelemetry tracing | [telemetry-design.md](docs/telemetry-design.md) |
-
-📂 **[Examples](examples/)** — Working code you can run.
-
-| Example | What It Shows |
-|---------|---------------|
-| [chat-transport](examples/chat-transport/) | Basic transport setup |
-| [task-queue](examples/task-queue/) | Work distribution via bus |
-| [swarm-heartbeat](examples/swarm-heartbeat/) | Agent liveness detection |
-| [graceful-shutdown](examples/graceful-shutdown/) | Multi-phase shutdown |
-| [idempotent-tasks](examples/idempotent-tasks/) | Safe task retries |
-| [rate-limiting](examples/rate-limiting/) | Coordinated rate limits |
-| [result-publication](examples/result-publication/) | Pub/sub for results |
-| [structured-errors](examples/structured-errors/) | Error handling patterns |
-
-## Getting Started
-
-### Installation
+Get an agent running in 5 minutes:
 
 ```bash
 go get github.com/vinayprograms/agentkit
 ```
-
-### Learning Path
-
-**New to AgentKit?** Read the docs in this order:
-
-1. **[bus-design.md](docs/bus-design.md)** — Understand how agents communicate
-2. **[registry-design.md](docs/registry-design.md)** — How agents find each other
-3. **[heartbeat-design.md](docs/heartbeat-design.md)** — Detecting dead agents
-4. **[state-design.md](docs/state-design.md)** — Sharing data between agents
-5. **[llm-design.md](docs/llm-design.md)** — Calling LLMs
-
-Then explore based on what you're building:
-
-- **Building a swarm?** → tasks, results, ratelimit, shutdown
-- **Editor integration?** → acp, transport
-- **External tools?** → mcp
-- **Observability?** → logging, telemetry, errors
-
-### Quick Example
-
-Here's a minimal agent that registers itself, sends heartbeats, and responds to work:
 
 ```go
 package main
@@ -93,106 +26,149 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 1. Connect to message bus
-    msgBus, err := bus.NewNATSBus(bus.NATSConfig{
-        URL: "nats://localhost:4222",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
+    // Connect to message bus — the backbone of agent communication
+    msgBus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
     defer msgBus.Close()
 
-    // 2. Create registry (for agent discovery)
-    reg, err := registry.NewNATSRegistry(msgBus.Conn(), registry.NATSRegistryConfig{
+    // Register this agent — so other agents can discover us
+    reg, _ := registry.NewNATSRegistry(msgBus.Conn(), registry.NATSRegistryConfig{
         BucketName: "my-swarm",
         TTL:        30 * time.Second,
     })
-    if err != nil {
-        log.Fatal(err)
-    }
     defer reg.Close()
 
-    // 3. Register this agent
     agentID := "worker-1"
-    err = reg.Register(registry.AgentInfo{
+    reg.Register(registry.AgentInfo{
         ID:           agentID,
         Name:         "Example Worker",
         Capabilities: []string{"process-tasks"},
         Status:       registry.StatusIdle,
     })
-    if err != nil {
-        log.Fatal(err)
-    }
 
-    // 4. Start heartbeat (so others know we're alive)
-    sender, err := heartbeat.NewBusSender(heartbeat.SenderConfig{
+    // Start heartbeat — proves we're alive to coordinators
+    sender, _ := heartbeat.NewBusSender(heartbeat.SenderConfig{
         Bus:      msgBus,
         AgentID:  agentID,
         Interval: 5 * time.Second,
     })
-    if err != nil {
-        log.Fatal(err)
-    }
     sender.Start(ctx)
     defer sender.Stop()
 
-    // 5. Subscribe to work
-    sub, err := msgBus.QueueSubscribe("tasks.process", "workers")
-    if err != nil {
-        log.Fatal(err)
-    }
+    // Subscribe to work via queue group — load balanced across workers
+    sub, _ := msgBus.QueueSubscribe("tasks.process", "workers")
 
-    log.Printf("Agent %s ready, waiting for tasks...", agentID)
+    log.Printf("Agent %s ready", agentID)
 
     for msg := range sub.Messages() {
         sender.SetStatus("busy")
         log.Printf("Processing: %s", msg.Data)
-        
-        // Do work here...
-        
+        // ... your logic here ...
         sender.SetStatus("idle")
     }
 }
 ```
 
-## Architecture Overview
+## Architecture
 
+```mermaid
+graph TB
+    subgraph Agent["Your Agent"]
+        LLM["LLM<br/>(Claude, GPT, Gemini)"]
+        Tools["Tools<br/>(builtin + MCP)"]
+        Memory["Memory<br/>(FIL + search)"]
+    end
+
+    subgraph Coordination["Swarm Coordination"]
+        Registry["Registry<br/>who exists"]
+        Heartbeat["Heartbeat<br/>who's alive"]
+        State["State<br/>shared data"]
+        Tasks["Tasks<br/>work items"]
+        Results["Results<br/>outputs"]
+        Ratelimit["Ratelimit<br/>quotas"]
+    end
+
+    subgraph Infrastructure["Infrastructure"]
+        Bus["Message Bus<br/>pub/sub, queues, RPC"]
+        Backend["Backend<br/>NATS / Memory"]
+    end
+
+    Agent --> Coordination
+    Coordination --> Bus
+    Bus --> Backend
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Your Agent                               │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
-│  │   LLM   │  │  Tools  │  │ Memory  │  │   MCP   │            │
-│  │(Claude, │  │(builtin │  │ (FIL +  │  │(external│            │
-│  │ GPT...) │  │ + reg)  │  │ search) │  │ tools)  │            │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘            │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Swarm Coordination Layer                        ││
-│  │  ┌────────┐ ┌─────────┐ ┌───────┐ ┌─────────┐ ┌──────────┐ ││
-│  │  │Registry│ │Heartbeat│ │ State │ │  Tasks  │ │ Results  │ ││
-│  │  └────────┘ └─────────┘ └───────┘ └─────────┘ └──────────┘ ││
-│  └─────────────────────────────────────────────────────────────┘│
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                      Message Bus                             ││
-│  │            (pub/sub, queue groups, request/reply)            ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-```
 
-**Message Bus** — Foundation for all agent communication. Supports pub/sub (broadcast), queue groups (load balancing), and request/reply (RPC).
+**Message Bus** is the foundation — all agent communication flows through it.
 
-**Swarm Coordination** — Registry (who exists), heartbeat (who's alive), state (shared data), tasks (work items), results (outputs).
+**Swarm Coordination** builds on the bus — registry tracks agents, heartbeat detects failures, state shares data, tasks manage work.
 
-**Agent Logic** — Your code. Uses LLM for reasoning, tools for actions, memory for learning.
+**Your Agent** uses coordination primitives plus LLM/tools/memory for actual work.
+
+## Learning Path
+
+Start with the fundamentals, then add capabilities as needed:
+
+### 1. Core (Read First)
+
+| Package | What It Does | Doc |
+|---------|--------------|-----|
+| **llm** | Call LLMs (Claude, GPT, Gemini) with unified interface | [llm-design.md](docs/llm-design.md) |
+| **bus** | Message passing between agents (pub/sub, queues, RPC) | [bus-design.md](docs/bus-design.md) |
+| **errors** | Structured errors with retry semantics | [errors-design.md](docs/errors-design.md) |
+
+### 2. Swarm Basics (Multi-Agent)
+
+| Package | What It Does | Doc |
+|---------|--------------|-----|
+| **registry** | Agent registration and capability-based discovery | [registry-design.md](docs/registry-design.md) |
+| **heartbeat** | Detect dead agents, trigger failover | [heartbeat-design.md](docs/heartbeat-design.md) |
+| **state** | Shared key-value store with distributed locks | [state-design.md](docs/state-design.md) |
+
+### 3. Task Coordination
+
+| Package | What It Does | Doc |
+|---------|--------------|-----|
+| **tasks** | Idempotent task handling with deduplication | [tasks-design.md](docs/tasks-design.md) |
+| **results** | Publish/subscribe for task results | [results-design.md](docs/results-design.md) |
+| **ratelimit** | Coordinate rate limits across swarm | [ratelimit-design.md](docs/ratelimit-design.md) |
+
+### 4. Operations
+
+| Package | What It Does | Doc |
+|---------|--------------|-----|
+| **shutdown** | Graceful shutdown with phases | [shutdown-design.md](docs/shutdown-design.md) |
+| **logging** | Structured real-time logging | [logging-design.md](docs/logging-design.md) |
+| **telemetry** | OpenTelemetry tracing | [telemetry-design.md](docs/telemetry-design.md) |
+
+### 5. Specialized
+
+| Package | What It Does | Doc |
+|---------|--------------|-----|
+| **transport** | JSON-RPC transports (stdio, WebSocket, SSE) | [transport-design.md](docs/transport-design.md) |
+| **mcp** | Connect to external tool servers | [mcp-design.md](docs/mcp-design.md) |
+| **acp** | Editor integration (VS Code, Cursor) | [acp-design.md](docs/acp-design.md) |
+| **memory** | Semantic memory with BM25 search | [memory-design.md](docs/memory-design.md) |
+
+## Examples
+
+Working code you can run:
+
+| Example | What It Shows |
+|---------|---------------|
+| [chat-transport](examples/chat-transport/) | Basic transport setup |
+| [task-queue](examples/task-queue/) | Work distribution via bus |
+| [swarm-heartbeat](examples/swarm-heartbeat/) | Agent liveness detection |
+| [graceful-shutdown](examples/graceful-shutdown/) | Multi-phase shutdown |
+| [idempotent-tasks](examples/idempotent-tasks/) | Safe task retries |
+| [rate-limiting](examples/rate-limiting/) | Coordinated rate limits |
+| [result-publication](examples/result-publication/) | Pub/sub for results |
+| [structured-errors](examples/structured-errors/) | Error handling patterns |
 
 ## Design Philosophy
 
 - **Composition over frameworks** — Use what you need, ignore the rest
 - **Backend agnostic** — Memory implementations for testing, NATS for production
 - **Go idiomatic** — Channels, interfaces, context propagation
-- **Explicit over magic** — No auto-discovery, no hidden state
+- **Explicit over magic** — No hidden state, no auto-discovery
 
 ## Used By
 
