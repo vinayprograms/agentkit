@@ -53,7 +53,6 @@ Not all components can shut down simultaneously. A worker processing tasks needs
 
 Handlers in the same phase run concurrently. The coordinator waits for all handlers in a phase to complete before starting the next phase.
 
-![Phase-based Shutdown Ordering](images/shutdown-phases.png)
 
 ### Timeouts
 
@@ -63,7 +62,6 @@ Typical timeouts: 30-60 seconds. Long enough for normal cleanup, short enough to
 
 ## Architecture
 
-![ShutdownCoordinator Architecture](images/shutdown-architecture.png)
 
 The coordinator:
 1. Receives shutdown signal (SIGTERM, SIGINT, or programmatic trigger)
@@ -82,7 +80,6 @@ The coordinator can automatically handle OS signals:
 
 When a signal arrives, the coordinator starts graceful shutdown with the configured timeout.
 
-![Signal Handling Flow](images/shutdown-signal-flow.png)
 
 ## Error Handling
 

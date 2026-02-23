@@ -82,19 +82,16 @@ When you catch an error and need to add context, wrap it. Wrapping:
 
 This lets errors bubble up through layers while retaining their original meaning.
 
-![Error Wrapping Flow](images/errors-wrapping.png)
 
 ### Retry Semantics
 
 The package provides helpers to check if an error is retryable:
 
-![Retry Semantics by Category](images/errors-retry-semantics.png)
 
 Your retry logic can simply ask "is this retryable?" without knowing the specific error. The category system encapsulates retry policy.
 
 ## Architecture
 
-![Errors Package Architecture](images/errors-architecture.png)
 
 The error interface extends Go's standard `error` with:
 - `Code()` — What specific failure occurred

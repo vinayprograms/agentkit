@@ -38,7 +38,6 @@ This package solves that by:
 
 Each resource has a **token bucket** — a pool of tokens that refills over time. To make a request, you take a token. If no tokens are available, you wait.
 
-![Token Bucket State Transitions](images/ratelimit-token-bucket.png)
 
 **Example:** 100 tokens, refills every minute. You can make 100 requests per minute. If you use all tokens, you wait for refill.
 
@@ -69,7 +68,6 @@ This prevents the swarm from immediately hammering the API again after a brief p
 
 ## Architecture
 
-![Rate Limiter Architecture](images/ratelimit-architecture.png)
 
 Two implementations:
 
@@ -88,7 +86,6 @@ When using DistributedLimiter:
 5. **All agents receive** — Each reduces its local capacity
 6. **Recovery** — Background process gradually restores capacity
 
-![Distributed Coordination Message Flow](images/ratelimit-message-flow.png)
 
 This is **eventually consistent**. There's a brief window where some agents haven't received the reduction yet. That's acceptable — the goal is approximate coordination, not perfect synchronization.
 

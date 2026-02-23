@@ -74,7 +74,6 @@ Loggers can carry a trace ID that appears in every log line. This helps correlat
 
 ## Architecture
 
-![Logging Architecture](images/logging-architecture.png)
 
 The logger writes to an output stream (default: stdout). Multiple goroutines can log concurrently — a mutex ensures lines don't interleave.
 
@@ -127,7 +126,6 @@ These ensure consistent formatting across the codebase.
 
 ## Relationship to Session Forensics
 
-![Logging vs Session Forensics](images/logging-integration.png)
 
 | Aspect | Logging | Session JSON |
 |--------|---------|--------------|

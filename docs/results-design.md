@@ -39,7 +39,6 @@ A result moves through three states:
 
 Success and failed are **terminal states**. Once a result reaches them, subscriptions auto-close.
 
-![Result Lifecycle State Machine](images/results-lifecycle.png)
 
 ### Publishing
 
@@ -59,7 +58,6 @@ Agents can subscribe to a task ID to receive updates:
 
 Subscriptions are push-based — you receive a channel and read from it. No polling.
 
-![Subscribe Flow Sequence](images/results-subscribe-flow.png)
 
 ### Filtering
 
@@ -71,7 +69,6 @@ You can list results matching criteria:
 
 ## Architecture
 
-![Results Architecture](images/results-architecture.png)
 
 Two implementations:
 

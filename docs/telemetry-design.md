@@ -26,7 +26,6 @@ The telemetry package provides observability for agent workflows through OpenTel
 
 ## Architecture
 
-![Telemetry Architecture - showing agent process components (LLM, Tools, MCP, Security, Policy) connecting to the telemetry package (Tracer, Provider, Exporter) which exports to backends (OTLP, File, HTTP)](images/telemetry-architecture.png)
 
 ## Core Types
 

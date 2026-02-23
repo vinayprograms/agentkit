@@ -44,7 +44,6 @@ Heartbeats are published to the message bus on a subject like `heartbeat.agent-a
 
 ## Architecture
 
-![Heartbeat Architecture - Agents with Senders publish heartbeats via MessageBus to the Monitor](images/heartbeat-architecture.png)
 
 The sender and monitor communicate indirectly through the message bus. They never talk directly to each other. This decoupling means:
 - Agents don't need to know who's monitoring them

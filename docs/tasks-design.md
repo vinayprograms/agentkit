@@ -36,7 +36,6 @@ A task moves through four states:
 3. **Completed** — Successfully finished
 4. **Failed** — Permanently failed (exhausted retries)
 
-![Task Lifecycle State Machine](images/tasks-lifecycle.png)
 
 ### Idempotency Keys
 
@@ -45,7 +44,6 @@ Every task has an **idempotency key** — a string that uniquely identifies the 
 - If yes, return the existing task (no duplicate created)
 - If no, create the new task
 
-![Idempotency Key Deduplication Flow](images/tasks-idempotency.png)
 
 Good idempotency keys include:
 - The entity being acted on (`order-123`)
@@ -63,7 +61,6 @@ Before processing a task, a worker must **claim** it. Claiming:
 
 Only the claiming worker can complete or fail the task. This prevents race conditions where two workers process the same task.
 
-![Claim Ownership and Conflict Resolution](images/tasks-claim-conflicts.png)
 
 ### Retry Logic
 
@@ -71,13 +68,11 @@ Tasks can specify a maximum number of attempts. When a worker fails a task:
 - If retries remain, the task returns to pending for another worker
 - If retries are exhausted, the task moves to failed permanently
 
-![Task Retry Flow Between Workers](images/tasks-retry-flow.png)
 
 This enables automatic retry without manual intervention.
 
 ## Architecture
 
-![TaskManager Architecture](images/tasks-architecture.png)
 
 The task manager stores tasks in the state backend (memory or NATS). Two types of keys:
 

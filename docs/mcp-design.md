@@ -64,7 +64,6 @@ The agent is the bridge between LLM and MCP servers.
 
 ## Architecture
 
-![MCP Architecture - Manager coordinates multiple clients connecting to external MCP servers via stdio JSON-RPC](images/mcp-architecture.png)
 
 Two main components:
 
@@ -85,7 +84,6 @@ The manager exposes all tools as if they came from one source.
 
 ### Startup Flow
 
-![MCP Connection Flow - Sequence of JSON-RPC messages between Agent and MCP Server](images/mcp-connection-flow.png)
 
 1. Agent spawns MCP server process
 2. Agent sends `initialize` request
@@ -97,7 +95,6 @@ The manager exposes all tools as if they came from one source.
 
 ### State Machine
 
-![MCP Client State Machine](images/mcp-state-machine.png)
 
 Clients move through states:
 - **Created** — Process spawned but not initialized
@@ -114,7 +111,6 @@ Clients move through states:
 
 When you have multiple MCP servers, the manager combines their tools:
 
-![Tool Aggregation Flow](images/mcp-tool-aggregation.png)
 
 You can also filter tools:
 - **Deny list** — Block specific tools from being exposed

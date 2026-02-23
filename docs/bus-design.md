@@ -37,13 +37,11 @@ Messages are sent to **subjects** — string identifiers like `events.task.compl
 
 When you publish to a subject, **all subscribers receive the message**. This is broadcast semantics — useful for events where everyone needs to know.
 
-![Publish/Subscribe pattern - all subscribers receive every message](images/bus-pubsub.png)
 
 ### Queue Groups (Load Balancing)
 
 Sometimes you want only **one subscriber** to handle each message (work distribution). Queue groups solve this — multiple subscribers join a named group, and messages are distributed round-robin among them.
 
-![Queue Groups pattern - messages load-balanced across workers](images/bus-queue.png)
 
 This enables horizontal scaling: add more workers to the queue group, and work automatically distributes across them.
 
@@ -51,7 +49,6 @@ This enables horizontal scaling: add more workers to the queue group, and work a
 
 For synchronous interactions, the bus supports request/reply. You send a request and wait for a single response. Under the hood, this uses a temporary reply subject.
 
-![Request/Reply pattern - synchronous RPC with reply](images/bus-reqreply.png)
 
 This is useful when an agent needs information from another agent and can't proceed without it.
 

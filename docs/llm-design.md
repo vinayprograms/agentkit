@@ -67,7 +67,6 @@ Some models support extended thinking (Claude) or reasoning effort (OpenAI o1/o3
 
 ## Architecture
 
-![LLM Package Architecture](images/llm-architecture.png)
 
 ### Provider Implementations
 

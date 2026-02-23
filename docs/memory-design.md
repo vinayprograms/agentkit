@@ -66,7 +66,6 @@ Besides long-term observations, the package provides a simple key-value scratchp
 
 ## Architecture
 
-![Memory Package Architecture](images/memory-architecture.png)
 
 ### Implementations
 

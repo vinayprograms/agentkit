@@ -63,7 +63,6 @@ You can watch for changes to keys matching a pattern. The store pushes notificat
 
 ## Architecture
 
-![StateStore Architecture](images/state-architecture.png)
 
 The `StateStore` interface has two implementations:
 
@@ -77,7 +76,6 @@ Locks prevent multiple agents from modifying the same resource simultaneously.
 
 ### How Locking Works
 
-![Lock Acquisition Flow](images/state-lock-acquisition.png)
 
 1. Agent requests a lock on a key with a TTL
 2. Store checks if lock already exists
@@ -89,7 +87,6 @@ The TTL is critical: if an agent crashes while holding a lock, the lock automati
 
 ### Lock Contention
 
-![Lock Contention Scenario](images/state-lock-contention.png)
 
 When two agents try to lock the same resource:
 
@@ -150,7 +147,6 @@ Store expensive computation results with TTL. On cache miss, compute and store. 
 
 ## Package Structure
 
-![Package Structure](images/state-package-structure.png)
 
 ## Testing Strategy
 

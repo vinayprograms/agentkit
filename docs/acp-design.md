@@ -60,7 +60,6 @@ Streaming is common for LLM-based agents — users see text appear incrementally
 
 ## Architecture
 
-![ACP Architecture - Communication flow between Code Editor (UI, Client) and Agent Process (Server, Handler, Tools) over stdio JSON-RPC](images/acp-architecture.png)
 
 The ACP server handles:
 1. Reading JSON-RPC messages from stdin
@@ -76,7 +75,6 @@ Your agent implements the handlers; ACP handles the protocol plumbing.
 
 Before any work, the editor and agent exchange capabilities:
 
-![Initialization Handshake - Editor sends initialize request, Agent validates and responds with capabilities](images/acp-init-handshake.png)
 
 1. Editor sends `initialize` with its info and capabilities
 2. Agent responds with its info and capabilities
@@ -87,7 +85,6 @@ Before any work, the editor and agent exchange capabilities:
 
 A typical session flow:
 
-![Session Lifecycle - Full flow from session creation through prompts, streaming updates, and cancellation](images/acp-session-lifecycle.png)
 
 1. Editor creates session (`session/new`)
 2. Editor sends prompt (`session/prompt`)

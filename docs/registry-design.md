@@ -57,7 +57,6 @@ Examples: "code-review", "image-generation", "web-search", "python-execution"
 
 ## Architecture
 
-![Registry Architecture](images/registry-architecture.png)
 
 The registry has two implementations:
 
@@ -105,7 +104,6 @@ This enables patterns like:
 
 Registry and heartbeat often work together:
 
-![Heartbeat Integration Flow](images/registry-heartbeat-integration.png)
 
 1. Agent sends heartbeat (proves it's alive)
 2. Heartbeat sender also updates registry (shares load/status)
