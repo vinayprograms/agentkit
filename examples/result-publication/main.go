@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Result Publication Example ===\n")
+	fmt.Println("=== Result Publication Example ===")
 
 	// Part 1: MemoryPublisher - simple in-process usage
 	fmt.Println("--- Part 1: MemoryPublisher ---")

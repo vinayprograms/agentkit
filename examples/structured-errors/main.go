@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== AgentKit Structured Errors Example ===\n")
+	fmt.Println("=== AgentKit Structured Errors Example ===")
 
 	// 1. Creating errors with different categories
 	demonstrateErrorCreation()
@@ -35,7 +35,7 @@ func main() {
 
 // demonstrateErrorCreation shows how to create errors with different categories.
 func demonstrateErrorCreation() {
-	fmt.Println("--- 1. Creating Errors with Different Categories ---\n")
+	fmt.Println("--- 1. Creating Errors with Different Categories ---")
 
 	// Transient errors (may succeed on retry)
 	timeout := errors.Timeout("database connection timed out")
@@ -73,7 +73,7 @@ func demonstrateErrorCreation() {
 
 // demonstrateErrorWrapping shows how to wrap errors with additional context.
 func demonstrateErrorWrapping() {
-	fmt.Println("--- 2. Wrapping Errors with Context ---\n")
+	fmt.Println("--- 2. Wrapping Errors with Context ---")
 
 	// Simulate a chain of operations that fail
 	baseErr := errors.Timeout("connection reset by peer")
@@ -106,7 +106,7 @@ func demonstrateErrorWrapping() {
 
 // demonstrateErrorChecking shows how to check error categories with Is/As.
 func demonstrateErrorChecking() {
-	fmt.Println("--- 3. Checking Error Categories with Is/As ---\n")
+	fmt.Println("--- 3. Checking Error Categories with Is/As ---")
 
 	// Create a wrapped error chain
 	inner := errors.RateLimited("too many requests")
@@ -139,7 +139,7 @@ func demonstrateErrorChecking() {
 
 // demonstrateRetryLogic shows retry decisions based on error type.
 func demonstrateRetryLogic() {
-	fmt.Println("--- 4. Retry Decisions Based on Error Type ---\n")
+	fmt.Println("--- 4. Retry Decisions Based on Error Type ---")
 
 	// Simulate different error scenarios
 	testCases := []struct {
@@ -234,7 +234,7 @@ func simulateUnreliableOperation(attempt int) error {
 
 // demonstrateErrorFormatting shows error formatting and JSON serialization.
 func demonstrateErrorFormatting() {
-	fmt.Println("--- 5. Error Formatting and JSON Output ---\n")
+	fmt.Println("--- 5. Error Formatting and JSON Output ---")
 
 	// Create a rich error with full metadata
 	err := errors.TaskFailed("task-xyz-789", "execution timeout",

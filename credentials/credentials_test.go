@@ -248,6 +248,11 @@ func TestLoad_NoFile(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
+	// Also set HOME to tmpDir so StandardPaths doesn't find real config files
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
 	creds, path, err := Load()
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
