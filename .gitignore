@@ -33,3 +33,9 @@ go.work.sum
 # Generated files
 docs/images/*.png
 
+# Example binaries (no extension)
+graceful-shutdown
+rate-limiting
+result-publication
+structured-errors
+
