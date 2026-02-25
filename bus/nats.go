@@ -2,6 +2,7 @@ package bus
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -238,8 +239,9 @@ func (b *NATSBus) Conn() *nats.Conn {
 
 // natsSub_ wraps a NATS subscription.
 type natsSub_ struct {
-	sub *nats.Subscription
-	ch  chan *Message
+	sub       *nats.Subscription
+	ch        chan *Message
+	closeOnce sync.Once
 }
 
 // Messages returns the message channel.
@@ -250,6 +252,8 @@ func (s *natsSub_) Messages() <-chan *Message {
 // Unsubscribe cancels the subscription.
 func (s *natsSub_) Unsubscribe() error {
 	err := s.sub.Unsubscribe()
-	close(s.ch)
+	s.closeOnce.Do(func() {
+		close(s.ch)
+	})
 	return err
 }
