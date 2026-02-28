@@ -19,6 +19,7 @@ type BusSender struct {
 	status   string
 	load     float64
 	metadata map[string]string
+	callback func() // Called after each heartbeat send (e.g., registry TTL touch)
 
 	running atomic.Bool
 	stopCh  chan struct{}
@@ -97,7 +98,19 @@ func (s *BusSender) sendHeartbeat() error {
 	if err != nil {
 		return err
 	}
-	return s.bus.Publish(hb.Subject(), data)
+	if err := s.bus.Publish(hb.Subject(), data); err != nil {
+		return err
+	}
+
+	// Invoke callback (e.g., registry TTL touch)
+	s.mu.RLock()
+	cb := s.callback
+	s.mu.RUnlock()
+	if cb != nil {
+		cb()
+	}
+
+	return nil
 }
 
 // buildHeartbeat creates a heartbeat with current state.
@@ -146,6 +159,14 @@ func (s *BusSender) SetLoad(load float64) {
 func (s *BusSender) SetMetadata(key, value string) {
 	s.mu.Lock()
 	s.metadata[key] = value
+	s.mu.Unlock()
+}
+
+// SetCallback sets a function called after each heartbeat send.
+// Useful for piggybacking operations like registry TTL refresh.
+func (s *BusSender) SetCallback(fn func()) {
+	s.mu.Lock()
+	s.callback = fn
 	s.mu.Unlock()
 }
 
