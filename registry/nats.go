@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -120,6 +121,52 @@ func (r *NATSRegistry) Register(info AgentInfo) error {
 
 	ctx := context.Background()
 	_, err = r.kv.Put(ctx, info.ID, data)
+	if err != nil {
+		return fmt.Errorf("put to kv: %w", err)
+	}
+
+	return nil
+}
+
+// Touch refreshes an agent's TTL by re-putting its entry.
+// Updates LastSeen timestamp. This is lighter than a full Register
+// since the caller doesn't need to rebuild the AgentInfo.
+func (r *NATSRegistry) Touch(id string) error {
+	if id == "" {
+		return ErrInvalidID
+	}
+
+	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return ErrClosed
+	}
+	r.mu.RUnlock()
+
+	ctx := context.Background()
+
+	// Get current entry
+	entry, err := r.kv.Get(ctx, id)
+	if err != nil {
+		if err == jetstream.ErrKeyNotFound {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get from kv: %w", err)
+	}
+
+	// Unmarshal, update LastSeen, re-put
+	var info AgentInfo
+	if err := json.Unmarshal(entry.Value(), &info); err != nil {
+		return fmt.Errorf("unmarshal agent info: %w", err)
+	}
+	info.LastSeen = time.Now()
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		return fmt.Errorf("marshal agent info: %w", err)
+	}
+
+	_, err = r.kv.Put(ctx, id, data)
 	if err != nil {
 		return fmt.Errorf("put to kv: %w", err)
 	}
@@ -273,6 +320,84 @@ func (r *NATSRegistry) FindByCapability(capability string) ([]AgentInfo, error) 
 	})
 
 	return result, nil
+}
+
+// FindByEmbedding returns agents ranked by cosine similarity to a query vector.
+func (r *NATSRegistry) FindByEmbedding(queryVec []float64, maxResults int) ([]AgentInfo, error) {
+	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	r.mu.RUnlock()
+
+	ctx := context.Background()
+	keys, err := r.kv.Keys(ctx)
+	if err != nil {
+		if err == jetstream.ErrNoKeysFound {
+			return []AgentInfo{}, nil
+		}
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+
+	type scored struct {
+		info  AgentInfo
+		score float64
+	}
+
+	var results []scored
+	for _, key := range keys {
+		entry, err := r.kv.Get(ctx, key)
+		if err != nil {
+			continue
+		}
+
+		var info AgentInfo
+		if err := json.Unmarshal(entry.Value(), &info); err != nil {
+			continue
+		}
+
+		if len(info.Embedding) == 0 || len(info.Embedding) != len(queryVec) {
+			continue
+		}
+
+		score := cosineSimilarity(queryVec, info.Embedding)
+		results = append(results, scored{info: info, score: score})
+	}
+
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+
+	// Limit results
+	if maxResults > 0 && len(results) > maxResults {
+		results = results[:maxResults]
+	}
+
+	agents := make([]AgentInfo, len(results))
+	for i, r := range results {
+		agents[i] = r.info
+	}
+	return agents, nil
+}
+
+// cosineSimilarity computes cosine similarity between two vectors.
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
 }
 
 // Watch returns a channel of registry events.

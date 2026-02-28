@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -67,6 +68,29 @@ func (r *MemoryRegistry) Register(info AgentInfo) error {
 	}
 	r.notifyWatchers(Event{Type: eventType, Agent: info})
 
+	return nil
+}
+
+// Touch refreshes an agent's LastSeen timestamp.
+func (r *MemoryRegistry) Touch(id string) error {
+	if id == "" {
+		return ErrInvalidID
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return ErrClosed
+	}
+
+	agent, exists := r.agents[id]
+	if !exists {
+		return ErrNotFound
+	}
+
+	agent.LastSeen = time.Now()
+	r.agents[id] = agent
 	return nil
 }
 
@@ -180,6 +204,68 @@ func (r *MemoryRegistry) FindByCapability(capability string) ([]AgentInfo, error
 	})
 
 	return result, nil
+}
+
+// FindByEmbedding returns agents ranked by cosine similarity to a query vector.
+func (r *MemoryRegistry) FindByEmbedding(queryVec []float64, maxResults int) ([]AgentInfo, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.closed {
+		return nil, ErrClosed
+	}
+
+	type scored struct {
+		info  AgentInfo
+		score float64
+	}
+
+	var results []scored
+	now := time.Now()
+
+	for _, agent := range r.agents {
+		if r.ttl > 0 && now.Sub(agent.LastSeen) > r.ttl {
+			continue
+		}
+		if len(agent.Embedding) == 0 || len(agent.Embedding) != len(queryVec) {
+			continue
+		}
+
+		score := memCosineSimilarity(queryVec, agent.Embedding)
+		results = append(results, scored{info: agent, score: score})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+
+	if maxResults > 0 && len(results) > maxResults {
+		results = results[:maxResults]
+	}
+
+	agents := make([]AgentInfo, len(results))
+	for i, r := range results {
+		agents[i] = r.info
+	}
+	return agents, nil
+}
+
+// memCosineSimilarity computes cosine similarity between two vectors.
+func memCosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
 }
 
 // Watch returns a channel of registry events.

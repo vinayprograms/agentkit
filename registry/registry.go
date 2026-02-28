@@ -47,6 +47,9 @@ type AgentInfo struct {
 	// Metadata contains additional key-value pairs.
 	Metadata map[string]string
 
+	// Embedding is the vector representation for semantic matching.
+	Embedding []float64 `json:"embedding,omitempty"`
+
 	// LastSeen is when the agent last updated its registration.
 	LastSeen time.Time
 }
@@ -89,6 +92,10 @@ type Registry interface {
 	// If an agent with the same ID exists, it updates the entry.
 	Register(info AgentInfo) error
 
+	// Touch refreshes an agent's TTL without rewriting the full entry.
+	// Updates LastSeen and resets the KV entry age for TTL purposes.
+	Touch(id string) error
+
 	// Deregister removes an agent from the registry.
 	// Returns ErrNotFound if the agent doesn't exist.
 	Deregister(id string) error
@@ -102,8 +109,13 @@ type Registry interface {
 	List(filter *Filter) ([]AgentInfo, error)
 
 	// FindByCapability returns agents with a specific capability.
+	// Supports exact match and wildcard (e.g., "code.*").
 	// Results are sorted by load (lowest first).
 	FindByCapability(capability string) ([]AgentInfo, error)
+
+	// FindByEmbedding returns agents ranked by cosine similarity to a query vector.
+	// Agents must have an Embedding field set. Returns up to maxResults matches.
+	FindByEmbedding(queryVec []float64, maxResults int) ([]AgentInfo, error)
 
 	// Watch returns a channel of registry events.
 	// The channel is closed when the registry is closed.
@@ -126,7 +138,20 @@ func ValidateAgentInfo(info AgentInfo) error {
 }
 
 // HasCapability checks if an agent has a specific capability.
+// Supports exact match and wildcard prefix (e.g., "code.*" matches "code.golang").
 func HasCapability(info AgentInfo, capability string) bool {
+	// Check for wildcard
+	if len(capability) > 2 && capability[len(capability)-2:] == ".*" {
+		prefix := capability[:len(capability)-1] // "code.*" -> "code."
+		for _, cap := range info.Capabilities {
+			if len(cap) >= len(prefix) && cap[:len(prefix)] == prefix {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Exact match
 	for _, cap := range info.Capabilities {
 		if cap == capability {
 			return true
