@@ -39,6 +39,8 @@ func New(cfg Config) (Embedder, error) {
 		return newGoogle(cfg)
 	case "openai-compat":
 		return newOpenAICompat(cfg)
+	case "ollama", "ollama-cloud", "ollama-local":
+		return newOllama(cfg)
 	default:
 		return nil, fmt.Errorf("unknown embedding provider: %q", cfg.Provider)
 	}

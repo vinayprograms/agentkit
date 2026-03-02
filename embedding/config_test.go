@@ -91,6 +91,44 @@ func TestNewOpenAICompat(t *testing.T) {
 	}
 }
 
+func TestNewOllamaMissingModel(t *testing.T) {
+	_, err := New(Config{Provider: "ollama"})
+	if err == nil {
+		t.Fatal("expected error for missing model")
+	}
+}
+
+func TestNewOllamaWithModel(t *testing.T) {
+	e, err := New(Config{Provider: "ollama", Model: "nomic-embed-text"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+}
+
+func TestNewOllamaCloudAlias(t *testing.T) {
+	e, err := New(Config{Provider: "ollama-cloud", Model: "nomic-embed-text", APIKey: "key", BaseURL: "https://ollama.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+}
+
+func TestNewOllamaDefaultBaseURL(t *testing.T) {
+	e, err := New(Config{Provider: "ollama-local", Model: "nomic-embed-text"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	oe := e.(*ollamaEmbedder)
+	if oe.baseURL != "http://localhost:11434" {
+		t.Fatalf("expected default base URL, got %s", oe.baseURL)
+	}
+}
+
 func TestProviderCaseInsensitive(t *testing.T) {
 	e, err := New(Config{Provider: "OpenAI", APIKey: "sk-test"})
 	if err != nil {
