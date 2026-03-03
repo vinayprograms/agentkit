@@ -8,7 +8,7 @@ import (
 
 // Config holds configuration for creating an Embedder.
 type Config struct {
-	// Provider name: "openai", "google", "openai-compat", "none"
+	// Provider name: "openai", "google", "openai-compat", "litellm", "none"
 	Provider string `toml:"provider" json:"provider"`
 
 	// Model name (e.g., "text-embedding-3-small", "text-embedding-004")
@@ -37,7 +37,7 @@ func New(cfg Config) (Embedder, error) {
 		return newOpenAI(cfg)
 	case "google":
 		return newGoogle(cfg)
-	case "openai-compat":
+	case "openai-compat", "litellm":
 		return newOpenAICompat(cfg)
 	case "ollama", "ollama-cloud", "ollama-local":
 		return newOllama(cfg)

@@ -129,6 +129,34 @@ func TestNewOllamaDefaultBaseURL(t *testing.T) {
 	}
 }
 
+func TestNewLiteLLMMissingBaseURL(t *testing.T) {
+	_, err := New(Config{Provider: "litellm", Model: "text-embedding-3-small"})
+	if err == nil {
+		t.Fatal("expected error for missing base_url")
+	}
+}
+
+func TestNewLiteLLMMissingModel(t *testing.T) {
+	_, err := New(Config{Provider: "litellm", BaseURL: "http://localhost:4000"})
+	if err == nil {
+		t.Fatal("expected error for missing model")
+	}
+}
+
+func TestNewLiteLLM(t *testing.T) {
+	e, err := New(Config{
+		Provider: "litellm",
+		BaseURL:  "http://localhost:4000",
+		Model:    "text-embedding-3-small",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+}
+
 func TestProviderCaseInsensitive(t *testing.T) {
 	e, err := New(Config{Provider: "OpenAI", APIKey: "sk-test"})
 	if err != nil {
