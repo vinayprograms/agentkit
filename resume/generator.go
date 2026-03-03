@@ -4,8 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// stripMarkdownFences removes ```json ... ``` or ``` ... ``` wrappers from LLM responses.
+func stripMarkdownFences(s string) string {
+	s = strings.TrimSpace(s)
+	// Remove opening ```json or ```
+	if strings.HasPrefix(s, "```json") {
+		s = strings.TrimPrefix(s, "```json")
+	} else if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```")
+	}
+	// Remove closing ```
+	if strings.HasSuffix(s, "```") {
+		s = strings.TrimSuffix(s, "```")
+	}
+	return strings.TrimSpace(s)
+}
 
 // LLM is a minimal interface for generating resume content.
 // Typically backed by a small/cheap model (e.g., Haiku).
@@ -45,6 +62,9 @@ func GenerateFromAgentfile(ctx context.Context, agentID string, af AgentfileInfo
 	if err != nil {
 		return nil, fmt.Errorf("llm inference failed: %w", err)
 	}
+
+	// Strip markdown code fences if present (some LLMs wrap JSON in ```json ... ```)
+	resp = stripMarkdownFences(resp)
 
 	// Parse LLM response
 	var inferred inferredResume
