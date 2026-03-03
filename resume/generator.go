@@ -121,7 +121,7 @@ type inferredResume struct {
 
 // buildInferencePrompt creates the prompt for capability inference.
 func buildInferencePrompt(af AgentfileInfo, tools []string) string {
-	prompt := `Analyze this agent definition and respond with JSON only (no markdown, no explanation).
+	prompt := `You are a capability analyzer. Given an agent definition, produce a structured description.
 
 Agent name: ` + af.Name + `
 
@@ -139,18 +139,22 @@ Goals:
 	}
 
 	prompt += `
-Respond with this exact JSON structure:
+Return a JSON object with:
 {
   "description": "One sentence describing what this agent does",
   "capabilities": ["dot.separated.tags"]
 }
 
-Rules for capabilities:
-- Use dot-separated hierarchy: code.golang, test.unit, design.system, ops.deploy
-- First level is the domain: code, test, design, ops, data, security, docs
-- Second level is the specialization
-- Include 2-5 capabilities
-- Be specific based on the goals and tools`
+Capability rules:
+- Use dot-separated hierarchy (e.g., code.golang, test.unit, docs.writing)
+- 2-5 capabilities based on goals and tools
+- First level is domain: code, test, design, ops, data, security, docs
+
+Example:
+{
+  "description": "Analyzes data and generates reports",
+  "capabilities": ["data.analysis", "docs.reporting", "code.python"]
+}`
 
 	return prompt
 }
