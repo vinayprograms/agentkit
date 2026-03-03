@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-// stripMarkdownFences removes ```json ... ``` or ``` ... ``` wrappers from LLM responses.
+// stripMarkdownFences removes ```json ... ``` or ``` ... ``` wrappers from LLM responses
+// and extracts the JSON object bounds.
 func stripMarkdownFences(s string) string {
 	s = strings.TrimSpace(s)
+
 	// Remove opening ```json or ```
 	if strings.HasPrefix(s, "```json") {
 		s = strings.TrimPrefix(s, "```json")
@@ -21,7 +23,16 @@ func stripMarkdownFences(s string) string {
 	if strings.HasSuffix(s, "```") {
 		s = strings.TrimSuffix(s, "```")
 	}
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+
+	// Find JSON object bounds (in case there's extra text)
+	jsonStart := strings.Index(s, "{")
+	jsonEnd := strings.LastIndex(s, "}")
+	if jsonStart >= 0 && jsonEnd > jsonStart {
+		s = s[jsonStart : jsonEnd+1]
+	}
+
+	return s
 }
 
 // LLM is a minimal interface for generating resume content.
