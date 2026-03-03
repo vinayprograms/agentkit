@@ -73,7 +73,9 @@ func (s *BusSender) run(ctx context.Context) {
 	defer close(s.doneCh)
 
 	// Send initial heartbeat immediately
-	s.sendHeartbeat()
+	if err := s.sendHeartbeat(); err != nil {
+		// Log but don't fail - will retry on next interval
+	}
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
