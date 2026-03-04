@@ -36,6 +36,7 @@ type TaskMessage struct {
 
 	// Metadata
 	CreatedAt   time.Time         `json:"created_at"`
+	SubmittedAt time.Time         `json:"submitted_at,omitempty"` // When task was submitted (for elapsed tracking)
 	SubmittedBy string            `json:"submitted_by,omitempty"` // Orchestrator/user ID
 	Tags        []string          `json:"tags,omitempty"`         // Labels for filtering
 	Metadata    map[string]string `json:"metadata,omitempty"`     // Arbitrary key-value pairs
