@@ -151,7 +151,7 @@ func (r *Registry) registerBuiltins() {
 	r.Register(&globTool{policy: r.policy})
 	r.Register(&grepTool{policy: r.policy})
 	r.Register(&lsTool{policy: r.policy})
-	r.Register(&bashTool{policy: r.policy})
+	// bash is NOT registered by default — enable via EnableBash()
 	r.Register(&mkdirTool{policy: r.policy})
 	r.Register(&mvTool{policy: r.policy})
 	r.Register(&cpTool{policy: r.policy})
@@ -210,6 +210,15 @@ func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 
 // SetBashChecker sets the bash security checker for the bash tool.
 // The checker performs two-step verification: deterministic denylist + LLM policy check.
+// EnableBash registers the bash tool. Must be called before SetBashChecker/SetBashLLMChecker.
+// Bash is opt-in (--yolo flag) because built-in tools cover most use cases safely.
+func (r *Registry) EnableBash() {
+	if _, exists := r.tools["bash"]; exists {
+		return // Already enabled
+	}
+	r.Register(&bashTool{policy: r.policy})
+}
+
 func (r *Registry) SetBashChecker(checker *policy.BashChecker) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
 		bt.checker = checker
