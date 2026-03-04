@@ -46,6 +46,10 @@ type ChatResponse struct {
 	OutputTokens int                `json:"output_tokens"`
 	Model        string             `json:"model"`
 	TTFTMs       int64              `json:"ttft_ms,omitempty"` // Time to first token in milliseconds
+
+	// Cache metrics (Anthropic prompt caching)
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // Provider is the interface for LLM providers.
@@ -56,21 +60,21 @@ type Provider interface {
 
 // ProviderConfig holds configuration for the Provider adapter.
 type ProviderConfig struct {
-	Provider     string         `json:"provider"`      // anthropic, openai, google, groq, mistral, openai-compat
+	Provider     string         `json:"provider"` // anthropic, openai, google, groq, mistral, openai-compat
 	Model        string         `json:"model"`
 	APIKey       string         `json:"api_key"`
 	IsOAuthToken bool           `json:"is_oauth_token"` // True if APIKey is an OAuth access token (Anthropic only)
 	MaxTokens    int            `json:"max_tokens"`
-	BaseURL      string         `json:"base_url"`      // Custom API endpoint (for OpenRouter, LiteLLM, Ollama, LMStudio)
-	Thinking     ThinkingConfig `json:"thinking"`      // Thinking/reasoning configuration
-	RetryConfig  RetryConfig    `json:"retry"`         // Retry configuration
+	BaseURL      string         `json:"base_url"` // Custom API endpoint (for OpenRouter, LiteLLM, Ollama, LMStudio)
+	Thinking     ThinkingConfig `json:"thinking"` // Thinking/reasoning configuration
+	RetryConfig  RetryConfig    `json:"retry"`    // Retry configuration
 }
 
 // RetryConfig holds retry settings for LLM calls.
 type RetryConfig struct {
-	MaxRetries   int           `json:"max_retries"`   // Max retry attempts (default 5)
-	MaxBackoff   time.Duration `json:"max_backoff"`   // Max backoff duration (default 60s)
-	InitBackoff  time.Duration `json:"init_backoff"`  // Initial backoff (default 1s)
+	MaxRetries  int           `json:"max_retries"`  // Max retry attempts (default 5)
+	MaxBackoff  time.Duration `json:"max_backoff"`  // Max backoff duration (default 60s)
+	InitBackoff time.Duration `json:"init_backoff"` // Initial backoff (default 1s)
 }
 
 // Validate validates the configuration.
@@ -140,7 +144,7 @@ type MockProvider struct {
 	lastRequest  *ChatRequest
 	err          error
 	callCount    int
-	
+
 	// ChatFunc can be overridden for custom behavior
 	ChatFunc func(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 }

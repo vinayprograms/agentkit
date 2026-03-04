@@ -239,10 +239,12 @@ func (p *AnthropicProvider) chatNonStreaming(
 
 	// Convert response
 	result := &ChatResponse{
-		StopReason:   string(resp.StopReason),
-		InputTokens:  int(resp.Usage.InputTokens),
-		OutputTokens: int(resp.Usage.OutputTokens),
-		Model:        string(resp.Model),
+		StopReason:               string(resp.StopReason),
+		InputTokens:              int(resp.Usage.InputTokens),
+		OutputTokens:             int(resp.Usage.OutputTokens),
+		CacheCreationInputTokens: int(resp.Usage.CacheCreationInputTokens),
+		CacheReadInputTokens:     int(resp.Usage.CacheReadInputTokens),
+		Model:                    string(resp.Model),
 	}
 
 	// Extract content and tool calls from response
@@ -338,6 +340,8 @@ func (p *AnthropicProvider) doStreamingRequest(
 			msg := event.AsMessageStart()
 			result.Model = string(msg.Message.Model)
 			result.InputTokens = int(msg.Message.Usage.InputTokens)
+			result.CacheCreationInputTokens = int(msg.Message.Usage.CacheCreationInputTokens)
+			result.CacheReadInputTokens = int(msg.Message.Usage.CacheReadInputTokens)
 
 		case "content_block_start":
 			evt := event.AsContentBlockStart()
