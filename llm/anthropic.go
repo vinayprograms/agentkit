@@ -152,11 +152,16 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 
 	if systemPrompt != "" {
 		params.System = []anthropic.TextBlockParam{
-			{Text: systemPrompt},
+			{
+				Text:         systemPrompt,
+				CacheControl: anthropic.NewCacheControlEphemeralParam(),
+			},
 		}
 	}
 
 	if len(tools) > 0 {
+		// Mark last tool for caching (cache breakpoint covers all preceding tools)
+		tools[len(tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		params.Tools = tools
 	}
 
