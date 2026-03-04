@@ -166,7 +166,6 @@ func (r *Registry) registerBuiltins() {
 	r.Register(&hostnameTool{})
 	r.Register(&whoamiTool{})
 	r.Register(&envTool{})
-	r.Register(&whichTool{})
 	r.Register(&sysinfoTool{})
 	r.Register(&webFetchTool{policy: r.policy})
 	r.Register(&webSearchTool{policy: r.policy})
