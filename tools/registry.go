@@ -162,6 +162,12 @@ func (r *Registry) registerBuiltins() {
 	r.Register(&treeTool{policy: r.policy})
 	r.Register(&patchTool{policy: r.policy})
 	r.Register(&gitTool{policy: r.policy})
+	r.Register(&pwdTool{})
+	r.Register(&hostnameTool{})
+	r.Register(&whoamiTool{})
+	r.Register(&envTool{})
+	r.Register(&whichTool{})
+	r.Register(&sysinfoTool{})
 	r.Register(&webFetchTool{policy: r.policy})
 	r.Register(&webSearchTool{policy: r.policy})
 	r.Register(&spawnAgentTool{})  // spawner set later via SetSpawner
