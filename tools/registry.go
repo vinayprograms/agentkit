@@ -152,6 +152,16 @@ func (r *Registry) registerBuiltins() {
 	r.Register(&grepTool{policy: r.policy})
 	r.Register(&lsTool{policy: r.policy})
 	r.Register(&bashTool{policy: r.policy})
+	r.Register(&mkdirTool{policy: r.policy})
+	r.Register(&mvTool{policy: r.policy})
+	r.Register(&cpTool{policy: r.policy})
+	r.Register(&rmTool{policy: r.policy})
+	r.Register(&headTool{policy: r.policy})
+	r.Register(&tailTool{policy: r.policy})
+	r.Register(&diffTool{policy: r.policy})
+	r.Register(&treeTool{policy: r.policy})
+	r.Register(&patchTool{policy: r.policy})
+	r.Register(&gitTool{policy: r.policy})
 	r.Register(&webFetchTool{policy: r.policy})
 	r.Register(&webSearchTool{policy: r.policy})
 	r.Register(&spawnAgentTool{})  // spawner set later via SetSpawner
@@ -300,7 +310,7 @@ func (r *Registry) Definitions() []ToolDefinition {
 func sanitizePath(path string, workspace string) (string, error) {
 	// Clean the path to remove . and .. components
 	cleaned := filepath.Clean(path)
-	
+
 	// Make workspace absolute first
 	if workspace != "" && !filepath.IsAbs(workspace) {
 		var err error
@@ -309,7 +319,7 @@ func sanitizePath(path string, workspace string) (string, error) {
 			return "", fmt.Errorf("invalid workspace: %w", err)
 		}
 	}
-	
+
 	// Convert to absolute path
 	var absPath string
 	if filepath.IsAbs(cleaned) {
@@ -317,7 +327,7 @@ func sanitizePath(path string, workspace string) (string, error) {
 	} else {
 		absPath = filepath.Join(workspace, cleaned)
 	}
-	
+
 	// Resolve any symlinks to get the real path
 	realPath, err := filepath.EvalSymlinks(filepath.Dir(absPath))
 	if err != nil {
@@ -325,7 +335,7 @@ func sanitizePath(path string, workspace string) (string, error) {
 		realPath = filepath.Dir(absPath)
 	}
 	realPath = filepath.Join(realPath, filepath.Base(absPath))
-	
+
 	// Ensure the path is within the workspace (if workspace is set)
 	if workspace != "" {
 		// Resolve workspace symlinks too
@@ -333,7 +343,7 @@ func sanitizePath(path string, workspace string) (string, error) {
 		if err != nil {
 			realWorkspace = workspace
 		}
-		
+
 		// Check if path starts with workspace
 		if !strings.HasPrefix(realPath, realWorkspace+string(filepath.Separator)) && realPath != realWorkspace {
 			// Allow absolute paths outside workspace only if they're truly absolute in the original
@@ -342,7 +352,7 @@ func sanitizePath(path string, workspace string) (string, error) {
 			}
 		}
 	}
-	
+
 	return absPath, nil
 }
 
@@ -926,7 +936,7 @@ func (t *webFetchTool) Execute(ctx context.Context, rawArgs map[string]interface
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GridAgent/1.0)")
-	
+
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch failed: %w", err)
@@ -942,7 +952,7 @@ func (t *webFetchTool) Execute(ctx context.Context, rawArgs map[string]interface
 
 	// Extract readable text from HTML
 	content := extractReadableText(string(body))
-	
+
 	// Truncate to ~100KB for summarization (like Claude Code)
 	maxChars := 100000
 	if len(content) > maxChars {
@@ -980,19 +990,19 @@ func extractReadableText(html string) string {
 	html = reNav.ReplaceAllString(html, "")
 	reFooter := regexp.MustCompile(`(?is)<footer[^>]*>.*?</footer>`)
 	html = reFooter.ReplaceAllString(html, "")
-	
+
 	// Remove HTML comments
 	reComments := regexp.MustCompile(`(?s)<!--.*?-->`)
 	html = reComments.ReplaceAllString(html, "")
-	
+
 	// Add newlines before block elements
 	reBlock := regexp.MustCompile(`<(p|div|br|h[1-6]|li|tr)[^>]*>`)
 	html = reBlock.ReplaceAllString(html, "\n")
-	
+
 	// Remove all remaining HTML tags
 	reTags := regexp.MustCompile(`<[^>]+>`)
 	text := reTags.ReplaceAllString(html, "")
-	
+
 	// Decode common HTML entities
 	text = strings.ReplaceAll(text, "&nbsp;", " ")
 	text = strings.ReplaceAll(text, "&amp;", "&")
@@ -1001,13 +1011,13 @@ func extractReadableText(html string) string {
 	text = strings.ReplaceAll(text, "&quot;", "\"")
 	text = strings.ReplaceAll(text, "&#39;", "'")
 	text = strings.ReplaceAll(text, "&apos;", "'")
-	
+
 	// Clean up whitespace
 	reMultiSpace := regexp.MustCompile(`[ \t]+`)
 	text = reMultiSpace.ReplaceAllString(text, " ")
 	reMultiNewline := regexp.MustCompile(`\n{3,}`)
 	text = reMultiNewline.ReplaceAllString(text, "\n\n")
-	
+
 	return strings.TrimSpace(text)
 }
 
@@ -1019,9 +1029,9 @@ type webSearchTool struct {
 
 // Global rate limiter for web search to prevent hammering APIs
 var (
-	searchMutex     sync.Mutex
-	lastSearchTime  time.Time
-	searchCooldown  = 500 * time.Millisecond // minimum time between searches
+	searchMutex    sync.Mutex
+	lastSearchTime time.Time
+	searchCooldown = 500 * time.Millisecond // minimum time between searches
 )
 
 func (t *webSearchTool) Name() string { return "web_search" }
@@ -1104,7 +1114,7 @@ func (t *webSearchTool) Execute(ctx context.Context, rawArgs map[string]interfac
 	if tavilyKey != "" {
 		return searchTavily(ctx, query, count, tavilyKey)
 	}
-	
+
 	// Fallback to DuckDuckGo HTML (no API key required)
 	return searchDuckDuckGo(ctx, query, count)
 }
@@ -1122,7 +1132,7 @@ type SearchResult struct {
 func searchSearXNG(ctx context.Context, query string, count int, baseURL string) ([]SearchResult, error) {
 	// Normalize base URL
 	baseURL = strings.TrimSuffix(baseURL, "/")
-	
+
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
 		baseURL, strings.ReplaceAll(query, " ", "+"))
 
@@ -1270,12 +1280,12 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 // DDG-specific rate limiting
 // Total worst-case: 2s cooldown + 3 retries * 3s avg = ~11s (fits in 30s timeout)
 var (
-	ddgMutex        sync.Mutex
-	ddgLastSearch   time.Time
-	ddgCooldown     = 2 * time.Second // Between requests
-	ddgBackoff      = 2 * time.Second // Initial backoff on rate limit
-	ddgMaxBackoff   = 5 * time.Second // Cap backoff to stay within timeout
-	ddgMaxRetries   = 3
+	ddgMutex      sync.Mutex
+	ddgLastSearch time.Time
+	ddgCooldown   = 2 * time.Second // Between requests
+	ddgBackoff    = 2 * time.Second // Initial backoff on rate limit
+	ddgMaxBackoff = 5 * time.Second // Cap backoff to stay within timeout
+	ddgMaxRetries = 3
 )
 
 // searchDuckDuckGo searches using DuckDuckGo's HTML endpoint (no API key needed).
@@ -1297,12 +1307,12 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]SearchRes
 	ddgMutex.Unlock()
 
 	// Use the HTML endpoint
-	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s", 
+	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s",
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
 
 	backoff := ddgBackoff
 	var lastErr error
-	
+
 	for attempt := 0; attempt <= ddgMaxRetries; attempt++ {
 		if attempt > 0 {
 			// Wait with backoff before retry
@@ -1363,17 +1373,17 @@ func parseDuckDuckGoHTML(html string, count int) []SearchResult {
 	// with snippets in <a class="result__snippet"> tags
 	// Result links: <a rel="nofollow" class="result__a" href="...">Title</a>
 	// Snippets: <a class="result__snippet" href="...">Snippet text</a>
-	
+
 	linkRe := regexp.MustCompile(`<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([^<]+)</a>`)
 	snippetRe := regexp.MustCompile(`<a[^>]+class="result__snippet"[^>]*>([^<]+(?:<[^>]+>[^<]*</[^>]+>)*[^<]*)</a>`)
-	
+
 	links := linkRe.FindAllStringSubmatch(html, count*2) // Get extra in case some are filtered
 	snippets := snippetRe.FindAllStringSubmatch(html, count*2)
 
 	for i := 0; i < len(links) && len(results) < count; i++ {
 		url := links[i][1]
 		title := strings.TrimSpace(links[i][2])
-		
+
 		// DuckDuckGo wraps URLs in a redirect - extract the actual URL
 		if strings.Contains(url, "uddg=") {
 			if parts := strings.Split(url, "uddg="); len(parts) > 1 {
@@ -1387,7 +1397,7 @@ func parseDuckDuckGoHTML(html string, count int) []SearchResult {
 				}
 			}
 		}
-		
+
 		// Skip non-http URLs
 		if !strings.HasPrefix(url, "http") {
 			continue
