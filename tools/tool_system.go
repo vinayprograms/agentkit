@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // ── pwd ──
@@ -203,5 +204,47 @@ func (t *sysinfoTool) Execute(ctx context.Context, rawArgs map[string]interface{
 		"hostname: " + hostname,
 		"user: " + username,
 		"cwd: " + cwd,
+	}, "\n"), nil
+}
+
+// ── date ──
+
+type dateTool struct{}
+
+func (t *dateTool) Name() string { return "date" }
+func (t *dateTool) Description() string {
+	return "Get the current date and time. Returns ISO 8601 format by default, or a custom format. Also returns Unix timestamp and day of week."
+}
+func (t *dateTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"timezone": map[string]interface{}{
+				"type":        "string",
+				"description": "IANA timezone (e.g., 'America/New_York', 'UTC'). Defaults to system local time.",
+			},
+		},
+	}
+}
+
+func (t *dateTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
+	args := Args(rawArgs)
+	now := time.Now()
+
+	if tz, err := args.String("timezone"); err == nil && tz != "" {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return nil, fmt.Errorf("invalid timezone %q: %w", tz, err)
+		}
+		now = now.In(loc)
+	}
+
+	return strings.Join([]string{
+		"datetime: " + now.Format(time.RFC3339),
+		"date: " + now.Format("2006-01-02"),
+		"time: " + now.Format("15:04:05"),
+		"day: " + now.Weekday().String(),
+		fmt.Sprintf("unix: %d", now.Unix()),
+		"timezone: " + now.Location().String(),
 	}, "\n"), nil
 }

@@ -166,6 +166,7 @@ func (r *Registry) registerBuiltins() {
 	r.Register(&hostnameTool{})
 	r.Register(&whoamiTool{})
 	r.Register(&sysinfoTool{})
+	r.Register(&dateTool{})
 	r.Register(&webFetchTool{policy: r.policy})
 	r.Register(&webSearchTool{policy: r.policy})
 	r.Register(&spawnAgentTool{})  // spawner set later via SetSpawner
