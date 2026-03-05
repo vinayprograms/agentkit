@@ -211,9 +211,9 @@ func (t *sysinfoTool) Execute(ctx context.Context, rawArgs map[string]interface{
 
 type dateTool struct{}
 
-func (t *dateTool) Name() string { return "date" }
+func (t *dateTool) Name() string { return "now" }
 func (t *dateTool) Description() string {
-	return "Get the current date and time. Returns ISO 8601 format by default, or a custom format. Also returns Unix timestamp and day of week."
+	return "Get the current date and time. Returns ISO 8601 datetime, date, time, day of week, and Unix timestamp. Use this whenever you need today's date or the current time."
 }
 func (t *dateTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
