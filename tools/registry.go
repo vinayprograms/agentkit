@@ -258,6 +258,21 @@ func (r *Registry) Get(name string) Tool {
 	return r.tools[name]
 }
 
+// Subset returns a new Registry containing only the named tools.
+// Tools not found in the original registry are silently skipped.
+func (r *Registry) Subset(names []string) *Registry {
+	sub := &Registry{
+		tools:  make(map[string]Tool),
+		policy: r.policy,
+	}
+	for _, name := range names {
+		if t, ok := r.tools[name]; ok {
+			sub.tools[name] = t
+		}
+	}
+	return sub
+}
+
 // Has returns true if the registry has a tool with the given name.
 func (r *Registry) Has(name string) bool {
 	if r == nil {
