@@ -209,7 +209,7 @@ var HighRiskTools = map[string]bool{
 // agentContext filters blocks to only those from the same agent (empty = all blocks).
 func (v *Verifier) VerifyToolCall(ctx context.Context, toolName string, args map[string]interface{}, originalGoal, agentContext string) (*VerificationResult, error) {
 	result := &VerificationResult{
-		Allowed:  true,
+		Allowed:  false,
 		ToolName: toolName,
 	}
 
@@ -224,6 +224,7 @@ func (v *Verifier) VerifyToolCall(ctx context.Context, toolName string, args map
 
 	if tier1Result.Pass {
 		// No untrusted content or low-risk tool - allow
+		result.Allowed = true
 		v.recordDecision(tier1Result.Block, "pass", "skipped", "skipped")
 		return result, nil
 	}
@@ -236,6 +237,7 @@ func (v *Verifier) VerifyToolCall(ctx context.Context, toolName string, args map
 
 			if !tier2Result.Suspicious {
 				// Triage cleared
+				result.Allowed = true
 				v.recordDecision(tier1Result.Block, "escalate", "pass", "skipped")
 				return result, nil
 			}
