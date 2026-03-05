@@ -394,7 +394,7 @@ type readTool struct {
 func (t *readTool) Name() string { return "read" }
 
 func (t *readTool) Description() string {
-	return "Read the contents of a file at the given path."
+	return "Read the contents of a file. Returns the full file content. For large files, use head/tail to read specific portions, or grep to find specific content without reading everything."
 }
 
 func (t *readTool) Parameters() map[string]interface{} {
@@ -503,7 +503,7 @@ type editTool struct {
 func (t *editTool) Name() string { return "edit" }
 
 func (t *editTool) Description() string {
-	return "Find and replace text in a file. The old text must match exactly."
+	return "Find and replace text in a file. The old text must match exactly (including whitespace and newlines). Supports multiline matches. The old text must appear exactly once in the file — if ambiguous, include more surrounding context to make it unique."
 }
 
 func (t *editTool) Parameters() map[string]interface{} {
@@ -580,7 +580,7 @@ type globTool struct {
 func (t *globTool) Name() string { return "glob" }
 
 func (t *globTool) Description() string {
-	return "Find files matching a glob pattern."
+	return "Find files matching a glob pattern. Supports * (any chars in one dir), ? (one char), and ** (recursive across directories). Examples: '*.go', 'src/**/*.ts', 'config/*.{json,toml}'."
 }
 
 func (t *globTool) Parameters() map[string]interface{} {
@@ -628,7 +628,7 @@ type grepTool struct {
 func (t *grepTool) Name() string { return "grep" }
 
 func (t *grepTool) Description() string {
-	return "Search for a regex pattern in a file or directory."
+	return "Search for a regex pattern in files. When given a directory, recursively searches all files. Returns file path, line number, and matching line for each hit. Prefer this over bash+grep — it respects policy and returns structured results."
 }
 
 func (t *grepTool) Parameters() map[string]interface{} {
@@ -741,7 +741,7 @@ type lsTool struct {
 func (t *lsTool) Name() string { return "ls" }
 
 func (t *lsTool) Description() string {
-	return "List directory contents."
+	return "List directory contents. Returns name, type (file/dir), and size for each entry. Non-recursive — shows only immediate children. Use tree for recursive structure."
 }
 
 func (t *lsTool) Parameters() map[string]interface{} {
@@ -794,7 +794,7 @@ type bashTool struct {
 func (t *bashTool) Name() string { return "bash" }
 
 func (t *bashTool) Description() string {
-	return "Execute a shell command."
+	return "Execute a shell command. Use as last resort — prefer dedicated tools (read, write, edit, grep, glob, tree, git) when they cover the operation. Bash is best for: build commands, running tests, installing packages, piping multiple commands, or operations no built-in tool handles."
 }
 
 func (t *bashTool) Parameters() map[string]interface{} {

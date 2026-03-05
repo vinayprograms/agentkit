@@ -19,7 +19,7 @@ type diffTool struct {
 func (t *diffTool) Name() string { return "diff" }
 
 func (t *diffTool) Description() string {
-	return "Compare two files and show differences in unified diff format."
+	return "Compare two files and show differences in unified diff format. Useful to verify changes before committing or to understand what changed between versions."
 }
 
 func (t *diffTool) Parameters() map[string]interface{} {
@@ -173,7 +173,7 @@ type treeTool struct {
 func (t *treeTool) Name() string { return "tree" }
 
 func (t *treeTool) Description() string {
-	return "Show directory structure as a tree. Default depth is 3."
+	return "Show directory structure as a tree. Default depth is 3. Use depth > 3 for deep exploration. Good first step to orient in an unfamiliar codebase before reading specific files."
 }
 
 func (t *treeTool) Parameters() map[string]interface{} {
