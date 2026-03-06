@@ -129,6 +129,17 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 			Retry:        cfg.RetryConfig,
 		})
 
+	case "cerebras":
+		return NewCerebrasProvider(OpenAICompatConfig{
+			APIKey:       cfg.APIKey,
+			BaseURL:      cfg.BaseURL,
+			Model:        cfg.Model,
+			MaxTokens:    cfg.MaxTokens,
+			ProviderName: "cerebras",
+			Thinking:     cfg.Thinking,
+			Retry:        cfg.RetryConfig,
+		})
+
 	case "openai-compat", "litellm":
 		// Generic OpenAI-compatible endpoint
 		if cfg.BaseURL == "" {
@@ -190,6 +201,11 @@ func InferProviderFromModel(model string) string {
 	// xAI (Grok) models
 	if strings.HasPrefix(model, "grok") {
 		return "xai"
+	}
+
+	// Cerebras models
+	if strings.HasPrefix(model, "cerebras") {
+		return "cerebras"
 	}
 
 	return ""

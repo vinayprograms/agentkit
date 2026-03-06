@@ -315,6 +315,7 @@ const (
 	MistralBaseURL    = "https://api.mistral.ai/v1"
 	XAIBaseURL        = "https://api.x.ai/v1"
 	OpenRouterBaseURL = "https://openrouter.ai/api/v1"
+	CerebrasBaseURL   = "https://api.cerebras.ai/v1"
 	OllamaLocalURL    = "http://localhost:11434/v1"
 	LMStudioLocalURL  = "http://localhost:1234/v1"
 )
@@ -384,5 +385,16 @@ func NewLMStudioProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) 
 		cfg.ProviderName = "lmstudio"
 	}
 	// API key not required for local
+	return NewOpenAICompatProvider(cfg)
+}
+
+// NewCerebrasProvider creates a Cerebras provider (uses OpenAI-compatible API).
+func NewCerebrasProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = CerebrasBaseURL
+	}
+	if cfg.ProviderName == "" {
+		cfg.ProviderName = "cerebras"
+	}
 	return NewOpenAICompatProvider(cfg)
 }
