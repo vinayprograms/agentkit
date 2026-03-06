@@ -108,7 +108,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 					blocks = append(blocks, anthropic.NewTextBlock(m.Content))
 				}
 				for _, tc := range m.ToolCalls {
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Args, tc.Name))
+					args := tc.Args
+					if args == nil {
+						args = make(map[string]interface{})
+					}
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
 				}
 				messages = append(messages, anthropic.NewAssistantMessage(blocks...))
 			} else {
