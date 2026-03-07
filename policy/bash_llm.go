@@ -80,16 +80,17 @@ COMMAND:
 
 RULES:
 1. Commands accessing paths INSIDE allowed directories are OK
-2. Commands accessing paths OUTSIDE allowed directories are BLOCKED
-3. Relative paths (./foo, ../bar) resolve from the WORKING DIRECTORY — if the resolved path is inside an allowed directory, it is OK
-4. Commands with no file paths are OK
-5. Reading from /dev/null, /proc, /sys is OK
-6. Commands that could write, delete, or modify files outside allowed dirs are BLOCKED
-7. If a security research context is provided, commands within that scope are OK
+2. Relative paths (./foo, ../bar) resolve from the WORKING DIRECTORY — if the resolved path is inside an allowed directory, it is OK
+3. Commands with no explicit file paths are OK
+4. /tmp is always allowed for temporary files and build outputs
+5. /dev/null, /proc, /sys are always allowed for reading
+6. Toolchain and runtime paths are implicitly allowed — compilers, interpreters, and build tools (go, python, node, gcc, etc.) naturally access system paths like GOROOT, GOPATH module cache, Python site-packages, /usr/lib, etc. This is normal and should be ALLOWED
+7. BLOCK only when the command explicitly writes, deletes, or modifies files in sensitive system directories (/etc, /var, /root, /home outside workspace, system config files)
+8. If a security research context is provided, commands within that scope are OK
 
 Answer with exactly one word on the first line:
-- ALLOW - if the command only accesses allowed directories (or is within security research scope)
-- BLOCK - if the command accesses paths outside allowed directories
+- ALLOW - if the command is safe per the rules above
+- BLOCK - if the command writes to sensitive system directories
 
 If BLOCK, add a brief reason on the second line.
 
@@ -97,7 +98,7 @@ Example 1:
 Working directory: /home/user/project
 Command: cat /etc/passwd
 Answer: BLOCK
-Reason: Reads /etc/passwd which is outside allowed directories
+Reason: Reads sensitive system file /etc/passwd
 
 Example 2:
 Working directory: /home/user/project
@@ -111,9 +112,19 @@ Answer: ALLOW
 
 Example 4:
 Working directory: /home/user/project
+Command: go build -o /tmp/mybin ./...
+Answer: ALLOW
+
+Example 5:
+Working directory: /home/user/project
+Command: go vet ./...
+Answer: ALLOW
+
+Example 6:
+Working directory: /home/user/project
 Command: rm -rf /
 Answer: BLOCK
-Reason: Attempts to delete files in root directory
+Reason: Attempts to delete root filesystem
 
 Your answer:`,
 		securityContext,
