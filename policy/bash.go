@@ -220,14 +220,15 @@ func NewBashChecker(workspace string, allowedDirs, userDeniedCommands []string) 
 // LLMPolicyChecker is an interface for LLM-based policy checking.
 type LLMPolicyChecker interface {
 	// CheckBashCommand asks the LLM if a bash command violates directory policy.
+	// workingDir is the cwd where the command executes (for resolving relative paths).
 	// Returns (*BashCheckResult, error)
-	CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error)
+	CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*BashCheckResult, error)
 }
 
 // SetLLMChecker sets the LLM checker for directory policy verification.
 func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
 	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
-		return checker.CheckBashCommand(ctx, command, allowedDirs)
+		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Workspace)
 	}
 }
 

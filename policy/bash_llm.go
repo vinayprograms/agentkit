@@ -45,8 +45,9 @@ func (c *SmallLLMChecker) SetSecurityScope(scope string) {
 }
 
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
+// workingDir is the cwd where the command executes (for resolving relative paths).
 // Returns a BashCheckResult with the decision and token usage.
-func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
+func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*BashCheckResult, error) {
 	if c.provider == nil {
 		return &BashCheckResult{Allowed: true}, nil // No LLM configured, allow
 	}
@@ -68,6 +69,9 @@ if the command is part of legitimate security research.
 
 	prompt := fmt.Sprintf(`Analyze this bash command for directory access violations.
 %s
+WORKING DIRECTORY (cwd where command executes):
+%s
+
 ALLOWED DIRECTORIES (agent can access these):
 %s
 
@@ -76,8 +80,8 @@ COMMAND:
 
 RULES:
 1. Commands accessing paths INSIDE allowed directories are OK
-2. Commands accessing paths OUTSIDE allowed directories are BLOCKED  
-3. Relative paths (./foo, ../bar) starting from allowed dirs are OK
+2. Commands accessing paths OUTSIDE allowed directories are BLOCKED
+3. Relative paths (./foo, ../bar) resolve from the WORKING DIRECTORY — if the resolved path is inside an allowed directory, it is OK
 4. Commands with no file paths are OK
 5. Reading from /dev/null, /proc, /sys is OK
 6. Commands that could write, delete, or modify files outside allowed dirs are BLOCKED
@@ -90,21 +94,30 @@ Answer with exactly one word on the first line:
 If BLOCK, add a brief reason on the second line.
 
 Example 1:
+Working directory: /home/user/project
 Command: cat /etc/passwd
 Answer: BLOCK
 Reason: Reads /etc/passwd which is outside allowed directories
 
 Example 2:
+Working directory: /home/user/project
 Command: ls -la
 Answer: ALLOW
 
 Example 3:
+Working directory: /home/user/project
+Command: cat ./src/main.go
+Answer: ALLOW
+
+Example 4:
+Working directory: /home/user/project
 Command: rm -rf /
 Answer: BLOCK
 Reason: Attempts to delete files in root directory
 
 Your answer:`,
 		securityContext,
+		workingDir,
 		strings.Join(allowedDirs, "\n"),
 		command,
 	)
