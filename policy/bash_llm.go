@@ -84,7 +84,7 @@ RULES:
 3. Commands with no explicit file paths are OK
 4. /tmp is always allowed for temporary files and build outputs
 5. /dev/null, /proc, /sys are always allowed for reading
-6. Toolchain and runtime paths are implicitly allowed — compilers, interpreters, and build tools (go, python, node, gcc, etc.) naturally access system paths like GOROOT, GOPATH module cache, Python site-packages, /usr/lib, etc. This is normal and should be ALLOWED
+6. Toolchain and runtime paths are implicitly allowed — compilers, interpreters, and build tools naturally access system paths (standard libraries, module/package caches, shared libraries, etc.) as part of normal operation. This is ALLOWED
 7. BLOCK only when the command explicitly writes, deletes, or modifies files in sensitive system directories (/etc, /var, /root, /home outside workspace, system config files)
 8. If a security research context is provided, commands within that scope are OK
 
@@ -111,16 +111,6 @@ Command: cat ./src/main.go
 Answer: ALLOW
 
 Example 4:
-Working directory: /home/user/project
-Command: go build -o /tmp/mybin ./...
-Answer: ALLOW
-
-Example 5:
-Working directory: /home/user/project
-Command: go vet ./...
-Answer: ALLOW
-
-Example 6:
 Working directory: /home/user/project
 Command: rm -rf /
 Answer: BLOCK
