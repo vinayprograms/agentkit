@@ -818,7 +818,7 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		return nil, err
 	}
 
-	// Step 1: BashChecker - deterministic denylist + LLM policy check
+	// BashChecker - deterministic denylist + LLM policy check
 	if t.checker != nil {
 		allowed, reason, err := t.checker.Check(ctx, command)
 		if err != nil {
@@ -827,12 +827,15 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		if !allowed {
 			return nil, fmt.Errorf("command blocked: %s", reason)
 		}
-	}
-
-	// Step 2: Legacy policy check (path-based, workspace escape detection)
-	allowed, reason := t.policy.CheckCommand(t.Name(), command)
-	if !allowed {
-		return nil, fmt.Errorf("policy denied: %s", reason)
+		// BashChecker handles path analysis (including LLM-based resolution
+		// of relative paths), so skip the legacy CheckCommand path check.
+	} else {
+		// Fallback: legacy policy check (path-based, workspace escape detection)
+		// Only used when BashChecker is not configured.
+		allowed, reason := t.policy.CheckCommand(t.Name(), command)
+		if !allowed {
+			return nil, fmt.Errorf("policy denied: %s", reason)
+		}
 	}
 
 	// Add timeout to context if not already set (default 5 minutes)
