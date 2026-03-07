@@ -197,15 +197,19 @@ func toStringSlice(v []interface{}) []string {
 }
 
 // GetToolPolicy returns the policy for a tool, with defaults.
+// When DefaultDeny is true, tools without explicit policy are disabled.
+// When DefaultDeny is false (default), tools without explicit policy are enabled.
 func (p *Policy) GetToolPolicy(tool string) *ToolPolicy {
-	if p == nil || p.Tools == nil {
+	if p == nil {
 		return &ToolPolicy{Enabled: true}
 	}
-	if tp, ok := p.Tools[tool]; ok {
-		return tp
+	if p.Tools != nil {
+		if tp, ok := p.Tools[tool]; ok {
+			return tp
+		}
 	}
-	// Return default policy
-	return &ToolPolicy{Enabled: true}
+	// No explicit policy — respect default_deny
+	return &ToolPolicy{Enabled: !p.DefaultDeny}
 }
 
 // IsToolEnabled checks if a tool is enabled.
