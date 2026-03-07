@@ -39,6 +39,7 @@ type ToolPolicy struct {
 	AllowDomains []string // for web tools
 	RateLimit    int      // requests per minute
 	Sandbox      string   // for bash: "none", "bwrap", "docker" (default: none)
+	Timeout      int      // max seconds per invocation (0 = default)
 }
 
 // MCPPolicy controls MCP tool access.
@@ -178,6 +179,9 @@ func Parse(content string) (*Policy, error) {
 		}
 		if v, ok := toolMap["sandbox"].(string); ok {
 			tp.Sandbox = v
+		}
+		if v, ok := toolMap["timeout"].(int64); ok {
+			tp.Timeout = int(v)
 		}
 
 		pol.Tools[key] = tp

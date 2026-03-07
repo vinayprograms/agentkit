@@ -795,7 +795,12 @@ type bashTool struct {
 func (t *bashTool) Name() string { return "bash" }
 
 func (t *bashTool) Description() string {
-	return "Execute a shell command. Use as last resort — prefer dedicated tools (read, write, edit, grep, glob, tree, git) when they cover the operation. Bash is best for: build commands, running tests, installing packages, piping multiple commands, or operations no built-in tool handles."
+	tp := t.policy.GetToolPolicy(t.Name())
+	timeout := 120
+	if tp.Timeout > 0 {
+		timeout = tp.Timeout
+	}
+	return fmt.Sprintf("Execute a shell command. Commands are killed after %d seconds. Do NOT start long-running servers or processes that block indefinitely — instead, start them in the background and test with a timeout. Use as last resort — prefer dedicated tools (read, write, edit, grep, glob, tree, git) when they cover the operation. Bash is best for: build commands, running tests, piping multiple commands, or operations no built-in tool handles.", timeout)
 }
 
 func (t *bashTool) Parameters() map[string]interface{} {
@@ -838,15 +843,19 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		}
 	}
 
-	// Add timeout to context if not already set (default 5 minutes)
+	// Apply timeout: policy timeout > default (120s)
+	bashPolicy := t.policy.GetToolPolicy(t.Name())
+	timeout := 120 * time.Second // default: 2 minutes
+	if bashPolicy.Timeout > 0 {
+		timeout = time.Duration(bashPolicy.Timeout) * time.Second
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
 	// Get sandbox mode from policy
-	bashPolicy := t.policy.GetToolPolicy(t.Name())
 	sandbox := bashPolicy.Sandbox
 
 	var cmd *exec.Cmd
