@@ -171,7 +171,6 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 
 	// Add thinking if configured
 	thinkingLevel := ResolveThinkingLevel(p.thinking, req.Messages, req.Tools)
-	useStreaming := false
 	if thinkingLevel != ThinkingOff {
 		budget := ThinkingLevelToAnthropicBudget(thinkingLevel, p.thinking.BudgetTokens)
 		if budget > 0 {
@@ -187,92 +186,16 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 					BudgetTokens: int64(budget),
 				},
 			}
-			// Anthropic requires streaming for extended thinking
-			useStreaming = true
 		}
 	}
 
 	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
 
-	if useStreaming {
-		return p.chatStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
-	}
-	return p.chatNonStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
-}
-
-// chatNonStreaming makes a non-streaming request with retry.
-func (p *AnthropicProvider) chatNonStreaming(
-	ctx context.Context,
-	params anthropic.MessageNewParams,
-	maxRetries int,
-	initBackoff, maxBackoff time.Duration,
-) (*ChatResponse, error) {
-	var resp *anthropic.Message
-	var err error
-	backoff := initBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err = p.client.Messages.New(ctx, params)
-		if err == nil {
-			break
-		}
-
-		if isBillingError(err) {
-			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-		}
-
-		if !isRetryableError(err) {
-			return nil, fmt.Errorf("anthropic request failed: %w", err)
-		}
-
-		if attempt == maxRetries {
-			return nil, fmt.Errorf("anthropic request failed after %d retries: %w", maxRetries, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-
-		backoff = time.Duration(float64(backoff) * backoffFactor)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
-
-	// Convert response
-	result := &ChatResponse{
-		StopReason:               string(resp.StopReason),
-		InputTokens:              int(resp.Usage.InputTokens),
-		OutputTokens:             int(resp.Usage.OutputTokens),
-		CacheCreationInputTokens: int(resp.Usage.CacheCreationInputTokens),
-		CacheReadInputTokens:     int(resp.Usage.CacheReadInputTokens),
-		Model:                    string(resp.Model),
-	}
-
-	// Extract content and tool calls from response
-	for _, block := range resp.Content {
-		switch block.Type {
-		case "text":
-			result.Content += block.Text
-		case "thinking":
-			result.Thinking += block.Thinking
-		case "tool_use":
-			// Input is json.RawMessage
-			var args map[string]interface{}
-			if block.Input != nil {
-				json.Unmarshal(block.Input, &args)
-			}
-			result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
-				ID:   block.ID,
-				Name: block.Name,
-				Args: args,
-			})
-		}
-	}
-
-	return result, nil
+	// Always use streaming for Anthropic. The API requires streaming for
+	// any request that may take >10 minutes, which can happen with extended
+	// thinking, large contexts, or high-latency swarm scenarios. Streaming
+	// is strictly more capable with no downside.
+	return p.chatStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
 }
 
 // chatStreaming makes a streaming request (required for extended thinking).
