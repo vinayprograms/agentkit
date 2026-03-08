@@ -291,6 +291,13 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
 
+	// Enforce policy: reject tool calls that aren't enabled.
+	// This is the enforcement layer — Definitions() filters the LLM's view,
+	// but the LLM can hallucinate tool names. This gate is non-negotiable.
+	if r.policy != nil && !r.policy.IsToolEnabled(name) {
+		return nil, fmt.Errorf("tool %s is not enabled by policy", name)
+	}
+
 	tracer := telemetry.GetTracer()
 	ctx, span := tracer.StartToolSpan(ctx, name)
 
