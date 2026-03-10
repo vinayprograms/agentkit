@@ -9,7 +9,8 @@ import (
 )
 
 // stripMarkdownFences removes ```json ... ``` or ``` ... ``` wrappers from LLM responses
-// and extracts the JSON object bounds.
+// and extracts the first complete JSON object using brace-depth counting.
+// This handles cases where the LLM appends code examples or other content after the JSON.
 func stripMarkdownFences(s string) string {
 	s = strings.TrimSpace(s)
 
@@ -25,14 +26,45 @@ func stripMarkdownFences(s string) string {
 	}
 	s = strings.TrimSpace(s)
 
-	// Find JSON object bounds (in case there's extra text)
+	// Extract the first complete JSON object by brace-depth counting.
+	// This correctly handles LLMs that append code/text after the JSON.
 	jsonStart := strings.Index(s, "{")
-	jsonEnd := strings.LastIndex(s, "}")
-	if jsonStart >= 0 && jsonEnd > jsonStart {
-		s = s[jsonStart : jsonEnd+1]
+	if jsonStart < 0 {
+		return s
 	}
 
-	return s
+	depth := 0
+	inString := false
+	escaped := false
+	for i := jsonStart; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return s[jsonStart : i+1]
+			}
+		}
+	}
+
+	// Fallback: couldn't find balanced braces, return from start
+	return s[jsonStart:]
 }
 
 // LLM is a minimal interface for generating resume content.
