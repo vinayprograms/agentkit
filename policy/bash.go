@@ -234,8 +234,10 @@ func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
 }
 
 // Check performs two-step security checking on a bash command.
-// Step 1: Deterministic denylist check (fast, zero LLM cost)
-// Step 2: LLM policy check (only if step 1 passes and LLMChecker is configured)
+// Step 1: Deterministic checks (denylist + path validation, zero LLM cost)
+// Step 2: LLM policy check (only for ambiguous commands where deterministic
+//
+//	path checking found no absolute paths to validate)
 func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, error) {
 	// Step 1: Deterministic checks
 	allowed, reason := c.checkDeterministic(command)
@@ -249,8 +251,14 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 		c.OnDecision(command, "deterministic", true, "", 0, 0, 0)
 	}
 
-	// Step 2: LLM policy check (if configured)
-	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
+	// Step 2: LLM policy check — only for ambiguous commands.
+	// If the deterministic path checker already validated all paths in the
+	// command (found absolute paths and confirmed they're within allowed dirs),
+	// the LLM check is redundant and can produce false positives with small models.
+	// Only invoke the LLM for commands with no absolute paths (relative paths,
+	// variable expansion, etc.) where deterministic analysis is insufficient.
+	pathsValidated := c.hasValidatedPaths(command)
+	if !pathsValidated && c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
 		start := time.Now()
 		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
 		durationMs := time.Since(start).Milliseconds()
@@ -349,8 +357,8 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 	return true, ""
 }
 
-// alwaysAllowedPaths are system device paths that are always permitted.
-var alwaysAllowedPaths = []string{"/dev/null", "/dev/zero", "/dev/urandom", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
+// alwaysAllowedPaths are system device and temp paths that are always permitted.
+var alwaysAllowedPaths = []string{"/dev/null", "/dev/zero", "/dev/urandom", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/tmp"}
 
 // pathExtractRe matches absolute paths, including those after = signs (flags like --path=/foo).
 var pathExtractRe = regexp.MustCompile(`(?:^|[\s=>"'])(/[^\s"'>|;&)]+)`)
@@ -386,15 +394,8 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 		}
 		p = filepath.Clean(p)
 
-		// Always-allowed system devices
-		allowed := false
-		for _, ap := range alwaysAllowedPaths {
-			if p == ap {
-				allowed = true
-				break
-			}
-		}
-		if allowed {
+		// Always-allowed system devices and temp paths
+		if isAlwaysAllowed(p) {
 			continue
 		}
 
@@ -404,6 +405,33 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 	}
 
 	return true, ""
+}
+
+// isAlwaysAllowed checks if a path is a system device or temp path that's always permitted.
+func isAlwaysAllowed(p string) bool {
+	for _, ap := range alwaysAllowedPaths {
+		if p == ap || strings.HasPrefix(p, ap+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasValidatedPaths returns true if the command contains absolute paths that
+// the deterministic checker can validate. When true, the LLM check is skipped
+// because deterministic validation is more reliable than small LLM reasoning.
+func (c *BashChecker) hasValidatedPaths(command string) bool {
+	if len(c.AllowedDirs) == 0 && c.Workspace == "" {
+		return false
+	}
+	matches := pathExtractRe.FindAllStringSubmatch(command, -1)
+	for _, m := range matches {
+		p := filepath.Clean(m[1])
+		if !isAlwaysAllowed(p) {
+			return true // Found a non-trivial path that was validated
+		}
+	}
+	return false
 }
 
 // allowedDirsList returns a human-readable list of allowed directories.
