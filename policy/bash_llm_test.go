@@ -4,19 +4,21 @@ import "testing"
 
 func TestParseVerdict(t *testing.T) {
 	tests := []struct {
-		name           string
-		content        string
-		expectVerdict  string
-		expectReason   string
+		name          string
+		content       string
+		expectVerdict string
+		expectReason  string
 	}{
-		{"clean ALLOW", "ALLOW", "ALLOW", ""},
-		{"clean BLOCK", "BLOCK\nReason: writes to /etc", "BLOCK", "writes to /etc"},
-		{"bold ALLOW", "**ALLOW**", "ALLOW", ""},
-		{"bold BLOCK", "**BLOCK**\nwrites outside", "BLOCK", "writes outside"},
-		{"rambling then ALLOW", "This command reads files...\nit seems safe\n\nALLOW", "ALLOW", ""},
-		{"rambling then BLOCK", "Analysis:\npath /etc is bad\n\nBLOCK\nwrites to /etc", "BLOCK", "writes to /etc"},
-		{"says BLOCK then corrects to ALLOW", "BLOCK but wait...\ncorrection:\nALLOW", "ALLOW", ""},
-		{"final answer ALLOW", "Some reasoning...\n**Final Answer:**\n**ALLOW**", "ALLOW", ""},
+		{"json ALLOW", `{"verdict":"ALLOW"}`, "ALLOW", ""},
+		{"json BLOCK", `{"verdict":"BLOCK","reason":"writes to /etc"}`, "BLOCK", "writes to /etc"},
+		{"json lowercase", `{"verdict":"allow"}`, "ALLOW", ""},
+		{"json with whitespace", `  {"verdict": "BLOCK", "reason": "bad path"}  `, "BLOCK", "bad path"},
+		{"json embedded in text", `Here is my analysis:\n{"verdict":"ALLOW"}\nDone.`, "ALLOW", ""},
+		{"json after reasoning", "Some reasoning...\n{\"verdict\":\"BLOCK\",\"reason\":\"writes to /opt\"}", "BLOCK", "writes to /opt"},
+		{"plain ALLOW fallback", "ALLOW", "ALLOW", ""},
+		{"plain BLOCK fallback", "BLOCK", "BLOCK", ""},
+		{"bold ALLOW fallback", "**ALLOW**", "ALLOW", ""},
+		{"rambling then ALLOW", "This seems safe\n\nALLOW", "ALLOW", ""},
 		{"no verdict", "I'm not sure about this command", "", "I'm not sure about this command"},
 	}
 

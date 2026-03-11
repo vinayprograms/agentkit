@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -44,41 +45,45 @@ func (c *SmallLLMChecker) SetSecurityScope(scope string) {
 	c.securityScope = scope
 }
 
+// verdictResponse is the expected JSON structure from the LLM.
+type verdictResponse struct {
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // parseVerdict extracts the verdict from an LLM response.
-// Small models often dump reasoning before the verdict, so we scan all lines
-// and take the LAST ALLOW/BLOCK found (the model's "final answer").
-// Also extracts reason text following the verdict line.
+// Expects JSON: {"verdict":"ALLOW"} or {"verdict":"BLOCK","reason":"..."}
+// Falls back to scanning for the JSON object if the model adds extra text.
 func parseVerdict(content string) (verdict, reason string) {
+	// Try direct JSON parse first
+	var resp verdictResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil {
+		return strings.ToUpper(resp.Verdict), resp.Reason
+	}
+
+	// Fallback: find JSON object in the response (model may add surrounding text)
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(content[start:end+1]), &resp); err == nil {
+			return strings.ToUpper(resp.Verdict), resp.Reason
+		}
+	}
+
+	// Last resort: scan for standalone ALLOW/BLOCK keywords
 	lines := strings.Split(content, "\n")
 	lastVerdict := ""
-	lastVerdictIdx := -1
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		upper := strings.ToUpper(trimmed)
-		// Check for standalone ALLOW/BLOCK or **ALLOW**/**BLOCK** (markdown bold)
-		cleaned := strings.Trim(upper, "*_ ")
+	for _, line := range lines {
+		cleaned := strings.ToUpper(strings.Trim(strings.TrimSpace(line), "*_ "))
 		if cleaned == "ALLOW" || cleaned == "BLOCK" {
 			lastVerdict = cleaned
-			lastVerdictIdx = i
 		}
 	}
-
-	if lastVerdict == "" {
-		return "", content
+	if lastVerdict != "" {
+		return lastVerdict, ""
 	}
 
-	// Extract reason from the line after the verdict
-	if lastVerdict == "BLOCK" && lastVerdictIdx+1 < len(lines) {
-		reasonLine := strings.TrimSpace(lines[lastVerdictIdx+1])
-		if strings.HasPrefix(strings.ToLower(reasonLine), "reason:") {
-			reason = strings.TrimSpace(reasonLine[7:])
-		} else if reasonLine != "" {
-			reason = reasonLine
-		}
-	}
-
-	return lastVerdict, reason
+	return "", content
 }
 
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
@@ -124,16 +129,13 @@ RULES:
 6. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc, /var, /root (unless listed above), /home, or any other path not in the writable list
 7. If a security research context is provided, commands within that scope are OK
 
-ANSWER FORMAT: Reply with ONLY "ALLOW" or "BLOCK" on its own line.
-If BLOCK, add a brief reason on the next line.
-Do NOT explain your reasoning. Do NOT hedge. Just the verdict.
+RULES SUMMARY:
+- ALLOW: command only reads/executes, OR writes inside writable directories
+- BLOCK: command writes to a path NOT inside any writable directory
+- Subdirectories of writable directories ARE writable (if /workspace is writable, /workspace/src/main.go is too)
 
-ALLOW means: the command only reads/executes, OR writes inside writable directories (including subdirectories).
-BLOCK means: the command writes to a path that is NOT inside any writable directory.
-
-CRITICAL: Subdirectories of writable directories ARE writable. If /workspace is writable, then /workspace/src/main.go is ALSO writable.
-
-Your answer:`,
+Respond with ONLY a JSON object, nothing else:
+{"verdict":"ALLOW"} or {"verdict":"BLOCK","reason":"brief explanation"}`,
 		securityContext,
 		workingDir,
 		strings.Join(allowedDirs, "\n"),
