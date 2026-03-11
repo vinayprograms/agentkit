@@ -370,7 +370,7 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 			if strings.Contains(w, "..") {
 				resolved := filepath.Clean(filepath.Join(c.Workspace, w))
 				if !c.isPathAllowed(resolved) {
-					return false, fmt.Sprintf("path '%s' escapes allowed directories via traversal", w)
+					return false, fmt.Sprintf("path '%s' escapes allowed directories via traversal. Allowed: %s", w, c.allowedDirsList())
 				}
 			}
 		}
@@ -399,11 +399,21 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 		}
 
 		if !c.isPathAllowed(p) {
-			return false, fmt.Sprintf("path '%s' is outside allowed directories", p)
+			return false, fmt.Sprintf("path '%s' is outside allowed directories. Allowed: %s", p, c.allowedDirsList())
 		}
 	}
 
 	return true, ""
+}
+
+// allowedDirsList returns a human-readable list of allowed directories.
+func (c *BashChecker) allowedDirsList() string {
+	dirs := make([]string, 0, len(c.AllowedDirs)+1)
+	dirs = append(dirs, c.AllowedDirs...)
+	if c.Workspace != "" {
+		dirs = append(dirs, c.Workspace)
+	}
+	return strings.Join(dirs, ", ")
 }
 
 // isPathAllowed checks if a path falls within any allowed directory or workspace.
