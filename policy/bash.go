@@ -363,6 +363,35 @@ var alwaysAllowedPaths = []string{"/dev/null", "/dev/zero", "/dev/urandom", "/de
 // pathExtractRe matches absolute paths, including those after = signs (flags like --path=/foo).
 var pathExtractRe = regexp.MustCompile(`(?:^|[\s=>"'])(/[^\s"'>|;&)]+)`)
 
+// heredocRe matches heredoc markers: << 'MARKER', << "MARKER", <<MARKER, <<-MARKER
+var heredocRe = regexp.MustCompile(`<<-?\s*'?\"?(\w+)'?\"?`)
+
+// stripHeredocs removes heredoc bodies from a command string.
+// Content between << MARKER and MARKER is data (source code, config, etc.),
+// not shell commands — paths inside should not be validated.
+func stripHeredocs(command string) string {
+	matches := heredocRe.FindAllStringSubmatchIndex(command, -1)
+	if len(matches) == 0 {
+		return command
+	}
+
+	result := command
+	// Process in reverse to preserve indices
+	for i := len(matches) - 1; i >= 0; i-- {
+		m := matches[i]
+		marker := command[m[2]:m[3]]
+		// Find the closing marker on its own line
+		endPattern := "\n" + marker
+		endIdx := strings.Index(result[m[1]:], endPattern)
+		if endIdx >= 0 {
+			// Remove from after the << MARKER line to the end marker (inclusive)
+			cutEnd := m[1] + endIdx + len(endPattern)
+			result = result[:m[1]] + result[cutEnd:]
+		}
+	}
+	return result
+}
+
 // checkPaths validates that all paths in a command fall within allowed directories.
 func (c *BashChecker) checkPaths(command string) (bool, string) {
 	// Skip if no restrictions configured (backwards compat)
@@ -370,10 +399,12 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 		return true, ""
 	}
 
+	// Strip heredoc bodies — they contain data, not shell paths
+	stripped := stripHeredocs(command)
+
 	// Check for .. traversal in relative paths
-	if c.Workspace != "" && (strings.Contains(command, "../") || strings.Contains(command, "..\"") || strings.HasSuffix(command, "..")) {
-		// Resolve relative .. against workspace to check escape
-		words := strings.Fields(command)
+	if c.Workspace != "" && (strings.Contains(stripped, "../") || strings.Contains(stripped, "..\"") || strings.HasSuffix(stripped, "..")) {
+		words := strings.Fields(stripped)
 		for _, w := range words {
 			if strings.Contains(w, "..") {
 				resolved := filepath.Clean(filepath.Join(c.Workspace, w))
@@ -384,8 +415,8 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 		}
 	}
 
-	// Extract absolute paths from command
-	matches := pathExtractRe.FindAllStringSubmatch(command, -1)
+	// Extract absolute paths from command (heredoc content already stripped)
+	matches := pathExtractRe.FindAllStringSubmatch(stripped, -1)
 	for _, m := range matches {
 		p := m[1]
 		// Strip trailing brace expansion to get base path: /foo/{a,b} → /foo/
@@ -394,7 +425,6 @@ func (c *BashChecker) checkPaths(command string) (bool, string) {
 		}
 		p = filepath.Clean(p)
 
-		// Always-allowed system devices and temp paths
 		if isAlwaysAllowed(p) {
 			continue
 		}

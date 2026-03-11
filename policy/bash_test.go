@@ -358,6 +358,19 @@ func TestBashChecker_PathValidation(t *testing.T) {
 			allowed:     false,
 			reasonLike:  "outside allowed directories",
 		},
+		{
+			name:        "heredoc paths are data not commands",
+			command:     "cd /root/.local/swarm/workspace && cat > handler.go << 'EOF'\npackage main\nfunc handler() { path := \"/callback/oauth\" }\nEOF",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "heredoc with real path before it",
+			command:     "cat > /etc/shadow << 'EOF'\nhello\nEOF",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     false,
+			reasonLike:  "outside allowed directories",
+		},
 	}
 
 	for _, tt := range tests {
