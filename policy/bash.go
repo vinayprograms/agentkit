@@ -4,7 +4,6 @@ package policy
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -237,9 +236,12 @@ func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
 // Step 1: Deterministic checks (denylist + path validation, zero LLM cost)
 // Step 2: LLM policy check (only for ambiguous commands where deterministic
 //
-//	path checking found no absolute paths to validate)
+// Check runs the two-tier security pipeline: deterministic then LLM.
+// Deterministic blocks high-confidence threats (banned commands, dangerous
+// patterns). All path reasoning is delegated to the LLM — shell text is too
+// ambiguous for regex-based path extraction.
 func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, error) {
-	// Step 1: Deterministic checks
+	// Step 1: Deterministic checks (high-confidence blocks only)
 	allowed, reason := c.checkDeterministic(command)
 	if !allowed {
 		if c.OnDecision != nil {
@@ -251,14 +253,8 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 		c.OnDecision(command, "deterministic", true, "", 0, 0, 0)
 	}
 
-	// Step 2: LLM policy check — only for ambiguous commands.
-	// If the deterministic path checker already validated all paths in the
-	// command (found absolute paths and confirmed they're within allowed dirs),
-	// the LLM check is redundant and can produce false positives with small models.
-	// Only invoke the LLM for commands with no absolute paths (relative paths,
-	// variable expansion, etc.) where deterministic analysis is insufficient.
-	pathsValidated := c.hasValidatedPaths(command)
-	if !pathsValidated && c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
+	// Step 2: LLM policy check — handles all path/write analysis
+	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
 		start := time.Now()
 		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
 		durationMs := time.Since(start).Milliseconds()
@@ -289,11 +285,6 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return false, "empty command"
-	}
-
-	// Check .. traversal (high-confidence: resolved path is unambiguous)
-	if blocked, reason := c.checkTraversal(cmd); blocked {
-		return false, reason
 	}
 
 	// Check dangerous pipe patterns first
@@ -346,128 +337,7 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 	return true, ""
 }
 
-// alwaysAllowedPaths are system device and temp paths that are always permitted.
-var alwaysAllowedPaths = []string{"/dev/null", "/dev/zero", "/dev/urandom", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/tmp"}
 
-// pathExtractRe matches absolute paths, including those after = signs (flags like --path=/foo).
-var pathExtractRe = regexp.MustCompile(`(?:^|[\s=>"'])(/[^\s"'>|;&)]+)`)
-
-// heredocRe matches heredoc markers: << 'MARKER', << "MARKER", <<MARKER, <<-MARKER
-var heredocRe = regexp.MustCompile(`<<-?\s*'?\"?(\w+)'?\"?`)
-
-// stripHeredocs removes heredoc bodies from a command string.
-// Content between << MARKER and MARKER is data (source code, config, etc.),
-// not shell commands — paths inside should not be validated.
-func stripHeredocs(command string) string {
-	matches := heredocRe.FindAllStringSubmatchIndex(command, -1)
-	if len(matches) == 0 {
-		return command
-	}
-
-	result := command
-	// Process in reverse to preserve indices
-	for i := len(matches) - 1; i >= 0; i-- {
-		m := matches[i]
-		marker := command[m[2]:m[3]]
-		// Find the closing marker on its own line
-		endPattern := "\n" + marker
-		endIdx := strings.Index(result[m[1]:], endPattern)
-		if endIdx >= 0 {
-			// Remove from after the << MARKER line to the end marker (inclusive)
-			cutEnd := m[1] + endIdx + len(endPattern)
-			result = result[:m[1]] + result[cutEnd:]
-		}
-	}
-	return result
-}
-
-// checkTraversal detects .. traversal that escapes allowed directories.
-// This is high-confidence: resolving ../../../etc/passwd against workspace is unambiguous.
-func (c *BashChecker) checkTraversal(command string) (bool, string) {
-	if c.Workspace == "" {
-		return false, ""
-	}
-	stripped := stripHeredocs(command)
-	if !strings.Contains(stripped, "..") {
-		return false, ""
-	}
-	words := strings.Fields(stripped)
-	for _, w := range words {
-		if strings.Contains(w, "..") {
-			resolved := filepath.Clean(filepath.Join(c.Workspace, w))
-			if !c.isPathAllowed(resolved) {
-				return true, fmt.Sprintf("path '%s' escapes allowed directories via traversal. Allowed: %s", w, c.allowedDirsList())
-			}
-		}
-	}
-	return false, ""
-}
-
-// isAlwaysAllowed checks if a path is a system device or temp path that's always permitted.
-func isAlwaysAllowed(p string) bool {
-	for _, ap := range alwaysAllowedPaths {
-		if p == ap || strings.HasPrefix(p, ap+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// hasValidatedPaths returns true if the command contains absolute paths AND
-// all of them are within allowed directories. When true, the LLM check is
-// skipped because deterministic validation is more reliable than small LLM
-// reasoning. Returns false if no paths found or any path is outside bounds
-// (falling through to LLM for the nuanced check).
-func (c *BashChecker) hasValidatedPaths(command string) bool {
-	if len(c.AllowedDirs) == 0 && c.Workspace == "" {
-		return false
-	}
-	stripped := stripHeredocs(command)
-	matches := pathExtractRe.FindAllStringSubmatch(stripped, -1)
-	foundNonTrivial := false
-	for _, m := range matches {
-		p := m[1]
-		if idx := strings.Index(p, "{"); idx != -1 {
-			p = p[:idx]
-		}
-		p = filepath.Clean(p)
-		if isAlwaysAllowed(p) {
-			continue
-		}
-		foundNonTrivial = true
-		if !c.isPathAllowed(p) {
-			return false // Path outside bounds — let LLM decide
-		}
-	}
-	return foundNonTrivial
-}
-
-// allowedDirsList returns a human-readable list of allowed directories.
-func (c *BashChecker) allowedDirsList() string {
-	dirs := make([]string, 0, len(c.AllowedDirs)+1)
-	dirs = append(dirs, c.AllowedDirs...)
-	if c.Workspace != "" {
-		dirs = append(dirs, c.Workspace)
-	}
-	return strings.Join(dirs, ", ")
-}
-
-// isPathAllowed checks if a path falls within any allowed directory or workspace.
-func (c *BashChecker) isPathAllowed(p string) bool {
-	for _, dir := range c.AllowedDirs {
-		d := filepath.Clean(dir)
-		if p == d || strings.HasPrefix(p, d+"/") {
-			return true
-		}
-	}
-	if c.Workspace != "" {
-		w := filepath.Clean(c.Workspace)
-		if p == w || strings.HasPrefix(p, w+"/") {
-			return true
-		}
-	}
-	return false
-}
 
 // checkSubcommandPatterns checks if command matches any banned subcommand pattern.
 func (c *BashChecker) checkSubcommandPatterns(cmd string) (blocked bool, reason string) {

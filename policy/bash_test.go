@@ -268,121 +268,25 @@ func TestBashChecker_WithLLMChecker(t *testing.T) {
 	}
 }
 
-func TestBashChecker_PathValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		command     string
-		allowedDirs []string
-		workspace   string
-		allowed     bool
-		reasonLike  string
-	}{
-		{
-			name:        "pass mkdir outside allowed dirs to LLM",
-			command:     "mkdir -p /workdir/foo",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
-		},
-		{
-			name:        "pass cat /etc/passwd to LLM",
-			command:     "cat /etc/passwd",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
-		},
-		{
-			name:        "allow ls within allowed dir",
-			command:     "ls /root/.local/swarm/workspace",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "allow echo to /dev/null",
-			command:     "echo hello > /dev/null",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "allow brace expansion within allowed dir",
-			command:     "mkdir -p /root/.local/swarm/project/{src,tests}",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "block traversal via relative path",
-			command:     "cat ../../../etc/passwd",
-			allowedDirs: []string{"/root/.local/swarm"},
-			workspace:   "/root/.local/swarm",
-			allowed:     false,
-			reasonLike:  "traversal",
-		},
-		{
-			name:        "allow when no restrictions configured",
-			command:     "cat /etc/passwd",
-			allowedDirs: nil,
-			workspace:   "",
-			allowed:     true,
-		},
-		{
-			name:        "allow workspace path",
-			command:     "cat /workspace/file.txt",
-			allowedDirs: nil,
-			workspace:   "/workspace",
-			allowed:     true,
-		},
-		{
-			name:        "pass path outside workspace to LLM",
-			command:     "cat /etc/shadow",
-			allowedDirs: nil,
-			workspace:   "/workspace",
-			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
-		},
-		{
-			name:        "allow /dev/zero always",
-			command:     "cat /dev/zero",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "allow /dev/urandom always",
-			command:     "head -c 16 /dev/urandom",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "pass flag path outside allowed dirs to LLM",
-			command:     "tool --output=/etc/foo",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
-		},
-		{
-			name:        "heredoc paths are data not commands",
-			command:     "cd /root/.local/swarm/workspace && cat > handler.go << 'EOF'\npackage main\nfunc handler() { path := \"/callback/oauth\" }\nEOF",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true,
-		},
-		{
-			name:        "heredoc with path outside allowed dirs passes to LLM",
-			command:     "cat > /etc/shadow << 'EOF'\nhello\nEOF",
-			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
-		},
+func TestBashChecker_DeterministicDoesNotBlockPaths(t *testing.T) {
+	// Deterministic checker should NOT block based on path analysis.
+	// All path reasoning is delegated to the LLM checker.
+	checker := NewBashChecker("/workspace", []string{"/workspace"}, nil)
+
+	commands := []string{
+		"cat /etc/passwd",
+		"mkdir -p /workdir/foo",
+		"tool --output=/etc/foo",
+		"cat > /etc/shadow << 'EOF'\nhello\nEOF",
+		"ls /root/.ssh",
+		"cat /workspace/../etc/shadow", // even traversal-looking paths in absolute form
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checker := NewBashChecker(tt.workspace, tt.allowedDirs, nil)
-			if tt.workspace == "" && len(tt.allowedDirs) > 0 {
-				// Set a default workspace for tests that don't specify one
-				checker.Workspace = ""
-			}
-			allowed, reason := checker.CheckDeterministic(tt.command)
-			if allowed != tt.allowed {
-				t.Errorf("CheckDeterministic(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
-			}
-			if !tt.allowed && tt.reasonLike != "" && !strings.Contains(reason, tt.reasonLike) {
-				t.Errorf("reason %q should contain %q", reason, tt.reasonLike)
-			}
-		})
+	for _, cmd := range commands {
+		allowed, reason := checker.CheckDeterministic(cmd)
+		if !allowed {
+			t.Errorf("CheckDeterministic(%q) = blocked (%s), want allowed (path analysis is LLM's job)", cmd, reason)
+		}
 	}
 }
 
