@@ -278,18 +278,16 @@ func TestBashChecker_PathValidation(t *testing.T) {
 		reasonLike  string
 	}{
 		{
-			name:        "block mkdir outside allowed dirs",
+			name:        "pass mkdir outside allowed dirs to LLM",
 			command:     "mkdir -p /workdir/foo",
 			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     false,
-			reasonLike:  "outside allowed directories",
+			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
 		},
 		{
-			name:        "block cat /etc/passwd",
+			name:        "pass cat /etc/passwd to LLM",
 			command:     "cat /etc/passwd",
 			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     false,
-			reasonLike:  "outside allowed directories",
+			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
 		},
 		{
 			name:        "allow ls within allowed dir",
@@ -332,12 +330,11 @@ func TestBashChecker_PathValidation(t *testing.T) {
 			allowed:     true,
 		},
 		{
-			name:        "block path outside workspace when no allowedDirs",
+			name:        "pass path outside workspace to LLM",
 			command:     "cat /etc/shadow",
 			allowedDirs: nil,
 			workspace:   "/workspace",
-			allowed:     false,
-			reasonLike:  "outside allowed directories",
+			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
 		},
 		{
 			name:        "allow /dev/zero always",
@@ -352,11 +349,10 @@ func TestBashChecker_PathValidation(t *testing.T) {
 			allowed:     true,
 		},
 		{
-			name:        "extract path from flag --output=/etc/foo",
+			name:        "pass flag path outside allowed dirs to LLM",
 			command:     "tool --output=/etc/foo",
 			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     false,
-			reasonLike:  "outside allowed directories",
+			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
 		},
 		{
 			name:        "heredoc paths are data not commands",
@@ -365,11 +361,10 @@ func TestBashChecker_PathValidation(t *testing.T) {
 			allowed:     true,
 		},
 		{
-			name:        "heredoc with real path before it",
+			name:        "heredoc with path outside allowed dirs passes to LLM",
 			command:     "cat > /etc/shadow << 'EOF'\nhello\nEOF",
 			allowedDirs: []string{"/root/.local/swarm"},
-			allowed:     false,
-			reasonLike:  "outside allowed directories",
+			allowed:     true, // deterministic no longer blocks on path analysis — LLM handles this
 		},
 	}
 

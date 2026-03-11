@@ -291,6 +291,11 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 		return false, "empty command"
 	}
 
+	// Check .. traversal (high-confidence: resolved path is unambiguous)
+	if blocked, reason := c.checkTraversal(cmd); blocked {
+		return false, reason
+	}
+
 	// Check dangerous pipe patterns first
 	for _, pattern := range DangerousPipePatterns {
 		if pattern.MatchString(cmd) {
@@ -301,7 +306,6 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 	// Check if command has shell metacharacters (pipes, chains, etc.)
 	// If so, we need to check ALL segments, not just the first command
 	if containsUnquotedMetachars(cmd) {
-		// Check each segment of a piped/chained command
 		segments := splitCommandSegments(cmd)
 		for _, seg := range segments {
 			segBase := extractBaseCommand(seg)
@@ -315,14 +319,9 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 					return false, fmt.Sprintf("command '%s' is blocked by policy", denied)
 				}
 			}
-			// Check subcommand patterns for each segment
 			if blocked, reason := c.checkSubcommandPatterns(seg); blocked {
 				return false, reason
 			}
-		}
-		// Check paths across the entire command
-		if allowed, reason := c.checkPaths(cmd); !allowed {
-			return false, reason
 		}
 		return true, ""
 	}
@@ -330,27 +329,17 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 	// Simple command (no metacharacters) - just check the base command
 	baseCmd := extractBaseCommand(cmd)
 
-	// Check against banned commands
 	for _, banned := range BannedCommands {
 		if baseCmd == banned {
 			return false, fmt.Sprintf("command '%s' is blocked for security", banned)
 		}
 	}
-
-	// Check against user-defined denied commands
 	for _, denied := range c.UserDeniedCommands {
 		if baseCmd == denied {
 			return false, fmt.Sprintf("command '%s' is blocked by policy", denied)
 		}
 	}
-
-	// Check banned subcommand patterns
 	if blocked, reason := c.checkSubcommandPatterns(cmd); blocked {
-		return false, reason
-	}
-
-	// Check paths in the command
-	if allowed, reason := c.checkPaths(cmd); !allowed {
 		return false, reason
 	}
 
@@ -392,49 +381,26 @@ func stripHeredocs(command string) string {
 	return result
 }
 
-// checkPaths validates that all paths in a command fall within allowed directories.
-func (c *BashChecker) checkPaths(command string) (bool, string) {
-	// Skip if no restrictions configured (backwards compat)
-	if len(c.AllowedDirs) == 0 && c.Workspace == "" {
-		return true, ""
+// checkTraversal detects .. traversal that escapes allowed directories.
+// This is high-confidence: resolving ../../../etc/passwd against workspace is unambiguous.
+func (c *BashChecker) checkTraversal(command string) (bool, string) {
+	if c.Workspace == "" {
+		return false, ""
 	}
-
-	// Strip heredoc bodies — they contain data, not shell paths
 	stripped := stripHeredocs(command)
-
-	// Check for .. traversal in relative paths
-	if c.Workspace != "" && (strings.Contains(stripped, "../") || strings.Contains(stripped, "..\"") || strings.HasSuffix(stripped, "..")) {
-		words := strings.Fields(stripped)
-		for _, w := range words {
-			if strings.Contains(w, "..") {
-				resolved := filepath.Clean(filepath.Join(c.Workspace, w))
-				if !c.isPathAllowed(resolved) {
-					return false, fmt.Sprintf("path '%s' escapes allowed directories via traversal. Allowed: %s", w, c.allowedDirsList())
-				}
+	if !strings.Contains(stripped, "..") {
+		return false, ""
+	}
+	words := strings.Fields(stripped)
+	for _, w := range words {
+		if strings.Contains(w, "..") {
+			resolved := filepath.Clean(filepath.Join(c.Workspace, w))
+			if !c.isPathAllowed(resolved) {
+				return true, fmt.Sprintf("path '%s' escapes allowed directories via traversal. Allowed: %s", w, c.allowedDirsList())
 			}
 		}
 	}
-
-	// Extract absolute paths from command (heredoc content already stripped)
-	matches := pathExtractRe.FindAllStringSubmatch(stripped, -1)
-	for _, m := range matches {
-		p := m[1]
-		// Strip trailing brace expansion to get base path: /foo/{a,b} → /foo/
-		if idx := strings.Index(p, "{"); idx != -1 {
-			p = p[:idx]
-		}
-		p = filepath.Clean(p)
-
-		if isAlwaysAllowed(p) {
-			continue
-		}
-
-		if !c.isPathAllowed(p) {
-			return false, fmt.Sprintf("path '%s' is outside allowed directories. Allowed: %s", p, c.allowedDirsList())
-		}
-	}
-
-	return true, ""
+	return false, ""
 }
 
 // isAlwaysAllowed checks if a path is a system device or temp path that's always permitted.
@@ -447,21 +413,33 @@ func isAlwaysAllowed(p string) bool {
 	return false
 }
 
-// hasValidatedPaths returns true if the command contains absolute paths that
-// the deterministic checker can validate. When true, the LLM check is skipped
-// because deterministic validation is more reliable than small LLM reasoning.
+// hasValidatedPaths returns true if the command contains absolute paths AND
+// all of them are within allowed directories. When true, the LLM check is
+// skipped because deterministic validation is more reliable than small LLM
+// reasoning. Returns false if no paths found or any path is outside bounds
+// (falling through to LLM for the nuanced check).
 func (c *BashChecker) hasValidatedPaths(command string) bool {
 	if len(c.AllowedDirs) == 0 && c.Workspace == "" {
 		return false
 	}
-	matches := pathExtractRe.FindAllStringSubmatch(command, -1)
+	stripped := stripHeredocs(command)
+	matches := pathExtractRe.FindAllStringSubmatch(stripped, -1)
+	foundNonTrivial := false
 	for _, m := range matches {
-		p := filepath.Clean(m[1])
-		if !isAlwaysAllowed(p) {
-			return true // Found a non-trivial path that was validated
+		p := m[1]
+		if idx := strings.Index(p, "{"); idx != -1 {
+			p = p[:idx]
+		}
+		p = filepath.Clean(p)
+		if isAlwaysAllowed(p) {
+			continue
+		}
+		foundNonTrivial = true
+		if !c.isPathAllowed(p) {
+			return false // Path outside bounds — let LLM decide
 		}
 	}
-	return false
+	return foundNonTrivial
 }
 
 // allowedDirsList returns a human-readable list of allowed directories.
