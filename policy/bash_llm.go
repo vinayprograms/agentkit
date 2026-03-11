@@ -44,6 +44,43 @@ func (c *SmallLLMChecker) SetSecurityScope(scope string) {
 	c.securityScope = scope
 }
 
+// parseVerdict extracts the verdict from an LLM response.
+// Small models often dump reasoning before the verdict, so we scan all lines
+// and take the LAST ALLOW/BLOCK found (the model's "final answer").
+// Also extracts reason text following the verdict line.
+func parseVerdict(content string) (verdict, reason string) {
+	lines := strings.Split(content, "\n")
+	lastVerdict := ""
+	lastVerdictIdx := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		upper := strings.ToUpper(trimmed)
+		// Check for standalone ALLOW/BLOCK or **ALLOW**/**BLOCK** (markdown bold)
+		cleaned := strings.Trim(upper, "*_ ")
+		if cleaned == "ALLOW" || cleaned == "BLOCK" {
+			lastVerdict = cleaned
+			lastVerdictIdx = i
+		}
+	}
+
+	if lastVerdict == "" {
+		return "", content
+	}
+
+	// Extract reason from the line after the verdict
+	if lastVerdict == "BLOCK" && lastVerdictIdx+1 < len(lines) {
+		reasonLine := strings.TrimSpace(lines[lastVerdictIdx+1])
+		if strings.HasPrefix(strings.ToLower(reasonLine), "reason:") {
+			reason = strings.TrimSpace(reasonLine[7:])
+		} else if reasonLine != "" {
+			reason = reasonLine
+		}
+	}
+
+	return lastVerdict, reason
+}
+
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
 // workingDir is the cwd where the command executes (for resolving relative paths).
 // Returns a BashCheckResult with the decision and token usage.
@@ -87,33 +124,14 @@ RULES:
 6. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc, /var, /root (unless listed above), /home, or any other path not in the writable list
 7. If a security research context is provided, commands within that scope are OK
 
-Answer with exactly one word on the first line:
-- ALLOW - if the command only reads/executes OR writes inside writable directories
-- BLOCK - if the command writes outside writable directories
+ANSWER FORMAT: Reply with ONLY "ALLOW" or "BLOCK" on its own line.
+If BLOCK, add a brief reason on the next line.
+Do NOT explain your reasoning. Do NOT hedge. Just the verdict.
 
-If BLOCK, add a brief reason on the second line.
+ALLOW means: the command only reads/executes, OR writes inside writable directories (including subdirectories).
+BLOCK means: the command writes to a path that is NOT inside any writable directory.
 
-Example 1:
-Command: go build -o ./app ./cmd/server
-Answer: ALLOW
-(executes go toolchain, writes to working directory)
-
-Example 2:
-Command: mkdir -p /workdir/src
-Writable: /home/user/project
-Answer: BLOCK
-Reason: creates directory /workdir which is outside writable directories
-
-Example 3:
-Command: cat /etc/os-release
-Answer: ALLOW
-(read-only access)
-
-Example 4:
-Command: echo "hello" > /opt/output.txt
-Writable: /home/user/project
-Answer: BLOCK
-Reason: writes to /opt which is outside writable directories
+CRITICAL: Subdirectories of writable directories ARE writable. If /workspace is writable, then /workspace/src/main.go is ALSO writable.
 
 Your answer:`,
 		securityContext,
@@ -130,10 +148,12 @@ Your answer:`,
 		}, err
 	}
 
-	// Parse response
+	// Parse response — extract verdict robustly.
+	// Small models often ignore "first word" instructions and dump reasoning
+	// before the verdict. We scan all lines for ALLOW/BLOCK and take the LAST
+	// occurrence (the model's "final answer" after reasoning).
 	content := strings.TrimSpace(result.Content)
-	lines := strings.SplitN(content, "\n", 2)
-	if len(lines) == 0 {
+	if content == "" {
 		return &BashCheckResult{
 			Allowed:      false,
 			Reason:       "LLM returned empty response",
@@ -142,7 +162,7 @@ Your answer:`,
 		}, nil
 	}
 
-	verdict := strings.ToUpper(strings.TrimSpace(lines[0]))
+	verdict, reason := parseVerdict(content)
 
 	switch verdict {
 	case "ALLOW":
@@ -152,15 +172,8 @@ Your answer:`,
 			OutputTokens: result.OutputTokens,
 		}, nil
 	case "BLOCK":
-		reason := "blocked by LLM policy check"
-		if len(lines) > 1 {
-			// Extract reason from second line
-			reasonLine := strings.TrimSpace(lines[1])
-			if strings.HasPrefix(strings.ToLower(reasonLine), "reason:") {
-				reason = strings.TrimSpace(reasonLine[7:])
-			} else {
-				reason = reasonLine
-			}
+		if reason == "" {
+			reason = "blocked by LLM policy check"
 		}
 		return &BashCheckResult{
 			Allowed:      false,
@@ -169,10 +182,9 @@ Your answer:`,
 			OutputTokens: result.OutputTokens,
 		}, nil
 	default:
-		// Unclear response - fail safe (block)
 		return &BashCheckResult{
 			Allowed:      false,
-			Reason:       fmt.Sprintf("unclear LLM response: %s", lines[0]),
+			Reason:       content,
 			InputTokens:  result.InputTokens,
 			OutputTokens: result.OutputTokens,
 		}, nil
