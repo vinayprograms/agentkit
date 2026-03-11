@@ -4,6 +4,7 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -460,6 +461,69 @@ func TestPolicy_MCPToolDefaultDenyTrue(t *testing.T) {
 	}
 	if reason == "" {
 		t.Error("should have denial reason")
+	}
+}
+
+// ValidateKeys tests
+func TestValidateKeys_WorkspaceRejected(t *testing.T) {
+	content := `
+workspace = "/some/path"
+default_deny = true
+`
+	err := ValidateKeys(content)
+	if err == nil {
+		t.Fatal("expected error for workspace in policy")
+	}
+	if !strings.Contains(err.Error(), "workspace does not belong in policy files") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateKeys_UnknownScalarKey(t *testing.T) {
+	content := `
+default_deny = true
+bogus_key = "wat"
+`
+	err := ValidateKeys(content)
+	if err == nil {
+		t.Fatal("expected error for unknown key")
+	}
+	if !strings.Contains(err.Error(), "bogus_key") {
+		t.Errorf("expected error to mention bogus_key: %v", err)
+	}
+}
+
+func TestValidateKeys_ValidPolicy(t *testing.T) {
+	content := `
+default_deny = true
+
+[mcp]
+default_deny = true
+
+[security]
+extra_keywords = ["secret"]
+
+[bash]
+enabled = true
+allowlist = ["ls *"]
+`
+	err := ValidateKeys(content)
+	if err != nil {
+		t.Fatalf("expected valid policy, got: %v", err)
+	}
+}
+
+func TestValidateKeys_ToolSectionsAllowed(t *testing.T) {
+	content := `
+[read]
+enabled = true
+
+[write]
+enabled = false
+`
+	err := ValidateKeys(content)
+	if err != nil {
+		t.Fatalf("tool sections should be allowed: %v", err)
 	}
 }
 

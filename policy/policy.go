@@ -190,6 +190,48 @@ func Parse(content string) (*Policy, error) {
 	return pol, nil
 }
 
+// knownTopLevelKeys are the recognized non-tool top-level keys in policy.toml.
+var knownTopLevelKeys = map[string]bool{
+	"default_deny": true,
+	"mcp":          true,
+	"security":     true,
+}
+
+// ValidateKeys checks for unknown or unsupported top-level keys in policy TOML.
+// Returns an error if:
+//   - "workspace" appears (must be in agent.toml, not policy.toml)
+//   - Any non-map value key is not in the known set (except default_deny)
+func ValidateKeys(content string) error {
+	var raw map[string]interface{}
+	if _, err := toml.Decode(content, &raw); err != nil {
+		return fmt.Errorf("failed to parse policy: %w", err)
+	}
+
+	// Check for workspace — it never belongs in policy.toml
+	if _, ok := raw["workspace"]; ok {
+		return fmt.Errorf("workspace does not belong in policy files, use [agent].workspace in agent.toml")
+	}
+
+	// Find unknown keys: anything that isn't a known key or a tool section (map)
+	var unknown []string
+	for key, value := range raw {
+		if knownTopLevelKeys[key] {
+			continue
+		}
+		// Tool sections are maps (tables in TOML)
+		if _, isMap := value.(map[string]interface{}); isMap {
+			continue
+		}
+		unknown = append(unknown, key)
+	}
+
+	if len(unknown) > 0 {
+		return fmt.Errorf("unknown top-level keys in policy.toml: %v", unknown)
+	}
+
+	return nil
+}
+
 func toStringSlice(v []interface{}) []string {
 	result := make([]string, 0, len(v))
 	for _, item := range v {
