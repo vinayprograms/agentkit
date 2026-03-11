@@ -24,13 +24,9 @@ func TestRegistry_BuiltinTools(t *testing.T) {
 		}
 	}
 
-	// bash is opt-in via EnableBash() (--yolo flag)
-	if reg.Get("bash") != nil {
-		t.Error("bash should not be registered without EnableBash()")
-	}
-	reg.EnableBash()
+	// bash is always registered (controlled by policy)
 	if reg.Get("bash") == nil {
-		t.Error("bash should be registered after EnableBash()")
+		t.Error("bash should be registered as a built-in tool")
 	}
 }
 
@@ -334,7 +330,6 @@ func TestTool_Bash(t *testing.T) {
 		Allowlist: []string{"echo *"},
 	}
 	reg := NewRegistry(pol)
-	reg.EnableBash()
 
 	tool := reg.Get("bash")
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -359,7 +354,6 @@ func TestTool_Bash_PolicyDeny(t *testing.T) {
 		Allowlist: []string{"echo *"},
 	}
 	reg := NewRegistry(pol)
-	reg.EnableBash()
 
 	tool := reg.Get("bash")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
