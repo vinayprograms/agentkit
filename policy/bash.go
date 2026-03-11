@@ -4,6 +4,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -311,6 +312,10 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 				return false, reason
 			}
 		}
+		// Check paths across the entire command
+		if allowed, reason := c.checkPaths(cmd); !allowed {
+			return false, reason
+		}
 		return true, ""
 	}
 
@@ -336,7 +341,86 @@ func (c *BashChecker) checkDeterministic(command string) (bool, string) {
 		return false, reason
 	}
 
+	// Check paths in the command
+	if allowed, reason := c.checkPaths(cmd); !allowed {
+		return false, reason
+	}
+
 	return true, ""
+}
+
+// alwaysAllowedPaths are system device paths that are always permitted.
+var alwaysAllowedPaths = []string{"/dev/null", "/dev/zero", "/dev/urandom", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
+
+// pathExtractRe matches absolute paths, including those after = signs (flags like --path=/foo).
+var pathExtractRe = regexp.MustCompile(`(?:^|[\s=>"'])(/[^\s"'>|;&)]+)`)
+
+// checkPaths validates that all paths in a command fall within allowed directories.
+func (c *BashChecker) checkPaths(command string) (bool, string) {
+	// Skip if no restrictions configured (backwards compat)
+	if len(c.AllowedDirs) == 0 && c.Workspace == "" {
+		return true, ""
+	}
+
+	// Check for .. traversal in relative paths
+	if c.Workspace != "" && (strings.Contains(command, "../") || strings.Contains(command, "..\"") || strings.HasSuffix(command, "..")) {
+		// Resolve relative .. against workspace to check escape
+		words := strings.Fields(command)
+		for _, w := range words {
+			if strings.Contains(w, "..") {
+				resolved := filepath.Clean(filepath.Join(c.Workspace, w))
+				if !c.isPathAllowed(resolved) {
+					return false, fmt.Sprintf("path '%s' escapes allowed directories via traversal", w)
+				}
+			}
+		}
+	}
+
+	// Extract absolute paths from command
+	matches := pathExtractRe.FindAllStringSubmatch(command, -1)
+	for _, m := range matches {
+		p := m[1]
+		// Strip trailing brace expansion to get base path: /foo/{a,b} → /foo/
+		if idx := strings.Index(p, "{"); idx != -1 {
+			p = p[:idx]
+		}
+		p = filepath.Clean(p)
+
+		// Always-allowed system devices
+		allowed := false
+		for _, ap := range alwaysAllowedPaths {
+			if p == ap {
+				allowed = true
+				break
+			}
+		}
+		if allowed {
+			continue
+		}
+
+		if !c.isPathAllowed(p) {
+			return false, fmt.Sprintf("path '%s' is outside allowed directories", p)
+		}
+	}
+
+	return true, ""
+}
+
+// isPathAllowed checks if a path falls within any allowed directory or workspace.
+func (c *BashChecker) isPathAllowed(p string) bool {
+	for _, dir := range c.AllowedDirs {
+		d := filepath.Clean(dir)
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	if c.Workspace != "" {
+		w := filepath.Clean(c.Workspace)
+		if p == w || strings.HasPrefix(p, w+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSubcommandPatterns checks if command matches any banned subcommand pattern.

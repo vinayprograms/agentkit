@@ -268,6 +268,116 @@ func TestBashChecker_WithLLMChecker(t *testing.T) {
 	}
 }
 
+func TestBashChecker_PathValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		allowedDirs []string
+		workspace   string
+		allowed     bool
+		reasonLike  string
+	}{
+		{
+			name:        "block mkdir outside allowed dirs",
+			command:     "mkdir -p /workdir/foo",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     false,
+			reasonLike:  "outside allowed directories",
+		},
+		{
+			name:        "block cat /etc/passwd",
+			command:     "cat /etc/passwd",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     false,
+			reasonLike:  "outside allowed directories",
+		},
+		{
+			name:        "allow ls within allowed dir",
+			command:     "ls /root/.local/swarm/workspace",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "allow echo to /dev/null",
+			command:     "echo hello > /dev/null",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "allow brace expansion within allowed dir",
+			command:     "mkdir -p /root/.local/swarm/project/{src,tests}",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "block traversal via relative path",
+			command:     "cat ../../../etc/passwd",
+			allowedDirs: []string{"/root/.local/swarm"},
+			workspace:   "/root/.local/swarm",
+			allowed:     false,
+			reasonLike:  "traversal",
+		},
+		{
+			name:        "allow when no restrictions configured",
+			command:     "cat /etc/passwd",
+			allowedDirs: nil,
+			workspace:   "",
+			allowed:     true,
+		},
+		{
+			name:        "allow workspace path",
+			command:     "cat /workspace/file.txt",
+			allowedDirs: nil,
+			workspace:   "/workspace",
+			allowed:     true,
+		},
+		{
+			name:        "block path outside workspace when no allowedDirs",
+			command:     "cat /etc/shadow",
+			allowedDirs: nil,
+			workspace:   "/workspace",
+			allowed:     false,
+			reasonLike:  "outside allowed directories",
+		},
+		{
+			name:        "allow /dev/zero always",
+			command:     "cat /dev/zero",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "allow /dev/urandom always",
+			command:     "head -c 16 /dev/urandom",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     true,
+		},
+		{
+			name:        "extract path from flag --output=/etc/foo",
+			command:     "tool --output=/etc/foo",
+			allowedDirs: []string{"/root/.local/swarm"},
+			allowed:     false,
+			reasonLike:  "outside allowed directories",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := NewBashChecker(tt.workspace, tt.allowedDirs, nil)
+			if tt.workspace == "" && len(tt.allowedDirs) > 0 {
+				// Set a default workspace for tests that don't specify one
+				checker.Workspace = ""
+			}
+			allowed, reason := checker.CheckDeterministic(tt.command)
+			if allowed != tt.allowed {
+				t.Errorf("CheckDeterministic(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			}
+			if !tt.allowed && tt.reasonLike != "" && !strings.Contains(reason, tt.reasonLike) {
+				t.Errorf("reason %q should contain %q", reason, tt.reasonLike)
+			}
+		})
+	}
+}
+
 func TestMergeUserDenylist(t *testing.T) {
 	userDenied := []string{"docker", "curl", "custom-tool"} // curl is duplicate
 
