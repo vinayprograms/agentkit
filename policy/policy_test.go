@@ -550,3 +550,130 @@ allowed_tools = ["filesystem:read_file", "memory:*"]
 		t.Errorf("expected 2 allowed tools, got %d", len(pol.MCP.AllowedTools))
 	}
 }
+
+func TestPolicy_AllowedDirs_Parse(t *testing.T) {
+	content := `
+default_deny = false
+allowed_dirs = ["/workspace", "/tmp"]
+
+[read]
+enabled = true
+`
+	pol, err := Parse(content)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(pol.AllowedDirs) != 2 {
+		t.Fatalf("expected 2 allowed_dirs, got %d", len(pol.AllowedDirs))
+	}
+	if pol.AllowedDirs[0] != "/workspace" || pol.AllowedDirs[1] != "/tmp" {
+		t.Errorf("unexpected allowed_dirs: %v", pol.AllowedDirs)
+	}
+}
+
+func TestPolicy_AllowedDirs_CheckPath(t *testing.T) {
+	pol := &Policy{
+		AllowedDirs: []string{"/workspace", "/tmp"},
+		Workspace:   "/workspace",
+		Tools:       make(map[string]*ToolPolicy),
+	}
+	pol.Tools["read"] = &ToolPolicy{Enabled: true}
+	pol.Tools["write"] = &ToolPolicy{Enabled: true}
+
+	// Within allowed dirs
+	ok, _ := pol.CheckPath("read", "/workspace/file.txt")
+	if !ok {
+		t.Error("expected /workspace/file.txt to be allowed")
+	}
+
+	ok, _ = pol.CheckPath("read", "/tmp/data.json")
+	if !ok {
+		t.Error("expected /tmp/data.json to be allowed")
+	}
+
+	// Outside allowed dirs
+	ok, reason := pol.CheckPath("read", "/etc/passwd")
+	if ok {
+		t.Error("expected /etc/passwd to be denied")
+	}
+	if !strings.Contains(reason, "outside allowed directories") {
+		t.Errorf("expected 'outside allowed directories' reason, got: %s", reason)
+	}
+
+	ok, _ = pol.CheckPath("write", "/root/.ssh/id_rsa")
+	if ok {
+		t.Error("expected /root/.ssh/id_rsa to be denied")
+	}
+}
+
+func TestPolicy_AllowedDirs_WithWorkspaceExpansion(t *testing.T) {
+	pol := &Policy{
+		AllowedDirs: []string{"$WORKSPACE", "/tmp"},
+		Workspace:   "/home/user/project",
+		Tools:       make(map[string]*ToolPolicy),
+	}
+	pol.Tools["read"] = &ToolPolicy{Enabled: true}
+
+	ok, _ := pol.CheckPath("read", "/home/user/project/src/main.go")
+	if !ok {
+		t.Error("expected $WORKSPACE path to be allowed after expansion")
+	}
+
+	ok, _ = pol.CheckPath("read", "/etc/hosts")
+	if ok {
+		t.Error("expected /etc/hosts to be denied")
+	}
+}
+
+func TestPolicy_AllowedDirs_Empty_NoRestriction(t *testing.T) {
+	pol := &Policy{
+		AllowedDirs: nil, // No restriction
+		Workspace:   "/workspace",
+		Tools:       make(map[string]*ToolPolicy),
+	}
+	pol.Tools["read"] = &ToolPolicy{Enabled: true}
+
+	// With no allowed_dirs, any path should pass the allowed_dirs check
+	ok, _ := pol.CheckPath("read", "/etc/passwd")
+	if !ok {
+		t.Error("with no allowed_dirs, paths should not be restricted by directory")
+	}
+}
+
+func TestPolicy_GetAllowedDirs(t *testing.T) {
+	// With explicit allowed_dirs
+	pol := &Policy{
+		AllowedDirs: []string{"$WORKSPACE", "/tmp"},
+		Workspace:   "/myproject",
+	}
+	dirs := pol.GetAllowedDirs()
+	if len(dirs) != 2 || dirs[0] != "/myproject" || dirs[1] != "/tmp" {
+		t.Errorf("expected [/myproject, /tmp], got %v", dirs)
+	}
+
+	// Fallback to workspace
+	pol2 := &Policy{Workspace: "/fallback"}
+	dirs2 := pol2.GetAllowedDirs()
+	if len(dirs2) != 1 || dirs2[0] != "/fallback" {
+		t.Errorf("expected [/fallback], got %v", dirs2)
+	}
+
+	// No workspace either
+	pol3 := &Policy{}
+	dirs3 := pol3.GetAllowedDirs()
+	if dirs3 != nil {
+		t.Errorf("expected nil, got %v", dirs3)
+	}
+}
+
+func TestPolicy_AllowedDirs_ValidateKeys(t *testing.T) {
+	// allowed_dirs should be a recognized top-level key
+	content := `
+default_deny = false
+allowed_dirs = ["/workspace"]
+`
+	err := ValidateKeys(content)
+	if err != nil {
+		t.Errorf("allowed_dirs should be a valid top-level key: %v", err)
+	}
+}

@@ -6,8 +6,18 @@ import (
 	"testing"
 )
 
+// newTestBashChecker creates a BashChecker with a test policy for convenience.
+func newTestBashChecker(workspace string, allowedDirs, userDenied []string) *BashChecker {
+	pol := &Policy{
+		Workspace:   workspace,
+		AllowedDirs: allowedDirs,
+		Tools:       make(map[string]*ToolPolicy),
+	}
+	return NewBashChecker(pol, userDenied)
+}
+
 func TestBashChecker_BannedCommands(t *testing.T) {
-	checker := NewBashChecker("/workspace", nil, nil)
+	checker := newTestBashChecker("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -47,7 +57,7 @@ func TestBashChecker_BannedCommands(t *testing.T) {
 }
 
 func TestBashChecker_BannedSubcommandPatterns(t *testing.T) {
-	checker := NewBashChecker("/workspace", nil, nil)
+	checker := newTestBashChecker("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -86,7 +96,7 @@ func TestBashChecker_BannedSubcommandPatterns(t *testing.T) {
 }
 
 func TestBashChecker_DangerousPipes(t *testing.T) {
-	checker := NewBashChecker("/workspace", nil, nil)
+	checker := newTestBashChecker("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -119,7 +129,7 @@ func TestBashChecker_DangerousPipes(t *testing.T) {
 }
 
 func TestBashChecker_ChainedCommands(t *testing.T) {
-	checker := NewBashChecker("/workspace", nil, nil)
+	checker := newTestBashChecker("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -151,7 +161,7 @@ func TestBashChecker_ChainedCommands(t *testing.T) {
 
 func TestBashChecker_UserDenylist(t *testing.T) {
 	// Add custom denied commands
-	checker := NewBashChecker("/workspace", nil, []string{"docker", "podman", "kubectl"})
+	checker := newTestBashChecker("/workspace", nil, []string{"docker", "podman", "kubectl"})
 
 	tests := []struct {
 		name    string
@@ -180,7 +190,7 @@ func TestBashChecker_UserDenylist(t *testing.T) {
 }
 
 func TestBashChecker_PathStripping(t *testing.T) {
-	checker := NewBashChecker("/workspace", nil, nil)
+	checker := newTestBashChecker("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -240,7 +250,7 @@ func TestBashChecker_WithLLMChecker(t *testing.T) {
 		return &BashCheckResult{Allowed: false, Reason: "path outside allowed directories"}, nil
 	}
 
-	checker := NewBashChecker("/workspace", []string{"/workspace", "/tmp"}, nil)
+	checker := newTestBashChecker("/workspace", []string{"/workspace", "/tmp"}, nil)
 	checker.LLMChecker = mockLLMChecker
 
 	tests := []struct {
@@ -271,7 +281,7 @@ func TestBashChecker_WithLLMChecker(t *testing.T) {
 func TestBashChecker_DeterministicDoesNotBlockPaths(t *testing.T) {
 	// Deterministic checker should NOT block based on path analysis.
 	// All path reasoning is delegated to the LLM checker.
-	checker := NewBashChecker("/workspace", []string{"/workspace"}, nil)
+	checker := newTestBashChecker("/workspace", []string{"/workspace"}, nil)
 
 	commands := []string{
 		"cat /etc/passwd",

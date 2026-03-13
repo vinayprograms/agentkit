@@ -23,6 +23,7 @@ type Policy struct {
 	Workspace   string
 	HomeDir     string
 	ConfigDir   string // Directory containing agent.toml, policy.toml
+	AllowedDirs []string        // Top-level allowed directories — universal filesystem boundary
 	Tools       map[string]*ToolPolicy
 	MCP         *MCPPolicy      // MCP tools policy
 	Security    *SecurityPolicy // Security patterns and keywords
@@ -35,7 +36,6 @@ type ToolPolicy struct {
 	Deny         []string
 	Allowlist    []string // for bash: legacy command allowlist
 	Denylist     []string // for bash: additional commands to block
-	AllowedDirs  []string // for bash: directories agent can access
 	AllowDomains []string // for web tools
 	RateLimit    int      // requests per minute
 	Sandbox      string   // for bash: "none", "bwrap", "docker" (default: none)
@@ -72,7 +72,6 @@ type tomlTool struct {
 	Deny         []string `toml:"deny"`
 	Allowlist    []string `toml:"allowlist"`
 	Denylist     []string `toml:"denylist"`
-	AllowedDirs  []string `toml:"allowed_dirs"`
 	AllowDomains []string `toml:"allow_domains"`
 	RateLimit    int      `toml:"rate_limit"`
 	Sandbox      string   `toml:"sandbox"` // "none", "bwrap", "docker"
@@ -99,9 +98,10 @@ func LoadFile(path string) (*Policy, error) {
 
 // Parse parses a policy from TOML content.
 func Parse(content string) (*Policy, error) {
-	// First pass: get default_deny, mcp, and security sections
+	// First pass: get top-level fields and named sections
 	var base struct {
-		DefaultDeny bool `toml:"default_deny"`
+		DefaultDeny bool     `toml:"default_deny"`
+		AllowedDirs []string `toml:"allowed_dirs"`
 		MCP         *struct {
 			DefaultDeny  bool     `toml:"default_deny"`
 			AllowedTools []string `toml:"allowed_tools"`
@@ -117,6 +117,7 @@ func Parse(content string) (*Policy, error) {
 
 	pol := New()
 	pol.DefaultDeny = base.DefaultDeny
+	pol.AllowedDirs = base.AllowedDirs
 	
 	// Parse MCP policy
 	if base.MCP != nil {
@@ -168,9 +169,6 @@ func Parse(content string) (*Policy, error) {
 		if v, ok := toolMap["denylist"].([]interface{}); ok {
 			tp.Denylist = toStringSlice(v)
 		}
-		if v, ok := toolMap["allowed_dirs"].([]interface{}); ok {
-			tp.AllowedDirs = toStringSlice(v)
-		}
 		if v, ok := toolMap["allow_domains"].([]interface{}); ok {
 			tp.AllowDomains = toStringSlice(v)
 		}
@@ -193,6 +191,7 @@ func Parse(content string) (*Policy, error) {
 // knownTopLevelKeys are the recognized non-tool top-level keys in policy.toml.
 var knownTopLevelKeys = map[string]bool{
 	"default_deny": true,
+	"allowed_dirs": true,
 	"mcp":          true,
 	"security":     true,
 }
@@ -345,6 +344,13 @@ func (p *Policy) CheckPath(tool, path string) (bool, string) {
 		}
 	}
 
+	// Universal allowed_dirs check — if set, path must be within one of them
+	if len(p.AllowedDirs) > 0 {
+		if !p.isWithinAllowedDirs(absPath) {
+			return false, fmt.Sprintf("path %s is outside allowed directories", path)
+		}
+	}
+
 	// Check deny patterns first (deny wins)
 	for _, pattern := range tp.Deny {
 		expanded := p.expandPattern(pattern)
@@ -371,6 +377,39 @@ func (p *Policy) CheckPath(tool, path string) (bool, string) {
 	}
 
 	return true, ""
+}
+
+// isWithinAllowedDirs checks if an absolute path falls within any allowed directory.
+func (p *Policy) isWithinAllowedDirs(absPath string) bool {
+	for _, dir := range p.AllowedDirs {
+		expanded := p.expandPattern(dir)
+		expandedAbs, err := filepath.Abs(expanded)
+		if err != nil {
+			expandedAbs = expanded
+		}
+		// Path is within this dir if it equals it or is a subdirectory
+		if absPath == expandedAbs || strings.HasPrefix(absPath, expandedAbs+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetAllowedDirs returns the top-level allowed directories, expanding variables.
+// Falls back to workspace if no allowed_dirs are configured.
+func (p *Policy) GetAllowedDirs() []string {
+	if len(p.AllowedDirs) > 0 {
+		expanded := make([]string, len(p.AllowedDirs))
+		for i, dir := range p.AllowedDirs {
+			expanded[i] = p.expandPattern(dir)
+		}
+		return expanded
+	}
+	// Fallback: workspace only
+	if p.Workspace != "" {
+		return []string{p.Workspace}
+	}
+	return nil
 }
 
 // CheckCommand checks if a command is allowed for bash.

@@ -185,10 +185,10 @@ var DangerousPipePatterns = []*regexp.Regexp{
 
 // BashChecker provides two-step bash command security checking.
 type BashChecker struct {
-	// AllowedDirs from agent.toml - directories the agent can access
-	AllowedDirs []string
+	// Policy provides allowed directories (top-level allowed_dirs)
+	Policy *Policy
 
-	// UserDeniedCommands from agent.toml - additional commands to block
+	// UserDeniedCommands from policy.toml - additional commands to block
 	UserDeniedCommands []string
 
 	// LLMChecker is called for step 2 (semantic check) if step 1 passes
@@ -209,11 +209,11 @@ type BashChecker struct {
 }
 
 // NewBashChecker creates a new bash security checker.
-func NewBashChecker(workspace string, allowedDirs, userDeniedCommands []string) *BashChecker {
+func NewBashChecker(pol *Policy, userDeniedCommands []string) *BashChecker {
 	return &BashChecker{
-		AllowedDirs:        allowedDirs,
+		Policy:             pol,
 		UserDeniedCommands: userDeniedCommands,
-		Workspace:          workspace,
+		Workspace:          pol.Workspace,
 	}
 }
 
@@ -228,7 +228,7 @@ type LLMPolicyChecker interface {
 // SetLLMChecker sets the LLM checker for directory policy verification.
 func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
 	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
-		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Workspace)
+		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Policy.Workspace)
 	}
 }
 
@@ -254,9 +254,10 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 	}
 
 	// Step 2: LLM policy check — handles all path/write analysis
-	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
+	allowedDirs := c.Policy.GetAllowedDirs()
+	if c.LLMChecker != nil && len(allowedDirs) > 0 {
 		start := time.Now()
-		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
+		result, err := c.LLMChecker(ctx, command, allowedDirs)
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
 			if c.OnDecision != nil {
