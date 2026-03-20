@@ -123,16 +123,20 @@ COMMAND:
 RULES:
 1. READ and EXECUTE from anywhere is OK — running compilers, interpreters, build tools, reading system libraries, and accessing toolchain paths is normal
 2. WRITE operations (create, modify, delete, mkdir, touch, mv, cp, >, >>) are ONLY allowed inside the WRITABLE DIRECTORIES listed above
-3. Relative paths resolve from WORKING DIRECTORY — check if the resolved path is inside a writable directory
-4. /tmp is always writable (temporary files and build outputs)
-5. /dev/null, /dev/zero, /dev/urandom are always writable (system devices)
-6. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc, /var, /root (unless listed above), /home, or any other path not in the writable list
-7. If a security research context is provided, commands within that scope are OK
+3. A writable directory means the directory AND ALL ITS SUBDIRECTORIES at any depth are writable. Example: if /workspace is writable, then /workspace/src/main.go, /workspace/internal/auth/handler.go, and /workspace/a/b/c/d.txt are ALL writable. This is non-negotiable.
+4. Relative paths resolve from WORKING DIRECTORY — check if the resolved path is inside a writable directory
+5. /tmp is always writable (temporary files and build outputs)
+6. /dev/null, /dev/zero, /dev/urandom are always writable (system devices)
+7. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc, /var, /root (unless listed above), /home, or any other path not in the writable list
+8. SECURITY: Watch for path traversal attacks. Paths containing /../ or /../../ that escape a writable directory MUST be resolved to their canonical form first. Example: /workspace/../etc/passwd resolves to /etc/passwd which is NOT inside /workspace — BLOCK it.
+9. If a security research context is provided, commands within that scope are OK
 
-RULES SUMMARY:
-- ALLOW: command only reads/executes, OR writes inside writable directories
-- BLOCK: command writes to a path NOT inside any writable directory
-- Subdirectories of writable directories ARE writable (if /workspace is writable, /workspace/src/main.go is too)
+DECISION LOGIC:
+For each write path in the command:
+  a. Resolve the full absolute path (expand relative paths from cwd, resolve all .. components)
+  b. Check: does the resolved path start with any WRITABLE DIRECTORY prefix?
+  c. If YES for all write paths → ALLOW
+  d. If NO for any write path → BLOCK
 
 Respond with ONLY a JSON object, nothing else:
 {"verdict":"ALLOW"} or {"verdict":"BLOCK","reason":"brief explanation"}`,
