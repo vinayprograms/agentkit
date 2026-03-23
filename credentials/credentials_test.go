@@ -59,7 +59,7 @@ api_key = "generic-llm-key"
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Any provider should get the generic key
+	// LLM providers should get the generic key
 	if got := creds.GetAPIKey("anthropic"); got != "generic-llm-key" {
 		t.Errorf("anthropic key = %q, want %q (from [llm])", got, "generic-llm-key")
 	}
@@ -68,6 +68,17 @@ api_key = "generic-llm-key"
 	}
 	if got := creds.GetAPIKey("my-custom-provider"); got != "generic-llm-key" {
 		t.Errorf("my-custom-provider key = %q, want %q (from [llm])", got, "generic-llm-key")
+	}
+
+	// Tool services must NOT get the LLM fallback key
+	if got := creds.GetAPIKey("searxng"); got != "" {
+		t.Errorf("searxng key = %q, want empty (must not fall back to [llm])", got)
+	}
+	if got := creds.GetAPIKey("brave"); got != "" {
+		t.Errorf("brave key = %q, want empty (must not fall back to [llm])", got)
+	}
+	if got := creds.GetAPIKey("tavily"); got != "" {
+		t.Errorf("tavily key = %q, want empty (must not fall back to [llm])", got)
 	}
 }
 

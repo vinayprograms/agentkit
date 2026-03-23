@@ -255,8 +255,9 @@ func (c *Credentials) GetCredential(provider string) Credential {
 			return Credential{Key: creds.APIKey, IsOAuthToken: false}
 		}
 
-		// Fall back to generic [llm] section
-		if c.LLM != nil && c.LLM.APIKey != "" {
+		// Fall back to generic [llm] section — only for LLM providers,
+		// never for tool services (searxng, brave, tavily, etc.)
+		if c.LLM != nil && c.LLM.APIKey != "" && isLLMProvider(normalized) {
 			return Credential{Key: c.LLM.APIKey, IsOAuthToken: false}
 		}
 	}
@@ -407,6 +408,18 @@ func writeOAuthToken(sb *strings.Builder, token *OAuthToken) {
 			sb.WriteString(fmt.Sprintf("%q", scope))
 		}
 		sb.WriteString("]\n")
+	}
+}
+
+// isLLMProvider returns true if the provider is a known LLM provider
+// (as opposed to a tool service like searxng, brave, tavily).
+// The [llm] fallback key should only apply to LLM providers.
+func isLLMProvider(normalized string) bool {
+	switch normalized {
+	case "searxng", "brave", "tavily":
+		return false
+	default:
+		return true
 	}
 }
 
