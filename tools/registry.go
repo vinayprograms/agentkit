@@ -18,6 +18,7 @@ import (
 
 	"github.com/vinayprograms/agentkit/policy"
 	"github.com/vinayprograms/agentkit/telemetry"
+	"github.com/vinayprograms/agentkit/types"
 )
 
 // defaultHTTPTimeout is used when no timeout is configured.
@@ -102,27 +103,14 @@ type SemanticMemory interface {
 	Recall(ctx context.Context, query string, limit int) ([]SemanticMemoryResult, error)
 }
 
-// ObservationItem represents a stored observation with its ID.
-type ObservationItem struct {
-	ID       string `json:"id"`
-	Content  string `json:"content"`
-	Category string `json:"category"`
-}
+// ObservationItem is an alias for types.ObservationItem (backward compatible).
+type ObservationItem = types.ObservationItem
 
-// FILResult holds categorized observation results.
-type FILResult struct {
-	Findings []string `json:"findings"`
-	Insights []string `json:"insights"`
-	Lessons  []string `json:"lessons"`
-}
+// FILResult is an alias for types.FILResult (backward compatible).
+type FILResult = types.FILResult
 
-// SemanticMemoryResult is a memory with relevance score.
-type SemanticMemoryResult struct {
-	ID       string  `json:"id"`
-	Content  string  `json:"content"`
-	Category string  `json:"category"` // "finding" | "insight" | "lesson"
-	Score    float32 `json:"score"`
-}
+// SemanticMemoryResult is an alias for types.SemanticMemoryResult (backward compatible).
+type SemanticMemoryResult = types.SemanticMemoryResult
 
 // NewRegistry creates a new registry with built-in tools.
 func NewRegistry(pol *policy.Policy) *Registry {

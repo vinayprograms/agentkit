@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+
+	"github.com/vinayprograms/agentkit/types"
 )
 
 // ToolsAdapter adapts memory.Store to the tools.SemanticMemory interface.
@@ -14,57 +16,31 @@ func NewToolsAdapter(store Store) *ToolsAdapter {
 	return &ToolsAdapter{store: store}
 }
 
-// ToolsMemoryResult mirrors tools.SemanticMemoryResult
-type ToolsMemoryResult struct {
-	ID       string  `json:"id"`
-	Content  string  `json:"content"`
-	Category string  `json:"category"` // "finding" | "insight" | "lesson"
-	Score    float32 `json:"score"`
-}
-
-// ToolsObservationItem mirrors tools.ObservationItem
-type ToolsObservationItem struct {
-	ID       string `json:"id"`
-	Content  string `json:"content"`
-	Category string `json:"category"`
-}
-
 // RememberFIL stores multiple observations and returns their IDs.
 func (a *ToolsAdapter) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error) {
 	return a.store.RememberFIL(ctx, findings, insights, lessons, source)
 }
 
 // RetrieveByID gets a single observation by ID.
-func (a *ToolsAdapter) RetrieveByID(ctx context.Context, id string) (*ToolsObservationItem, error) {
-	item, err := a.store.RetrieveByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if item == nil {
-		return nil, nil
-	}
-	return &ToolsObservationItem{
-		ID:       item.ID,
-		Content:  item.Content,
-		Category: item.Category,
-	}, nil
+func (a *ToolsAdapter) RetrieveByID(ctx context.Context, id string) (*types.ObservationItem, error) {
+	return a.store.RetrieveByID(ctx, id)
 }
 
 // RecallFIL searches and returns results grouped as FIL.
-func (a *ToolsAdapter) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*FILResult, error) {
+func (a *ToolsAdapter) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error) {
 	return a.store.RecallFIL(ctx, query, limitPerCategory)
 }
 
 // Recall searches for relevant memories (all categories).
-func (a *ToolsAdapter) Recall(ctx context.Context, query string, limit int) ([]ToolsMemoryResult, error) {
+func (a *ToolsAdapter) Recall(ctx context.Context, query string, limit int) ([]types.SemanticMemoryResult, error) {
 	results, err := a.store.Recall(ctx, query, RecallOpts{Limit: limit})
 	if err != nil {
 		return nil, err
 	}
 
-	out := make([]ToolsMemoryResult, len(results))
+	out := make([]types.SemanticMemoryResult, len(results))
 	for i, r := range results {
-		out[i] = ToolsMemoryResult{
+		out[i] = types.SemanticMemoryResult{
 			ID:       r.ID,
 			Content:  r.Content,
 			Category: r.Category,

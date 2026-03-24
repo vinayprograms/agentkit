@@ -1,72 +1,67 @@
 # AgentKit
 
-Reusable Go packages for building AI agent swarms.
+A Go toolkit for building AI agents. No opinions about agent architecture -- just building blocks: LLM providers, tool execution, memory, message passing, and coordination primitives. Use what you need, ignore the rest.
 
 ## Quick Start
-
-Get an agent running in 5 minutes:
 
 ```bash
 go get github.com/vinayprograms/agentkit
 ```
+
+The simplest agent: create an LLM provider, define tools, and run an agentic loop.
 
 ```go
 package main
 
 import (
     "context"
-    "log"
+    "fmt"
+    "os"
     "time"
 
-    "github.com/vinayprograms/agentkit/bus"
-    "github.com/vinayprograms/agentkit/heartbeat"
-    "github.com/vinayprograms/agentkit/registry"
+    "github.com/vinayprograms/agentkit/llm"
 )
 
 func main() {
-    ctx := context.Background()
-
-    // Connect to message bus — the backbone of agent communication
-    msgBus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
-    defer msgBus.Close()
-
-    // Register this agent — so other agents can discover us
-    reg, _ := registry.NewNATSRegistry(msgBus.Conn(), registry.NATSRegistryConfig{
-        BucketName: "my-swarm",
-        TTL:        30 * time.Second,
-    })
-    defer reg.Close()
-
-    agentID := "worker-1"
-    reg.Register(registry.AgentInfo{
-        ID:           agentID,
-        Name:         "Example Worker",
-        Capabilities: []string{"process-tasks"},
-        Status:       registry.StatusIdle,
+    // Create an LLM provider (supports Anthropic, OpenAI, Google, Groq, Mistral, Ollama, ...)
+    provider, _ := llm.NewProvider(llm.ProviderConfig{
+        Provider:  "anthropic",
+        Model:     "claude-sonnet-4-20250514",
+        APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
+        MaxTokens: 4096,
     })
 
-    // Start heartbeat — proves we're alive to coordinators
-    sender, _ := heartbeat.NewBusSender(heartbeat.SenderConfig{
-        Bus:      msgBus,
-        AgentID:  agentID,
-        Interval: 5 * time.Second,
-    })
-    sender.Start(ctx)
-    defer sender.Stop()
+    // Define tools the agent can use
+    tools := []llm.ToolDef{{
+        Name:        "current_time",
+        Description: "Returns the current UTC time.",
+        Parameters:  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+    }}
 
-    // Subscribe to work via queue group — load balanced across workers
-    sub, _ := msgBus.QueueSubscribe("tasks.process", "workers")
+    // Agentic loop: send → tool calls → execute → feed back → repeat
+    messages := []llm.Message{{Role: "user", Content: "What time is it?"}}
 
-    log.Printf("Agent %s ready", agentID)
+    for {
+        resp, _ := provider.Chat(context.Background(), llm.ChatRequest{
+            Messages: messages, Tools: tools, MaxTokens: 4096,
+        })
 
-    for msg := range sub.Messages() {
-        sender.SetStatus("busy")
-        log.Printf("Processing: %s", msg.Data)
-        // ... your logic here ...
-        sender.SetStatus("idle")
+        if len(resp.ToolCalls) == 0 {
+            fmt.Println(resp.Content) // Final answer
+            break
+        }
+
+        // Execute tool calls and feed results back
+        messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+        for _, tc := range resp.ToolCalls {
+            result := time.Now().UTC().Format(time.RFC3339) // your tool logic here
+            messages = append(messages, llm.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+        }
     }
 }
 ```
+
+See [examples/simple-llm-agent](examples/simple-llm-agent/) for the complete, runnable version.
 
 ## Architecture
 
@@ -97,9 +92,9 @@ graph TB
     Bus --> Backend
 ```
 
-**Message Bus** is the foundation — all agent communication flows through it.
+**Message Bus** is the foundation -- all agent communication flows through it.
 
-**Swarm Coordination** builds on the bus — registry tracks agents, heartbeat detects failures, state shares data, tasks manage work.
+**Swarm Coordination** builds on the bus -- registry tracks agents, heartbeat detects failures, state shares data, tasks manage work.
 
 **Your Agent** uses coordination primitives plus LLM/tools/memory for actual work.
 
@@ -150,29 +145,34 @@ Start with the fundamentals, then add capabilities as needed:
 
 ## Examples
 
-Working code you can run:
+Working code you can run, ordered from simple to advanced:
+
+### Single Agent
 
 | Example | What It Shows |
 |---------|---------------|
+| [simple-llm-agent](examples/simple-llm-agent/) | LLM provider + custom tools + agentic loop |
+| [memory-agent](examples/memory-agent/) | Persistent BM25 memory with remember/recall |
+| [structured-errors](examples/structured-errors/) | Error handling patterns |
 | [chat-transport](examples/chat-transport/) | Basic transport setup |
+
+### Multi-Agent Coordination
+
+| Example | What It Shows |
+|---------|---------------|
 | [task-queue](examples/task-queue/) | Work distribution via bus |
 | [swarm-heartbeat](examples/swarm-heartbeat/) | Agent liveness detection |
-| [graceful-shutdown](examples/graceful-shutdown/) | Multi-phase shutdown |
 | [idempotent-tasks](examples/idempotent-tasks/) | Safe task retries |
-| [rate-limiting](examples/rate-limiting/) | Coordinated rate limits |
 | [result-publication](examples/result-publication/) | Pub/sub for results |
-| [structured-errors](examples/structured-errors/) | Error handling patterns |
+| [rate-limiting](examples/rate-limiting/) | Coordinated rate limits |
+| [graceful-shutdown](examples/graceful-shutdown/) | Multi-phase shutdown |
 
 ## Design Philosophy
 
-- **Composition over frameworks** — Use what you need, ignore the rest
-- **Backend agnostic** — Memory implementations for testing, NATS for production
-- **Go idiomatic** — Channels, interfaces, context propagation
-- **Explicit over magic** — No hidden state, no auto-discovery
-
-## Used By
-
-- [headless-agent](https://github.com/vinayprograms/agent) — Goal-oriented headless agent
+- **Composition over frameworks** -- Use what you need, ignore the rest
+- **Backend agnostic** -- Memory implementations for testing, NATS for production
+- **Go idiomatic** -- Channels, interfaces, context propagation
+- **Explicit over magic** -- No hidden state, no auto-discovery
 
 ## License
 
