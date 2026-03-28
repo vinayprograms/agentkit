@@ -37,7 +37,7 @@ func NewEnvStore() EnvStore {
 // Interface implementation
 
 // Get returns the API key from the environment variable for the provider.
-func (e *EnvStore) Get(provider string) Credential {
+func (e EnvStore) Get(provider string) Credential {
 	if key := os.Getenv(providerEnvVars[provider]); key != "" {
 		return Credential(key)
 	}
@@ -45,9 +45,9 @@ func (e *EnvStore) Get(provider string) Credential {
 }
 
 // Providers returns an empty map; env vars cannot be enumerated by provider.
-func (e *EnvStore) Providers() []string {
-	providers := make([]string, 0, len(providerEnvVars))
-	for provider := range providerEnvVars {
+func (e EnvStore) Providers() []string {
+	var providers []string
+	for provider := range e {
 		providers = append(providers, provider)
 	}
 	return providers

@@ -14,11 +14,8 @@ type Credential string
 // Interface to look up a specific provider's credential.
 type Lookup interface {
 
-	// Get the credential for a provider, returning the credential and whether it was found.
-	Get(provider string) (Credential, bool)
-
-	// Invalidates the credential for a provider.
-	Invalidate(provider string)
+	// Get returns the credential for a provider, or an empty credential if not found.
+	Get(provider string) Credential
 
 	// List all providers with available credentials.
 	Providers() []string

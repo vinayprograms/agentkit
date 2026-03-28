@@ -100,7 +100,7 @@ refresh_url = "https://oauth2.googleapis.com/token"
 }
 
 func TestGetProviderAPIKey(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{
 			APIKey: "anthropic-key",
 		},
@@ -111,14 +111,14 @@ func TestGetProviderAPIKey(t *testing.T) {
 }
 
 func TestGetProviderAPIKeyMissingProvider(t *testing.T) {
-	store := CredentialStore{}
+	store := FileStore{}
 
 	apiKey := store.Get("nonexistent")
 	assert.Empty(t, string(apiKey))
 }
 
 func TestGetProviderAPIKeyMissingAPIKey(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{},
 	}
 
@@ -127,7 +127,7 @@ func TestGetProviderAPIKeyMissingAPIKey(t *testing.T) {
 }
 
 func TestGetProviderOAuthToken(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"google": TomlProvider{
 			OAuth: &OAuthToken{
 				AccessToken:  "oauth-access-token",
@@ -144,7 +144,7 @@ func TestGetProviderOAuthToken(t *testing.T) {
 }
 
 func TestGetProviderOAuthTokenExpired(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"google": TomlProvider{
 			OAuth: &OAuthToken{
 				AccessToken:  "oauth-access-token",
@@ -161,7 +161,7 @@ func TestGetProviderOAuthTokenExpired(t *testing.T) {
 }
 
 func TestGetProviderOAuthTokenMissingOAuth(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"google": TomlProvider{},
 	}
 
@@ -170,14 +170,14 @@ func TestGetProviderOAuthTokenMissingOAuth(t *testing.T) {
 }
 
 func TestGetProviderOAuthTokenMissingProvider(t *testing.T) {
-	store := CredentialStore{}
+	store := FileStore{}
 
 	token := store.Get("nonexistent")
 	assert.Empty(t, string(token))
 }
 
 func TestProviders(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{
 			APIKey: "anthropic-key",
 		},
@@ -197,7 +197,7 @@ func TestProviders(t *testing.T) {
 }
 
 func TestAddProviderWithAPIKey(t *testing.T) {
-	store := CredentialStore{}
+	store := FileStore{}
 
 	store.SetAPIKey("anthropic", "anthropic-key")
 
@@ -221,7 +221,7 @@ api_key = "anthropic-key"
 }
 
 func TestUpdateProviderAPIKey(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{
 			APIKey: "old-key",
 		},
@@ -233,7 +233,7 @@ func TestUpdateProviderAPIKey(t *testing.T) {
 }
 
 func TestAddProviderWithOAuthToken(t *testing.T) {
-	store := CredentialStore{}
+	store := FileStore{}
 
 	expiresAt := time.Now().Add(1 * time.Hour)
 	token := OAuthToken{
@@ -250,7 +250,7 @@ func TestAddProviderWithOAuthToken(t *testing.T) {
 }
 
 func TestUpdateProviderOAuthToken(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"google": TomlProvider{
 			OAuth: &OAuthToken{
 				AccessToken:  "old-access-token",
@@ -277,7 +277,7 @@ func TestUpdateProviderOAuthToken(t *testing.T) {
 }
 
 func TestSaveAPIKey(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{
 			APIKey: "anthropic-key",
 		},
@@ -299,7 +299,7 @@ api_key = "anthropic-key"
 }
 
 func TestSaveMissingAPIKey(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"anthropic": TomlProvider{},
 	}
 
@@ -316,7 +316,7 @@ func TestSaveMissingAPIKey(t *testing.T) {
 }
 
 func TestSaveOAuthToken(t *testing.T) {
-	store := CredentialStore{
+	store := FileStore{
 		"google": TomlProvider{
 			OAuth: &OAuthToken{
 				AccessToken:  "oauth-access-token",

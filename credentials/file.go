@@ -24,14 +24,14 @@ import (
 // scopes = ["scope1", "scope2"]
 // refresh_url = "https://oauth2.googleapis.com/token"
 
-type CredentialStore map[string]TomlProvider
+type FileStore map[string]TomlProvider
 type TomlProvider struct {
 	APIKey string      `toml:"api_key,omitempty"`
 	OAuth  *OAuthToken `toml:"oauth,omitempty"`
 }
 
 // NewFileStore creates an empty file-based credentials container.
-func NewFileStore(filepath string) (CredentialStore, error) {
+func NewFileStore(filepath string) (FileStore, error) {
 	// Check file permissions before loading, if file exists.
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(filepath)
@@ -57,9 +57,9 @@ func NewFileStore(filepath string) (CredentialStore, error) {
 		}
 	}
 
-	var store CredentialStore
+	var store FileStore
 	if _, err := toml.Decode(contents, &store); err != nil {
-		return CredentialStore{}, err
+		return FileStore{}, err
 	}
 	return store, nil
 }
@@ -69,23 +69,23 @@ func NewFileStore(filepath string) (CredentialStore, error) {
 
 // Get resolves a credential for a provider from file data.
 // Priority: [provider.oauth] > [provider].api_key.
-func (c *CredentialStore) Get(provider string) Credential {
-	if token := (*c)[provider].OAuth; token != nil && token.IsValid() {
+func (c FileStore) Get(provider string) Credential {
+	if token := c[provider].OAuth; token != nil && token.IsValid() {
 		return Credential(token.AccessToken)
 	}
 
-	if p, ok := (*c)[provider]; ok && p.APIKey != "" {
+	if p, ok := c[provider]; ok && p.APIKey != "" {
 		return Credential(p.APIKey)
 	}
 
 	return ""
 }
 
-func (c *CredentialStore) Providers() []string {
+func (c FileStore) Providers() []string {
 
 	var providers []string
 
-	for provider, _ := range *c {
+	for provider := range c {
 		providers = append(providers, provider)
 	}
 
@@ -96,7 +96,7 @@ func (c *CredentialStore) Providers() []string {
 // Additional methods
 
 // SetAPIKey stores/updates an API key for a provider.
-func (c *CredentialStore) SetAPIKey(provider, apiKey string) {
+func (c *FileStore) SetAPIKey(provider, apiKey string) {
 	if p, ok := (*c)[provider]; ok {
 		p.APIKey = apiKey
 		(*c)[provider] = p
@@ -105,7 +105,7 @@ func (c *CredentialStore) SetAPIKey(provider, apiKey string) {
 	}
 }
 
-func (c *CredentialStore) SetOAuthToken(provider string, token OAuthToken) {
+func (c *FileStore) SetOAuthToken(provider string, token OAuthToken) {
 	if p, ok := (*c)[provider]; ok {
 		p.OAuth = &token
 		(*c)[provider] = p
@@ -115,7 +115,7 @@ func (c *CredentialStore) SetOAuthToken(provider string, token OAuthToken) {
 }
 
 // Save writes credentials to a specific file.
-func (c *CredentialStore) Save(path string) error {
+func (c *FileStore) Save(path string) error {
 	var sb strings.Builder
 
 	for provider, creds := range *c {

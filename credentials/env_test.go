@@ -8,8 +8,8 @@ import (
 )
 
 func TestAllEnvStore(t *testing.T) {
-	// Set environment variables for all providers
-	for _, envVar := range providerEnvVars {
+	os.Clearenv()                            // Clear all env vars to ensure a clean test environment
+	for _, envVar := range providerEnvVars { // Set environment variables for all providers
 		os.Setenv(envVar, envVar+"-value")
 		defer os.Unsetenv(envVar)
 	}
@@ -23,6 +23,7 @@ func TestAllEnvStore(t *testing.T) {
 }
 
 func TestEnvStoreMissingVars(t *testing.T) {
+	os.Clearenv() // Clear all env vars to ensure a clean test environment
 	// Ensure no relevant environment variables are set
 	for _, envVar := range providerEnvVars {
 		os.Unsetenv(envVar)
@@ -36,6 +37,7 @@ func TestEnvStoreMissingVars(t *testing.T) {
 }
 
 func TestEnvStorePartialVars(t *testing.T) {
+	os.Clearenv() // Clear all env vars to ensure a clean test environment
 	// Set environment variables for some providers
 	os.Setenv("OPENAI_API_KEY", "openai-value")
 	defer os.Unsetenv("OPENAI_API_KEY")
@@ -48,9 +50,15 @@ func TestEnvStorePartialVars(t *testing.T) {
 }
 
 func TestEnvStoreProviders(t *testing.T) {
+	os.Clearenv() // Clear all env vars to ensure a clean test environment
+	// Set environment variables for some providers
+	os.Setenv("ANTHROPIC_API_KEY", "anthropic-value")
+	defer os.Unsetenv("ANTHROPIC_API_KEY")
+	os.Setenv("GOOGLE_API_KEY", "google-value")
+	defer os.Unsetenv("GOOGLE_API_KEY")
 	store := NewEnvStore()
 	providers := store.Providers()
 
-	expectedProviders := []string{"anthropic", "openai", "openai-compat", "google", "mistral", "groq", "brave", "tavily"}
+	expectedProviders := []string{"anthropic", "google"}
 	assert.ElementsMatch(t, expectedProviders, providers)
 }
