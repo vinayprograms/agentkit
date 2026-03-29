@@ -149,7 +149,7 @@ func TestSpawnAgentTool_WithOutputs(t *testing.T) {
 }
 
 func TestRegistry_HasSpawnAgent(t *testing.T) {
-	registry := NewRegistry(nil)
+	registry := NewRegistry(nil, "")
 	
 	if !registry.Has("spawn_agent") {
 		t.Error("expected spawn_agent to be registered by default")
@@ -157,7 +157,7 @@ func TestRegistry_HasSpawnAgent(t *testing.T) {
 }
 
 func TestRegistry_SetSpawner(t *testing.T) {
-	registry := NewRegistry(nil)
+	registry := NewRegistry(nil, "")
 	
 	called := false
 	registry.SetSpawner(func(ctx context.Context, role, task string, outputs []string) (string, error) {

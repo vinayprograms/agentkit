@@ -1,4 +1,4 @@
-package policy
+package bashsec
 
 import (
 	"context"
@@ -7,17 +7,24 @@ import (
 	"strings"
 )
 
-// GenerateResult contains the LLM response with token counts.
-type GenerateResult struct {
-	Content      string
+// CheckResult contains the result of a bash command check.
+type CheckResult struct {
+	Allowed      bool
+	Reason       string
 	InputTokens  int
 	OutputTokens int
 }
 
 // LLMProvider is the minimal interface needed for policy checking.
 type LLMProvider interface {
-	// Generate returns the LLM's response to a prompt with token counts.
 	Generate(ctx context.Context, prompt string) (*GenerateResult, error)
+}
+
+// GenerateResult contains the LLM response with token counts.
+type GenerateResult struct {
+	Content      string
+	InputTokens  int
+	OutputTokens int
 }
 
 // SmallLLMChecker implements LLMPolicyChecker using a fast/cheap LLM.
@@ -26,42 +33,27 @@ type SmallLLMChecker struct {
 	securityScope string
 }
 
-// BashCheckResult contains the result of a bash command check.
-type BashCheckResult struct {
-	Allowed      bool
-	Reason       string
-	InputTokens  int
-	OutputTokens int
-}
-
 // NewSmallLLMChecker creates a new LLM-based policy checker.
 func NewSmallLLMChecker(provider LLMProvider) *SmallLLMChecker {
 	return &SmallLLMChecker{provider: provider}
 }
 
 // SetSecurityScope sets the security research scope for exception handling.
-// When set, the LLM is told about authorized security research activities.
 func (c *SmallLLMChecker) SetSecurityScope(scope string) {
 	c.securityScope = scope
 }
 
-// verdictResponse is the expected JSON structure from the LLM.
 type verdictResponse struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason,omitempty"`
 }
 
-// parseVerdict extracts the verdict from an LLM response.
-// Expects JSON: {"verdict":"ALLOW"} or {"verdict":"BLOCK","reason":"..."}
-// Falls back to scanning for the JSON object if the model adds extra text.
 func parseVerdict(content string) (verdict, reason string) {
-	// Try direct JSON parse first
 	var resp verdictResponse
 	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil {
 		return strings.ToUpper(resp.Verdict), resp.Reason
 	}
 
-	// Fallback: find JSON object in the response (model may add surrounding text)
 	start := strings.Index(content, "{")
 	end := strings.LastIndex(content, "}")
 	if start >= 0 && end > start {
@@ -70,7 +62,6 @@ func parseVerdict(content string) (verdict, reason string) {
 		}
 	}
 
-	// Last resort: scan for standalone ALLOW/BLOCK keywords
 	lines := strings.Split(content, "\n")
 	lastVerdict := ""
 	for _, line := range lines {
@@ -87,14 +78,11 @@ func parseVerdict(content string) (verdict, reason string) {
 }
 
 // CheckBashCommand asks the LLM if a bash command violates directory policy.
-// workingDir is the cwd where the command executes (for resolving relative paths).
-// Returns a BashCheckResult with the decision and token usage.
-func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*BashCheckResult, error) {
+func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*CheckResult, error) {
 	if c.provider == nil {
-		return &BashCheckResult{Allowed: true}, nil // No LLM configured, allow
+		return &CheckResult{Allowed: true}, nil
 	}
 
-	// Build the prompt
 	var securityContext string
 	if c.securityScope != "" {
 		securityContext = fmt.Sprintf(`
@@ -148,19 +136,15 @@ Respond with ONLY a JSON object, nothing else:
 
 	result, err := c.provider.Generate(ctx, prompt)
 	if err != nil {
-		return &BashCheckResult{
+		return &CheckResult{
 			Allowed: false,
 			Reason:  fmt.Sprintf("LLM check failed: %v", err),
 		}, err
 	}
 
-	// Parse response — extract verdict robustly.
-	// Small models often ignore "first word" instructions and dump reasoning
-	// before the verdict. We scan all lines for ALLOW/BLOCK and take the LAST
-	// occurrence (the model's "final answer" after reasoning).
 	content := strings.TrimSpace(result.Content)
 	if content == "" {
-		return &BashCheckResult{
+		return &CheckResult{
 			Allowed:      false,
 			Reason:       "LLM returned empty response",
 			InputTokens:  result.InputTokens,
@@ -172,7 +156,7 @@ Respond with ONLY a JSON object, nothing else:
 
 	switch verdict {
 	case "ALLOW":
-		return &BashCheckResult{
+		return &CheckResult{
 			Allowed:      true,
 			InputTokens:  result.InputTokens,
 			OutputTokens: result.OutputTokens,
@@ -181,14 +165,14 @@ Respond with ONLY a JSON object, nothing else:
 		if reason == "" {
 			reason = "blocked by LLM policy check"
 		}
-		return &BashCheckResult{
+		return &CheckResult{
 			Allowed:      false,
 			Reason:       reason,
 			InputTokens:  result.InputTokens,
 			OutputTokens: result.OutputTokens,
 		}, nil
 	default:
-		return &BashCheckResult{
+		return &CheckResult{
 			Allowed:      false,
 			Reason:       content,
 			InputTokens:  result.InputTokens,

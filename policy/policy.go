@@ -10,370 +10,217 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// ProtectedFiles are files that agents cannot modify (security-critical).
-var ProtectedFiles = []string{
+// defaultProtectedFiles are files that agents cannot modify (security-critical).
+var defaultProtectedFiles = []string{
 	"agent.toml",
 	"credentials.toml",
 	"policy.toml",
 }
 
+// DefaultProtectedFiles returns a copy of the default protected file list.
+func DefaultProtectedFiles() []string {
+	out := make([]string, len(defaultProtectedFiles))
+	copy(out, defaultProtectedFiles)
+	return out
+}
+
 // Policy represents the security policy for the agent.
 type Policy struct {
-	DefaultDeny bool
-	Workspace   string
-	HomeDir     string
-	ConfigDir   string // Directory containing agent.toml, policy.toml
-	AllowedDirs []string        // Top-level allowed directories — universal filesystem boundary
-	Tools       map[string]*ToolPolicy
-	MCP         *MCPPolicy      // MCP tools policy
-	Security    *SecurityPolicy // Security patterns and keywords
+	DefaultDeny    bool                   `toml:"default_deny"`
+	ProtectedFiles []string               `toml:"-"`
+	AllowedDirs    []string               `toml:"allowed_dirs"`
+	Tools          map[string]*ToolPolicy `toml:"tools"`
+	MCP            *MCPPolicy             `toml:"mcp"`
+	Content        *Content               `toml:"content"`
 }
 
 // ToolPolicy represents the policy for a specific tool.
+// A tool listed in [tools] is enabled. Unlisted tools are controlled by DefaultDeny.
+// Allow and Deny are generic string patterns — each tool interprets them
+// for its resource type (filesystem paths, domains, etc.).
 type ToolPolicy struct {
-	Enabled      bool
-	Allow        []string
-	Deny         []string
-	Allowlist    []string // for bash: legacy command allowlist
-	Denylist     []string // for bash: additional commands to block
-	AllowDomains []string // for web tools
-	RateLimit    int      // requests per minute
-	Sandbox      string   // for bash: "none", "bwrap", "docker" (default: none)
-	Timeout      int      // max seconds per invocation (0 = default)
+	Allow   []string `toml:"allow"`
+	Deny    []string `toml:"deny"`
+	Sandbox string   `toml:"sandbox"`
+	Timeout int      `toml:"timeout"`
 }
 
 // MCPPolicy controls MCP tool access.
 type MCPPolicy struct {
-	// DefaultDeny: if true, all MCP tools are blocked unless in AllowedTools.
-	// If false, all MCP tools are allowed (dev mode).
-	// If not set (nil MCPPolicy), logs a security warning.
-	DefaultDeny  bool
-	AllowedTools []string // List of "server:tool" patterns to allow
+	Enabled bool     `toml:"enabled"` // Universal enable/disable switch for MCP tools.
+	Allow   []string `toml:"allow"`   // Allow patterns for MCP tools, in the form "server:tool" with optional wildcards.
 }
 
-// SecurityPolicy contains custom patterns and keywords for content scanning.
-type SecurityPolicy struct {
-	// ExtraPatterns are additional regex patterns to detect (on top of built-ins)
-	// Format: "name:regex" e.g., "exfil_attempt:send.*to.*external"
-	ExtraPatterns []string
-	// ExtraKeywords are additional sensitive keywords to detect (on top of built-ins)
-	ExtraKeywords []string
+// Content holds content-related policy sections.
+type Content struct {
+	Security *ContentSecurity `toml:"security"`
 }
 
-// tomlPolicy is the TOML representation.
-type tomlPolicy struct {
-	DefaultDeny bool                   `toml:"default_deny"`
-	Tools       map[string]tomlTool    `toml:"-"`
+// ContentSecurity defines patterns and keywords for detecting suspicious content.
+type ContentSecurity struct {
+	Patterns []string `toml:"patterns"`
+	Keywords []string `toml:"keywords"`
 }
 
-type tomlTool struct {
-	Enabled      bool     `toml:"enabled"`
-	Allow        []string `toml:"allow"`
-	Deny         []string `toml:"deny"`
-	Allowlist    []string `toml:"allowlist"`
-	Denylist     []string `toml:"denylist"`
-	AllowDomains []string `toml:"allow_domains"`
-	RateLimit    int      `toml:"rate_limit"`
-	Sandbox      string   `toml:"sandbox"` // "none", "bwrap", "docker"
-}
-
-// New creates a new policy with defaults.
+// New creates a secure default policy (deny by default).
+// Call ExpandPatterns after loading to resolve $WORKSPACE and ~ in patterns.
 func New() *Policy {
-	homeDir, _ := os.UserHomeDir()
 	return &Policy{
-		DefaultDeny: false,
-		HomeDir:     homeDir,
-		Tools:       make(map[string]*ToolPolicy),
+		DefaultDeny:    true,
+		ProtectedFiles: DefaultProtectedFiles(),
+		Tools:          make(map[string]*ToolPolicy),
+		Content:        &Content{Security: &ContentSecurity{}},
 	}
 }
 
-// LoadFile loads a policy from a TOML file.
-func LoadFile(path string) (*Policy, error) {
+// FromFile creates a policy from a TOML file.
+// workspace and homeDir are used to expand $WORKSPACE and ~ in patterns.
+func FromFile(path, workspace, homeDir string) (*Policy, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read policy file: %w", err)
 	}
-	return Parse(string(content))
+	return FromTOML(string(content), workspace, homeDir)
 }
 
-// Parse parses a policy from TOML content.
-func Parse(content string) (*Policy, error) {
-	// First pass: get top-level fields and named sections
-	var base struct {
-		DefaultDeny bool     `toml:"default_deny"`
-		AllowedDirs []string `toml:"allowed_dirs"`
-		MCP         *struct {
-			DefaultDeny  bool     `toml:"default_deny"`
-			AllowedTools []string `toml:"allowed_tools"`
-		} `toml:"mcp"`
-		Security *struct {
-			ExtraPatterns []string `toml:"extra_patterns"`
-			ExtraKeywords []string `toml:"extra_keywords"`
-		} `toml:"security"`
-	}
-	if _, err := toml.Decode(content, &base); err != nil {
-		return nil, fmt.Errorf("failed to parse policy: %w", err)
-	}
-
+// FromTOML creates a policy from TOML content.
+// workspace and homeDir are used to expand $WORKSPACE and ~ in patterns.
+// Unrecognized keys are silently ignored.
+func FromTOML(content, workspace, homeDir string) (*Policy, error) {
 	pol := New()
-	pol.DefaultDeny = base.DefaultDeny
-	pol.AllowedDirs = base.AllowedDirs
-	
-	// Parse MCP policy
-	if base.MCP != nil {
-		pol.MCP = &MCPPolicy{
-			DefaultDeny:  base.MCP.DefaultDeny,
-			AllowedTools: base.MCP.AllowedTools,
-		}
-	}
-
-	// Parse security policy
-	if base.Security != nil {
-		pol.Security = &SecurityPolicy{
-			ExtraPatterns: base.Security.ExtraPatterns,
-			ExtraKeywords: base.Security.ExtraKeywords,
-		}
-	}
-
-	// Second pass: parse tool sections
-	var raw map[string]interface{}
-	if _, err := toml.Decode(content, &raw); err != nil {
+	if _, err := toml.Decode(content, pol); err != nil {
 		return nil, fmt.Errorf("failed to parse policy: %w", err)
 	}
-
-	for key, value := range raw {
-		if key == "default_deny" || key == "mcp" || key == "security" {
-			continue
-		}
-
-		// Try to parse as tool config
-		toolMap, ok := value.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tp := &ToolPolicy{Enabled: true}
-
-		if v, ok := toolMap["enabled"].(bool); ok {
-			tp.Enabled = v
-		}
-		if v, ok := toolMap["allow"].([]interface{}); ok {
-			tp.Allow = toStringSlice(v)
-		}
-		if v, ok := toolMap["deny"].([]interface{}); ok {
-			tp.Deny = toStringSlice(v)
-		}
-		if v, ok := toolMap["allowlist"].([]interface{}); ok {
-			tp.Allowlist = toStringSlice(v)
-		}
-		if v, ok := toolMap["denylist"].([]interface{}); ok {
-			tp.Denylist = toStringSlice(v)
-		}
-		if v, ok := toolMap["allow_domains"].([]interface{}); ok {
-			tp.AllowDomains = toStringSlice(v)
-		}
-		if v, ok := toolMap["rate_limit"].(int64); ok {
-			tp.RateLimit = int(v)
-		}
-		if v, ok := toolMap["sandbox"].(string); ok {
-			tp.Sandbox = v
-		}
-		if v, ok := toolMap["timeout"].(int64); ok {
-			tp.Timeout = int(v)
-		}
-
-		pol.Tools[key] = tp
-	}
-
+	pol.expandPatterns(workspace, homeDir)
 	return pol, nil
 }
 
-// knownTopLevelKeys are the recognized non-tool top-level keys in policy.toml.
-var knownTopLevelKeys = map[string]bool{
-	"default_deny": true,
-	"allowed_dirs": true,
-	"mcp":          true,
-	"security":     true,
+// expandPatterns resolves $WORKSPACE and ~ placeholders in AllowedDirs
+// and all tool Allow/Deny patterns.
+func (p *Policy) expandPatterns(workspace, homeDir string) {
+	p.AllowedDirs = expandSlice(p.AllowedDirs, workspace, homeDir)
+	for _, tp := range p.Tools {
+		tp.Allow = expandSlice(tp.Allow, workspace, homeDir)
+		tp.Deny = expandSlice(tp.Deny, workspace, homeDir)
+	}
 }
 
-// ValidateKeys checks for unknown or unsupported top-level keys in policy TOML.
-// Returns an error if:
-//   - "workspace" appears (must be in agent.toml, not policy.toml)
-//   - Any non-map value key is not in the known set (except default_deny)
-func ValidateKeys(content string) error {
-	var raw map[string]interface{}
-	if _, err := toml.Decode(content, &raw); err != nil {
-		return fmt.Errorf("failed to parse policy: %w", err)
-	}
-
-	// Check for workspace — it never belongs in policy.toml
-	if _, ok := raw["workspace"]; ok {
-		return fmt.Errorf("workspace does not belong in policy files, use [agent].workspace in agent.toml")
-	}
-
-	// Find unknown keys: anything that isn't a known key or a tool section (map)
-	var unknown []string
-	for key, value := range raw {
-		if knownTopLevelKeys[key] {
-			continue
+func expandSlice(patterns []string, workspace, homeDir string) []string {
+	for i, pattern := range patterns {
+		if strings.HasPrefix(pattern, "$WORKSPACE") {
+			pattern = strings.Replace(pattern, "$WORKSPACE", workspace, 1)
 		}
-		// Tool sections are maps (tables in TOML)
-		if _, isMap := value.(map[string]interface{}); isMap {
-			continue
+		if strings.HasPrefix(pattern, "~") {
+			pattern = strings.Replace(pattern, "~", homeDir, 1)
 		}
-		unknown = append(unknown, key)
+		patterns[i] = pattern
 	}
-
-	if len(unknown) > 0 {
-		return fmt.Errorf("unknown top-level keys in policy.toml: %v", unknown)
-	}
-
-	return nil
+	return patterns
 }
 
-func toStringSlice(v []interface{}) []string {
-	result := make([]string, 0, len(v))
-	for _, item := range v {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// GetToolPolicy returns the policy for a tool, with defaults.
-// When DefaultDeny is true, tools without explicit policy are disabled.
-// When DefaultDeny is false (default), tools without explicit policy are enabled.
+// GetToolPolicy returns the policy for a tool, or nil if not configured.
 func (p *Policy) GetToolPolicy(tool string) *ToolPolicy {
-	if p == nil {
-		return &ToolPolicy{Enabled: true}
+	if p == nil || p.Tools == nil {
+		return nil
 	}
-	if p.Tools != nil {
-		if tp, ok := p.Tools[tool]; ok {
-			return tp
-		}
-	}
-	// No explicit policy — respect default_deny
-	return &ToolPolicy{Enabled: !p.DefaultDeny}
+	return p.Tools[tool] // nil if not in map
 }
 
 // IsToolEnabled checks if a tool is enabled.
+// A tool is enabled if it's listed in [tools], or if DefaultDeny is false.
 func (p *Policy) IsToolEnabled(tool string) bool {
-	tp := p.GetToolPolicy(tool)
-	return tp.Enabled
+	if p == nil {
+		return true
+	}
+	if _, listed := p.Tools[tool]; listed {
+		return true
+	}
+	return !p.DefaultDeny
 }
 
 // IsProtectedFile checks if a path refers to a protected config file.
-// Protected files cannot be modified by the agent.
 // Resolves symlinks to prevent bypass attacks.
+//
+// Protected entries that are bare filenames (e.g., "agent.toml") match by basename.
+// Entries containing a path separator (e.g., "configs/my-config.toml") are resolved
+// to absolute paths relative to cwd and compared as full paths.
 func (p *Policy) IsProtectedFile(path string) bool {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		absPath = path
-	}
-	
-	// Resolve symlinks to get the real path
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		// If file doesn't exist yet, check the path as-is
-		// but also check if parent exists and resolve that
-		dir := filepath.Dir(absPath)
-		if realDir, err := filepath.EvalSymlinks(dir); err == nil {
-			realPath = filepath.Join(realDir, filepath.Base(absPath))
+	realPath := resolvePath(path)
+
+	for _, protected := range p.ProtectedFiles {
+		if strings.Contains(protected, string(filepath.Separator)) || strings.Contains(protected, "/") {
+			// Path entry — resolve and compare full paths.
+			if resolvePath(protected) == realPath {
+				return true
+			}
 		} else {
-			realPath = absPath
-		}
-	}
-	
-	baseName := filepath.Base(realPath)
-	
-	// Check against protected file names
-	for _, protected := range ProtectedFiles {
-		if baseName == protected {
-			return true
-		}
-	}
-	
-	// Also protect files in config directory
-	if p.ConfigDir != "" {
-		configAbs, _ := filepath.Abs(p.ConfigDir)
-		configReal, _ := filepath.EvalSymlinks(configAbs)
-		if configReal == "" {
-			configReal = configAbs
-		}
-		for _, protected := range ProtectedFiles {
-			protectedPath := filepath.Join(configReal, protected)
-			if realPath == protectedPath {
+			// Bare filename — compare basenames.
+			if filepath.Base(realPath) == protected {
 				return true
 			}
 		}
 	}
-	
-	// Protect ~/.config/grid/credentials.toml
-	if p.HomeDir != "" {
-		credPath := filepath.Join(p.HomeDir, ".config", "grid", "credentials.toml")
-		credReal, _ := filepath.EvalSymlinks(credPath)
-		if credReal == "" {
-			credReal = credPath
-		}
-		if realPath == credReal {
-			return true
-		}
-	}
-	
 	return false
+}
+
+// resolvePath returns the real absolute path, resolving symlinks where possible.
+func resolvePath(path string) string {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		dir := filepath.Dir(absPath)
+		if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(realDir, filepath.Base(absPath))
+		}
+		return absPath
+	}
+	return realPath
 }
 
 // CheckPath checks if a path is allowed for a tool.
 func (p *Policy) CheckPath(tool, path string) (bool, string) {
-	tp := p.GetToolPolicy(tool)
-	if !tp.Enabled {
+	if !p.IsToolEnabled(tool) {
 		return false, fmt.Sprintf("tool %s is disabled", tool)
 	}
 
-	// Expand path to absolute
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		absPath = path
 	}
 
-	// Check protected files first (write/edit tools)
 	if tool == "write" || tool == "edit" {
 		if p.IsProtectedFile(absPath) {
 			return false, fmt.Sprintf("path %s is a protected config file", path)
 		}
 	}
 
-	// Universal allowed_dirs check — if set, path must be within one of them
 	if len(p.AllowedDirs) > 0 {
 		if !p.isWithinAllowedDirs(absPath) {
 			return false, fmt.Sprintf("path %s is outside allowed directories", path)
 		}
 	}
 
-	// Check deny patterns first (deny wins)
+	tp := p.GetToolPolicy(tool)
+	if tp == nil {
+		return true, "" // enabled but no restrictions configured
+	}
+
 	for _, pattern := range tp.Deny {
-		expanded := p.expandPattern(pattern)
-		if matchPath(expanded, absPath) {
+		if matchPath(pattern, absPath) {
 			return false, fmt.Sprintf("path %s matches deny pattern %s", path, pattern)
 		}
 	}
 
-	// Check allow patterns
 	if len(tp.Allow) > 0 {
 		for _, pattern := range tp.Allow {
-			expanded := p.expandPattern(pattern)
-			if matchPath(expanded, absPath) {
+			if matchPath(pattern, absPath) {
 				return true, ""
 			}
 		}
-		// Allow patterns defined but none matched - deny
 		return false, fmt.Sprintf("path %s not in allow list", path)
-	}
-
-	// No allow patterns defined - check default_deny
-	if p.DefaultDeny {
-		return false, fmt.Sprintf("path %s not in allow list (default_deny=true)", path)
 	}
 
 	return true, ""
@@ -382,99 +229,34 @@ func (p *Policy) CheckPath(tool, path string) (bool, string) {
 // isWithinAllowedDirs checks if an absolute path falls within any allowed directory.
 func (p *Policy) isWithinAllowedDirs(absPath string) bool {
 	for _, dir := range p.AllowedDirs {
-		expanded := p.expandPattern(dir)
-		expandedAbs, err := filepath.Abs(expanded)
+		dirAbs, err := filepath.Abs(dir)
 		if err != nil {
-			expandedAbs = expanded
+			dirAbs = dir
 		}
-		// Path is within this dir if it equals it or is a subdirectory
-		if absPath == expandedAbs || strings.HasPrefix(absPath, expandedAbs+string(filepath.Separator)) {
+		if absPath == dirAbs || strings.HasPrefix(absPath, dirAbs+string(filepath.Separator)) {
 			return true
 		}
 	}
 	return false
 }
 
-// GetAllowedDirs returns the top-level allowed directories, expanding variables.
-// Falls back to workspace if no allowed_dirs are configured.
+// GetAllowedDirs returns the allowed directories.
 func (p *Policy) GetAllowedDirs() []string {
-	if len(p.AllowedDirs) > 0 {
-		expanded := make([]string, len(p.AllowedDirs))
-		for i, dir := range p.AllowedDirs {
-			expanded[i] = p.expandPattern(dir)
-		}
-		return expanded
-	}
-	// Fallback: workspace only
-	if p.Workspace != "" {
-		return []string{p.Workspace}
-	}
-	return nil
-}
-
-// CheckCommand checks if a command is allowed for bash.
-func (p *Policy) CheckCommand(tool, cmd string) (bool, string) {
-	tp := p.GetToolPolicy(tool)
-	if !tp.Enabled {
-		return false, fmt.Sprintf("tool %s is disabled", tool)
-	}
-
-	// Check for workspace escape attempts
-	if p.Workspace != "" && p.Workspace != "." {
-		// Detect absolute paths outside workspace
-		if strings.Contains(cmd, " /") && !strings.Contains(cmd, " "+p.Workspace) {
-			// Allow common system paths that are read-only
-			allowedPaths := []string{"/dev/null", "/tmp", "/usr/bin", "/bin"}
-			hasAllowed := false
-			for _, allowed := range allowedPaths {
-				if strings.Contains(cmd, allowed) {
-					hasAllowed = true
-					break
-				}
-			}
-			if !hasAllowed {
-				return false, "command contains absolute path outside workspace"
-			}
-		}
-		// Detect parent directory traversal
-		if strings.Contains(cmd, "../") {
-			return false, "command contains parent directory traversal (../)"
-		}
-	}
-
-	// Check denylist first (deny wins)
-	for _, pattern := range tp.Denylist {
-		if matchCommand(pattern, cmd) {
-			return false, fmt.Sprintf("command matches deny pattern: %s", pattern)
-		}
-	}
-
-	// Check allowlist (if defined, command must match)
-	if len(tp.Allowlist) > 0 {
-		for _, pattern := range tp.Allowlist {
-			if matchCommand(pattern, cmd) {
-				return true, ""
-			}
-		}
-		return false, "command not in allowlist"
-	}
-
-	return true, ""
+	return p.AllowedDirs
 }
 
 // CheckDomain checks if a domain is allowed for web tools.
 func (p *Policy) CheckDomain(tool, domain string) (bool, string) {
-	tp := p.GetToolPolicy(tool)
-	if !tp.Enabled {
+	if !p.IsToolEnabled(tool) {
 		return false, fmt.Sprintf("tool %s is disabled", tool)
 	}
+	tp := p.GetToolPolicy(tool)
 
-	// If no domains specified, allow all
-	if len(tp.AllowDomains) == 0 {
+	if tp == nil || len(tp.Allow) == 0 {
 		return true, ""
 	}
 
-	for _, pattern := range tp.AllowDomains {
+	for _, pattern := range tp.Allow {
 		if matchDomain(pattern, domain) {
 			return true, ""
 		}
@@ -485,63 +267,48 @@ func (p *Policy) CheckDomain(tool, domain string) (bool, string) {
 
 // CheckMCPTool checks if an MCP tool is allowed.
 // Returns (allowed, reason, warning).
-// Warning is non-empty if MCP policy is not configured (security issue).
+// Warning is non-empty if MCP policy is not configured.
 func (p *Policy) CheckMCPTool(server, tool string) (bool, string, string) {
-	// If MCP policy not configured, warn but allow (dev mode)
 	if p.MCP == nil {
 		return true, "", "MCP policy not configured - all MCP tools allowed. Set [mcp] in policy.toml for production."
 	}
 
-	// If default_deny is false, allow all
-	if !p.MCP.DefaultDeny {
+	if !p.MCP.Enabled {
+		toolSpec := fmt.Sprintf("%s:%s", server, tool)
+		return false, fmt.Sprintf("MCP is disabled, tool %s blocked", toolSpec), ""
+	}
+
+	// Enabled with no allow list — allow everything.
+	if len(p.MCP.Allow) == 0 {
 		return true, "", ""
 	}
 
-	// Check against allowed tools list
 	toolSpec := fmt.Sprintf("%s:%s", server, tool)
-	for _, pattern := range p.MCP.AllowedTools {
+	for _, pattern := range p.MCP.Allow {
 		if matchMCPTool(pattern, server, tool) {
 			return true, "", ""
 		}
 	}
 
-	return false, fmt.Sprintf("MCP tool %s not in allowed_tools list", toolSpec), ""
+	return false, fmt.Sprintf("MCP tool %s not in allow list", toolSpec), ""
 }
 
 // matchMCPTool matches "server:tool" against a pattern.
-// Patterns can be: "server:tool" (exact), "server:*" (all tools from server), "*:tool" (tool from any server)
 func matchMCPTool(pattern, server, tool string) bool {
 	parts := strings.SplitN(pattern, ":", 2)
 	if len(parts) != 2 {
 		return pattern == server+":"+tool
 	}
-	
 	serverPattern, toolPattern := parts[0], parts[1]
-	
-	serverMatch := serverPattern == "*" || serverPattern == server
-	toolMatch := toolPattern == "*" || toolPattern == tool
-	
-	return serverMatch && toolMatch
-}
-
-// expandPattern expands $WORKSPACE and ~ in patterns.
-func (p *Policy) expandPattern(pattern string) string {
-	if strings.HasPrefix(pattern, "$WORKSPACE") {
-		pattern = strings.Replace(pattern, "$WORKSPACE", p.Workspace, 1)
-	}
-	if strings.HasPrefix(pattern, "~") {
-		pattern = strings.Replace(pattern, "~", p.HomeDir, 1)
-	}
-	return pattern
+	return (serverPattern == "*" || serverPattern == server) &&
+		(toolPattern == "*" || toolPattern == tool)
 }
 
 // matchPath matches a path against a glob pattern.
 func matchPath(pattern, path string) bool {
-	// Normalize paths
 	pattern = filepath.Clean(pattern)
 	path = filepath.Clean(path)
-	
-	// Handle ** patterns (recursive match)
+
 	if strings.Contains(pattern, "**") {
 		parts := strings.SplitN(pattern, "**", 2)
 		prefix := strings.TrimSuffix(parts[0], string(filepath.Separator))
@@ -549,97 +316,29 @@ func matchPath(pattern, path string) bool {
 		if len(parts) > 1 {
 			suffix = strings.TrimPrefix(parts[1], string(filepath.Separator))
 		}
-		
-		// Path must start with prefix
+
 		if prefix != "" && !strings.HasPrefix(path, prefix) {
 			return false
 		}
-		
-		// Get the part of path after prefix
+
 		remaining := path
 		if prefix != "" {
 			remaining = strings.TrimPrefix(path, prefix)
 			remaining = strings.TrimPrefix(remaining, string(filepath.Separator))
 		}
-		
-		// If no suffix, match any remaining path
+
 		if suffix == "" {
 			return true
 		}
-		
-		// Suffix must match at the end
 		if strings.HasSuffix(remaining, suffix) {
 			return true
 		}
-		
-		// Or match using glob
 		matched, _ := filepath.Match(suffix, filepath.Base(remaining))
 		return matched
 	}
 
-	// For * patterns (single segment), use filepath.Match
-	// But we need to match against the full path
 	matched, _ := filepath.Match(pattern, path)
 	return matched
-}
-
-// matchGlob matches using filepath.Match semantics.
-func matchGlob(pattern, path string) bool {
-	matched, _ := filepath.Match(pattern, path)
-	if matched {
-		return true
-	}
-	
-	// Also try matching just the base name
-	matched, _ = filepath.Match(pattern, filepath.Base(path))
-	return matched
-}
-
-// matchCommand matches a command against a pattern.
-func matchCommand(pattern, cmd string) bool {
-	// Split pattern and command into words
-	patternWords := strings.Fields(pattern)
-	cmdWords := strings.Fields(cmd)
-
-	if len(patternWords) == 0 {
-		return false
-	}
-
-	// First word must match (command name)
-	if len(cmdWords) == 0 || patternWords[0] != cmdWords[0] {
-		return false
-	}
-
-	// Security: reject commands with shell metacharacters when using allowlist
-	// These could be used to bypass the allowlist via command chaining
-	shellMetachars := []string{"&&", "||", ";", "|", "`", "$(", "${", ">", "<", "\n"}
-	for _, meta := range shellMetachars {
-		if strings.Contains(cmd, meta) {
-			return false // Never match commands with shell metacharacters
-		}
-	}
-
-	// If pattern ends with *, match any additional args
-	if len(patternWords) >= 2 && patternWords[len(patternWords)-1] == "*" {
-		// All pattern words except * must match command words in order
-		for i := 0; i < len(patternWords)-1; i++ {
-			if i >= len(cmdWords) || patternWords[i] != cmdWords[i] {
-				return false
-			}
-		}
-		return true
-	}
-
-	// Exact match: same number of words and all match
-	if len(patternWords) != len(cmdWords) {
-		return false
-	}
-	for i := range patternWords {
-		if patternWords[i] != cmdWords[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // matchDomain matches a domain against a pattern.
@@ -647,20 +346,9 @@ func matchDomain(pattern, domain string) bool {
 	if pattern == "*" {
 		return true
 	}
-
-	// Wildcard subdomain matching
 	if strings.HasPrefix(pattern, "*.") {
 		suffix := strings.TrimPrefix(pattern, "*")
 		return strings.HasSuffix(domain, suffix) || domain == strings.TrimPrefix(suffix, ".")
 	}
-
 	return pattern == domain
-}
-
-// NewRestrictive creates a restrictive policy that denies everything by default.
-func NewRestrictive() *Policy {
-	return &Policy{
-		DefaultDeny: true,
-		Tools:       make(map[string]*ToolPolicy),
-	}
 }

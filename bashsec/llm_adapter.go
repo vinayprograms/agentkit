@@ -1,4 +1,4 @@
-package policy
+package bashsec
 
 import (
 	"context"
@@ -11,9 +11,7 @@ type chatProviderAdapter struct {
 	provider llm.Provider
 }
 
-// LLMProviderFromChatProvider wraps an llm.Provider as a policy.LLMProvider.
-// This avoids the need for consumers to write their own adapter between
-// the full chat interface and the simpler generate interface used for policy checks.
+// LLMProviderFromChatProvider wraps an llm.Provider as a bashsec.LLMProvider.
 func LLMProviderFromChatProvider(provider llm.Provider) LLMProvider {
 	return &chatProviderAdapter{provider: provider}
 }

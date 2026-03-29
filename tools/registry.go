@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vinayprograms/agentkit/bashsec"
 	"github.com/vinayprograms/agentkit/policy"
 	"github.com/vinayprograms/agentkit/telemetry"
 	"github.com/vinayprograms/agentkit/types"
@@ -80,6 +81,7 @@ type CredentialProvider interface {
 type Registry struct {
 	tools          map[string]Tool
 	policy         *policy.Policy
+	workspace      string // base working directory (runtime context)
 	summarizer     Summarizer
 	memoryStore    MemoryStore
 	semanticMemory SemanticMemory
@@ -113,10 +115,12 @@ type FILResult = types.FILResult
 type SemanticMemoryResult = types.SemanticMemoryResult
 
 // NewRegistry creates a new registry with built-in tools.
-func NewRegistry(pol *policy.Policy) *Registry {
+// workspace is the base working directory for tools that need filesystem access.
+func NewRegistry(pol *policy.Policy, workspace string) *Registry {
 	r := &Registry{
-		tools:  make(map[string]Tool),
-		policy: pol,
+		tools:     make(map[string]Tool),
+		policy:    pol,
+		workspace: workspace,
 	}
 	r.registerBuiltins()
 	return r
@@ -134,12 +138,12 @@ func (r *Registry) SetSummarizer(s Summarizer) {
 // registerBuiltins registers all built-in tools.
 func (r *Registry) registerBuiltins() {
 	r.Register(&readTool{policy: r.policy})
-	r.Register(&writeTool{policy: r.policy})
-	r.Register(&editTool{policy: r.policy})
+	r.Register(&writeTool{policy: r.policy, workspace: r.workspace})
+	r.Register(&editTool{policy: r.policy, workspace: r.workspace})
 	r.Register(&globTool{policy: r.policy})
 	r.Register(&grepTool{policy: r.policy})
 	r.Register(&lsTool{policy: r.policy})
-	r.Register(&bashTool{policy: r.policy})
+	r.Register(&bashTool{policy: r.policy, workspace: r.workspace})
 	r.Register(&mkdirTool{policy: r.policy})
 	r.Register(&mvTool{policy: r.policy})
 	r.Register(&cpTool{policy: r.policy})
@@ -203,7 +207,7 @@ func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 
 // SetBashChecker sets the bash security checker for the bash tool.
 // The checker performs two-step verification: deterministic denylist + LLM policy check.
-func (r *Registry) SetBashChecker(checker *policy.BashChecker) {
+func (r *Registry) SetBashChecker(checker *bashsec.Checker) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
 		bt.checker = checker
 	}
@@ -211,7 +215,7 @@ func (r *Registry) SetBashChecker(checker *policy.BashChecker) {
 
 // SetBashLLMChecker sets the LLM-based policy checker for directory access.
 // This enables Step 2 of bash security checking.
-func (r *Registry) SetBashLLMChecker(llmChecker policy.LLMPolicyChecker) {
+func (r *Registry) SetBashLLMChecker(llmChecker bashsec.LLMPolicyChecker) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
 		if bt.checker != nil {
 			bt.checker.SetLLMChecker(llmChecker)
@@ -420,7 +424,8 @@ func (t *readTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 
 // writeTool implements the write tool (R5.2.2).
 type writeTool struct {
-	policy *policy.Policy
+	policy    *policy.Policy
+	workspace string
 }
 
 func (t *writeTool) Name() string { return "write" }
@@ -458,7 +463,7 @@ func (t *writeTool) Execute(ctx context.Context, rawArgs map[string]interface{})
 	}
 
 	// Sanitize path to prevent traversal attacks
-	safePath, err := sanitizePath(path, t.policy.Workspace)
+	safePath, err := sanitizePath(path, t.workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +489,8 @@ func (t *writeTool) Execute(ctx context.Context, rawArgs map[string]interface{})
 
 // editTool implements the edit tool (R5.2.3).
 type editTool struct {
-	policy *policy.Policy
+	policy    *policy.Policy
+	workspace string
 }
 
 func (t *editTool) Name() string { return "edit" }
@@ -530,7 +536,7 @@ func (t *editTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 	}
 
 	// Sanitize path to prevent traversal attacks
-	safePath, err := sanitizePath(path, t.policy.Workspace)
+	safePath, err := sanitizePath(path, t.workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -774,16 +780,16 @@ func (t *lsTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (i
 
 // bashTool implements the bash tool (R5.3.1).
 type bashTool struct {
-	policy  *policy.Policy
-	checker *policy.BashChecker
+	policy    *policy.Policy
+	workspace string // base working directory (runtime context)
+	checker   *bashsec.Checker
 }
 
 func (t *bashTool) Name() string { return "bash" }
 
 func (t *bashTool) Description() string {
-	tp := t.policy.GetToolPolicy(t.Name())
 	timeout := 120
-	if tp.Timeout > 0 {
+	if tp := t.policy.GetToolPolicy(t.Name()); tp != nil && tp.Timeout > 0 {
 		timeout = tp.Timeout
 	}
 	return fmt.Sprintf("Execute a shell command. Commands are killed after %d seconds. Do NOT start long-running servers or processes that block indefinitely — instead, start them in the background and test with a timeout. Use as last resort — prefer dedicated tools (read, write, edit, grep, glob, tree, git) when they cover the operation. Bash is best for: build commands, running tests, piping multiple commands, or operations no built-in tool handles.", timeout)
@@ -809,7 +815,7 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		return nil, err
 	}
 
-	// BashChecker - deterministic denylist + LLM policy check
+	// Security check via bashsec.Checker (deterministic denylist + LLM policy).
 	if t.checker != nil {
 		allowed, reason, err := t.checker.Check(ctx, command)
 		if err != nil {
@@ -818,21 +824,13 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		if !allowed {
 			return nil, fmt.Errorf("command blocked: %s", reason)
 		}
-		// BashChecker handles path analysis (including LLM-based resolution
-		// of relative paths), so skip the legacy CheckCommand path check.
-	} else {
-		// Fallback: legacy policy check (path-based, workspace escape detection)
-		// Only used when BashChecker is not configured.
-		allowed, reason := t.policy.CheckCommand(t.Name(), command)
-		if !allowed {
-			return nil, fmt.Errorf("policy denied: %s", reason)
-		}
+	} else if !t.policy.IsToolEnabled(t.Name()) {
+		return nil, fmt.Errorf("bash tool is disabled by policy")
 	}
 
 	// Apply timeout: policy timeout > default (120s)
-	bashPolicy := t.policy.GetToolPolicy(t.Name())
-	timeout := 120 * time.Second // default: 2 minutes
-	if bashPolicy.Timeout > 0 {
+	timeout := 120 * time.Second
+	if bashPolicy := t.policy.GetToolPolicy(t.Name()); bashPolicy != nil && bashPolicy.Timeout > 0 {
 		timeout = time.Duration(bashPolicy.Timeout) * time.Second
 	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -842,7 +840,10 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 	}
 
 	// Get sandbox mode from policy
-	sandbox := bashPolicy.Sandbox
+	var sandbox string
+	if bp := t.policy.GetToolPolicy(t.Name()); bp != nil {
+		sandbox = bp.Sandbox
+	}
 
 	var cmd *exec.Cmd
 	switch sandbox {
@@ -859,8 +860,8 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 			"--proc", "/proc",
 			"--dev", "/dev",
 			"--tmpfs", "/tmp",
-			"--bind", t.policy.Workspace, t.policy.Workspace,
-			"--chdir", t.policy.Workspace,
+			"--bind", t.workspace, t.workspace,
+			"--chdir", t.workspace,
 			"--unshare-all",
 			"--die-with-parent",
 			"bash", "-c", command,
@@ -872,7 +873,7 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 			"--network", "none",
 			"--read-only",
 			"--tmpfs", "/tmp",
-			"-v", t.policy.Workspace+":"+"/workspace",
+			"-v", t.workspace+":"+"/workspace",
 			"-w", "/workspace",
 			"alpine:latest",
 			"/bin/sh", "-c", command,
@@ -880,7 +881,7 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 	default:
 		// No sandbox - run directly (with workspace as cwd)
 		cmd = exec.CommandContext(ctx, "bash", "-c", command)
-		cmd.Dir = t.policy.Workspace
+		cmd.Dir = t.workspace
 	}
 
 	var stdout, stderr strings.Builder

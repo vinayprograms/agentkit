@@ -1,5 +1,6 @@
-// Package policy provides bash command security checking.
-package policy
+// Package bashsec provides bash command security checking with a two-step pipeline:
+// deterministic denylist checks followed by optional LLM-based path analysis.
+package bashsec
 
 import (
 	"context"
@@ -11,7 +12,6 @@ import (
 
 // BannedCommands is the hardcoded list of commands that are always blocked.
 // These are dangerous for system security and should never be executed by an agent.
-// Based on Charmbracelet Crush's approach.
 var BannedCommands = []string{
 	// Network/Download tools - prevent data exfiltration and arbitrary downloads
 	"alias",
@@ -128,8 +128,7 @@ var BannedCommands = []string{
 	"nsenter",
 }
 
-// BannedSubcommands defines specific subcommand patterns to block.
-// Format: command, subcommand args, flags (any of which triggers block)
+// BannedSubcommand defines specific subcommand patterns to block.
 type BannedSubcommand struct {
 	Command string
 	Args    []string // Subcommand arguments (e.g., ["install"])
@@ -137,18 +136,9 @@ type BannedSubcommand struct {
 }
 
 // BannedSubcommandPatterns blocks specific subcommand patterns even if the base command is allowed.
+// Commands already in BannedCommands are not listed here — they're caught earlier.
 var BannedSubcommandPatterns = []BannedSubcommand{
-	// System package managers (redundant but explicit)
-	{Command: "apk", Args: []string{"add"}},
-	{Command: "apt", Args: []string{"install"}},
-	{Command: "apt-get", Args: []string{"install"}},
-	{Command: "dnf", Args: []string{"install"}},
-	{Command: "pacman", Flags: []string{"-S"}},
-	{Command: "pkg", Args: []string{"install"}},
-	{Command: "yum", Args: []string{"install"}},
-	{Command: "zypper", Args: []string{"install"}},
-
-	// Language-specific package managers - block global installs only
+	// Language-specific package managers - block global/system installs
 	{Command: "brew", Args: []string{"install"}},
 	{Command: "cargo", Args: []string{"install"}},
 	{Command: "gem", Args: []string{"install"}},
@@ -180,68 +170,51 @@ var DangerousPipePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)wget\s+.+\|\s*python`),
 	regexp.MustCompile(`(?i)\|\s*sudo\b`),
 	regexp.MustCompile(`(?i)\|\s*su\b`),
-	regexp.MustCompile(`(?i)\|\s*base64\s+-d\s*\|\s*(ba)?sh`), // Encoded payload execution
+	regexp.MustCompile(`(?i)\|\s*base64\s+-d\s*\|\s*(ba)?sh`),
 }
 
-// BashChecker provides two-step bash command security checking.
-type BashChecker struct {
-	// Policy provides allowed directories (top-level allowed_dirs)
-	Policy *Policy
+// Checker provides two-step bash command security checking.
+type Checker struct {
+	// AllowedDirs returns the directories the agent may write to.
+	// Called during LLM check (step 2). Nil means no LLM path checking.
+	AllowedDirs []string
 
-	// UserDeniedCommands from policy.toml - additional commands to block
+	// UserDeniedCommands are additional commands to block (from policy.toml).
 	UserDeniedCommands []string
 
-	// LLMChecker is called for step 2 (semantic check) if step 1 passes
-	// Takes: command string, allowed_dirs []string
-	// Returns: (*BashCheckResult, error)
-	LLMChecker func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error)
+	// LLMChecker is called for step 2 (semantic check) if step 1 passes.
+	LLMChecker func(ctx context.Context, command string, allowedDirs []string) (*CheckResult, error)
 
-	// Workspace is the base working directory
+	// Workspace is the base working directory.
 	Workspace string
 
 	// OnDecision is called after each security decision for logging/auditing.
-	// step: "deterministic" or "llm"
-	// allowed: whether the command was allowed
-	// reason: explanation (especially for blocks)
-	// durationMs: time taken for the check (0 for deterministic, >0 for LLM)
-	// inputTokens, outputTokens: token counts (0 for deterministic)
 	OnDecision func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)
 }
 
-// NewBashChecker creates a new bash security checker.
-func NewBashChecker(pol *Policy, userDeniedCommands []string) *BashChecker {
-	return &BashChecker{
-		Policy:             pol,
+// NewChecker creates a new bash security checker.
+func NewChecker(workspace string, allowedDirs, userDeniedCommands []string) *Checker {
+	return &Checker{
+		AllowedDirs:        allowedDirs,
 		UserDeniedCommands: userDeniedCommands,
-		Workspace:          pol.Workspace,
+		Workspace:          workspace,
 	}
 }
 
 // LLMPolicyChecker is an interface for LLM-based policy checking.
 type LLMPolicyChecker interface {
-	// CheckBashCommand asks the LLM if a bash command violates directory policy.
-	// workingDir is the cwd where the command executes (for resolving relative paths).
-	// Returns (*BashCheckResult, error)
-	CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*BashCheckResult, error)
+	CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*CheckResult, error)
 }
 
 // SetLLMChecker sets the LLM checker for directory policy verification.
-func (c *BashChecker) SetLLMChecker(checker LLMPolicyChecker) {
-	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*BashCheckResult, error) {
-		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Policy.Workspace)
+func (c *Checker) SetLLMChecker(checker LLMPolicyChecker) {
+	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*CheckResult, error) {
+		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Workspace)
 	}
 }
 
-// Check performs two-step security checking on a bash command.
-// Step 1: Deterministic checks (denylist + path validation, zero LLM cost)
-// Step 2: LLM policy check (only for ambiguous commands where deterministic
-//
 // Check runs the two-tier security pipeline: deterministic then LLM.
-// Deterministic blocks high-confidence threats (banned commands, dangerous
-// patterns). All path reasoning is delegated to the LLM — shell text is too
-// ambiguous for regex-based path extraction.
-func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, error) {
-	// Step 1: Deterministic checks (high-confidence blocks only)
+func (c *Checker) Check(ctx context.Context, command string) (bool, string, error) {
 	allowed, reason := c.checkDeterministic(command)
 	if !allowed {
 		if c.OnDecision != nil {
@@ -253,11 +226,9 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 		c.OnDecision(command, "deterministic", true, "", 0, 0, 0)
 	}
 
-	// Step 2: LLM policy check — handles all path/write analysis
-	allowedDirs := c.Policy.GetAllowedDirs()
-	if c.LLMChecker != nil && len(allowedDirs) > 0 {
+	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
 		start := time.Now()
-		result, err := c.LLMChecker(ctx, command, allowedDirs)
+		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
 			if c.OnDecision != nil {
@@ -277,71 +248,54 @@ func (c *BashChecker) Check(ctx context.Context, command string) (bool, string, 
 }
 
 // CheckDeterministic performs only the fast deterministic checks (for testing/preview).
-func (c *BashChecker) CheckDeterministic(command string) (bool, string) {
+func (c *Checker) CheckDeterministic(command string) (bool, string) {
 	return c.checkDeterministic(command)
 }
 
-func (c *BashChecker) checkDeterministic(command string) (bool, string) {
-	// Normalize command
+func (c *Checker) checkDeterministic(command string) (bool, string) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return false, "empty command"
 	}
 
-	// Check dangerous pipe patterns first
 	for _, pattern := range DangerousPipePatterns {
 		if pattern.MatchString(cmd) {
 			return false, fmt.Sprintf("dangerous pipe pattern detected: %s", pattern.String())
 		}
 	}
 
-	// Check if command has shell metacharacters (pipes, chains, etc.)
-	// If so, we need to check ALL segments, not just the first command
+	segments := []string{cmd}
 	if containsUnquotedMetachars(cmd) {
-		segments := splitCommandSegments(cmd)
-		for _, seg := range segments {
-			segBase := extractBaseCommand(seg)
-			for _, banned := range BannedCommands {
-				if segBase == banned {
-					return false, fmt.Sprintf("command '%s' is blocked for security", banned)
-				}
-			}
-			for _, denied := range c.UserDeniedCommands {
-				if segBase == denied {
-					return false, fmt.Sprintf("command '%s' is blocked by policy", denied)
-				}
-			}
-			if blocked, reason := c.checkSubcommandPatterns(seg); blocked {
-				return false, reason
-			}
-		}
-		return true, ""
+		segments = splitCommandSegments(cmd)
 	}
 
-	// Simple command (no metacharacters) - just check the base command
-	baseCmd := extractBaseCommand(cmd)
-
-	for _, banned := range BannedCommands {
-		if baseCmd == banned {
-			return false, fmt.Sprintf("command '%s' is blocked for security", banned)
+	for _, seg := range segments {
+		if blocked, reason := c.checkSegment(seg); blocked {
+			return false, reason
 		}
-	}
-	for _, denied := range c.UserDeniedCommands {
-		if baseCmd == denied {
-			return false, fmt.Sprintf("command '%s' is blocked by policy", denied)
-		}
-	}
-	if blocked, reason := c.checkSubcommandPatterns(cmd); blocked {
-		return false, reason
 	}
 
 	return true, ""
 }
 
+func (c *Checker) checkSegment(seg string) (bool, string) {
+	base := extractBaseCommand(seg)
 
+	for _, banned := range BannedCommands {
+		if base == banned {
+			return true, fmt.Sprintf("command '%s' is blocked for security", banned)
+		}
+	}
+	for _, denied := range c.UserDeniedCommands {
+		if base == denied {
+			return true, fmt.Sprintf("command '%s' is blocked by policy", denied)
+		}
+	}
 
-// checkSubcommandPatterns checks if command matches any banned subcommand pattern.
-func (c *BashChecker) checkSubcommandPatterns(cmd string) (blocked bool, reason string) {
+	return c.checkSubcommandPatterns(seg)
+}
+
+func (c *Checker) checkSubcommandPatterns(cmd string) (blocked bool, reason string) {
 	words := strings.Fields(cmd)
 	if len(words) == 0 {
 		return false, ""
@@ -354,7 +308,6 @@ func (c *BashChecker) checkSubcommandPatterns(cmd string) (blocked bool, reason 
 			continue
 		}
 
-		// Check if all required args are present
 		if len(pattern.Args) > 0 {
 			argsMatched := 0
 			for _, arg := range pattern.Args {
@@ -366,16 +319,14 @@ func (c *BashChecker) checkSubcommandPatterns(cmd string) (blocked bool, reason 
 				}
 			}
 			if argsMatched < len(pattern.Args) {
-				continue // Not all required args present
+				continue
 			}
 		}
 
-		// If no flags required, block now
 		if len(pattern.Flags) == 0 {
 			return true, fmt.Sprintf("command pattern '%s %s' is blocked", pattern.Command, strings.Join(pattern.Args, " "))
 		}
 
-		// Check if any of the blocking flags are present
 		for _, flag := range pattern.Flags {
 			for _, word := range words[1:] {
 				if word == flag || strings.HasPrefix(word, flag+"=") {
@@ -388,12 +339,9 @@ func (c *BashChecker) checkSubcommandPatterns(cmd string) (blocked bool, reason 
 	return false, ""
 }
 
-// extractBaseCommand gets the first command from a potentially piped/chained command.
 func extractBaseCommand(cmd string) string {
-	// Handle leading whitespace
 	cmd = strings.TrimSpace(cmd)
 
-	// Handle env command prefix (e.g., "env VAR=val command")
 	if strings.HasPrefix(cmd, "env ") {
 		words := strings.Fields(cmd)
 		for i, w := range words[1:] {
@@ -403,13 +351,11 @@ func extractBaseCommand(cmd string) string {
 		}
 	}
 
-	// Get first word
 	words := strings.Fields(cmd)
 	if len(words) == 0 {
 		return ""
 	}
 
-	// Strip path prefix (e.g., /usr/bin/curl -> curl)
 	base := words[0]
 	if idx := strings.LastIndex(base, "/"); idx != -1 {
 		base = base[idx+1:]
@@ -418,7 +364,6 @@ func extractBaseCommand(cmd string) string {
 	return base
 }
 
-// containsUnquotedMetachars checks for shell metacharacters outside of quotes.
 func containsUnquotedMetachars(cmd string) bool {
 	metachars := []string{"|", "&&", "||", ";", "`", "$(", "${"}
 	inSingle := false
@@ -445,7 +390,6 @@ func containsUnquotedMetachars(cmd string) bool {
 	return false
 }
 
-// splitCommandSegments splits a command by pipes, semicolons, and logical operators.
 func splitCommandSegments(cmd string) []string {
 	var segments []string
 	current := ""
@@ -462,16 +406,14 @@ func splitCommandSegments(cmd string) []string {
 			current += string(c)
 		} else if !inSingle && !inDouble {
 			remaining := cmd[i:]
-			// Check for multi-character operators first
 			if strings.HasPrefix(remaining, "&&") || strings.HasPrefix(remaining, "||") {
 				if strings.TrimSpace(current) != "" {
 					segments = append(segments, strings.TrimSpace(current))
 				}
 				current = ""
-				i++ // Skip the second character of && or ||
+				i++
 				continue
 			}
-			// Single character separators
 			if c == '|' || c == ';' {
 				if strings.TrimSpace(current) != "" {
 					segments = append(segments, strings.TrimSpace(current))
@@ -490,27 +432,4 @@ func splitCommandSegments(cmd string) []string {
 	}
 
 	return segments
-}
-
-// MergeUserDenylist merges user-defined denied commands with the built-in list,
-// returning the combined set (with duplicates removed).
-func MergeUserDenylist(userDenied []string) []string {
-	seen := make(map[string]bool)
-	result := make([]string, 0, len(BannedCommands)+len(userDenied))
-
-	for _, cmd := range BannedCommands {
-		if !seen[cmd] {
-			seen[cmd] = true
-			result = append(result, cmd)
-		}
-	}
-
-	for _, cmd := range userDenied {
-		if !seen[cmd] {
-			seen[cmd] = true
-			result = append(result, cmd)
-		}
-	}
-
-	return result
 }

@@ -8,14 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vinayprograms/agentkit/bashsec"
 	"github.com/vinayprograms/agentkit/policy"
 )
 
 // R5.1.1: Register built-in tools at startup
 func TestRegistry_BuiltinTools(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = t.TempDir()
-	reg := NewRegistry(pol)
+	pol.DefaultDeny = false
+	reg := NewRegistry(pol, t.TempDir())
 
 	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls"}
 	for _, name := range expectedTools {
@@ -33,8 +34,8 @@ func TestRegistry_BuiltinTools(t *testing.T) {
 // R5.1.2: Provide tool definitions for LLM
 func TestRegistry_ToolDefinitions(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = t.TempDir()
-	reg := NewRegistry(pol)
+	pol.DefaultDeny = false
+	reg := NewRegistry(pol, t.TempDir())
 
 	defs := reg.Definitions()
 	if len(defs) == 0 {
@@ -62,8 +63,8 @@ func TestRegistry_ToolDefinitions(t *testing.T) {
 // R5.1.3: Look up tool by name
 func TestRegistry_Lookup(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = t.TempDir()
-	reg := NewRegistry(pol)
+	pol.DefaultDeny = false
+	reg := NewRegistry(pol, t.TempDir())
 
 	tool := reg.Get("read")
 	if tool == nil {
@@ -78,10 +79,8 @@ func TestRegistry_Lookup(t *testing.T) {
 
 // R5.1.5: Filter available tools based on policy
 func TestRegistry_FilterByPolicy(t *testing.T) {
-	pol := policy.New()
-	pol.Workspace = t.TempDir()
-	pol.Tools["bash"] = &policy.ToolPolicy{Enabled: false}
-	reg := NewRegistry(pol)
+	pol := policy.New() // DefaultDeny = true, bash not listed → disabled
+	reg := NewRegistry(pol, t.TempDir())
 
 	defs := reg.Definitions()
 	for _, def := range defs {
@@ -98,12 +97,12 @@ func TestTool_Read(t *testing.T) {
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["read"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("read")
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -124,12 +123,12 @@ func TestTool_Write(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "output.txt")
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["write"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("write")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -152,12 +151,12 @@ func TestTool_Write_CreateDirs(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["write"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("write")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -178,12 +177,12 @@ func TestTool_Write_PathTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["write"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("write")
 
@@ -215,16 +214,16 @@ func TestTool_Edit(t *testing.T) {
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["edit"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
 	pol.Tools["read"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("edit")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -249,16 +248,16 @@ func TestTool_Edit_NotFound(t *testing.T) {
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
+	
 	pol.Tools["edit"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
 	pol.Tools["read"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{tmpDir + "/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("edit")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -279,8 +278,8 @@ func TestTool_Glob(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "c.txt"), []byte(""), 0644)
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
-	reg := NewRegistry(pol)
+	pol.DefaultDeny = false
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("glob")
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -304,8 +303,8 @@ func TestTool_Ls(t *testing.T) {
 	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755)
 
 	pol := policy.New()
-	pol.Workspace = tmpDir
-	reg := NewRegistry(pol)
+	pol.DefaultDeny = false
+	reg := NewRegistry(pol, tmpDir)
 
 	tool := reg.Get("ls")
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -324,12 +323,11 @@ func TestTool_Ls(t *testing.T) {
 // R5.3.1: bash tool - Execute shell command
 func TestTool_Bash(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = t.TempDir()
+	
 	pol.Tools["bash"] = &policy.ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"echo *"},
+		
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, t.TempDir())
 
 	tool := reg.Get("bash")
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -345,37 +343,39 @@ func TestTool_Bash(t *testing.T) {
 	}
 }
 
-// R5.3.1: bash tool - Enforce allowlist from policy
+// R5.3.1: bash tool - Enforce denylist via bashsec.Checker
 func TestTool_Bash_PolicyDeny(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = t.TempDir()
+	
 	pol.Tools["bash"] = &policy.ToolPolicy{
-		Enabled:   true,
-		Allowlist: []string{"echo *"},
+		
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, t.TempDir())
+	// BashChecker blocks "curl" via built-in BannedCommands.
+	checker := bashsec.NewChecker("", nil, nil)
+	reg.SetBashChecker(checker)
 
 	tool := reg.Get("bash")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
-		"command": "rm -rf /",
+		"command": "curl http://evil.com",
 	})
 	if err == nil {
-		t.Error("expected policy denial error")
+		t.Error("expected security denial error")
 	}
-	if !strings.Contains(err.Error(), "policy") || !strings.Contains(err.Error(), "denied") {
-		t.Errorf("error should mention policy denial: %v", err)
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should mention blocked: %v", err)
 	}
 }
 
 // Test security: read tool denies paths outside workspace
 func TestTool_Read_SecurityDeny(t *testing.T) {
 	pol := policy.New()
-	pol.Workspace = "/safe/workspace"
+	
 	pol.Tools["read"] = &policy.ToolPolicy{
-		Enabled: true,
+		
 		Allow:   []string{"/safe/workspace/**"},
 	}
-	reg := NewRegistry(pol)
+	reg := NewRegistry(pol, t.TempDir())
 
 	tool := reg.Get("read")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
