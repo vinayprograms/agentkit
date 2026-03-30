@@ -11,13 +11,13 @@ import (
 
 // SecuritySupervisor performs Tier 3 full LLM-based security verification.
 type SecuritySupervisor struct {
-	provider      llm.Provider
+	provider      llm.Model
 	mode          Mode
 	researchScope string
 }
 
 // NewSecuritySupervisor creates a new security supervisor.
-func NewSecuritySupervisor(provider llm.Provider, mode Mode, researchScope string) *SecuritySupervisor {
+func NewSecuritySupervisor(provider llm.Model, mode Mode, researchScope string) *SecuritySupervisor {
 	return &SecuritySupervisor{
 		provider:      provider,
 		mode:          mode,

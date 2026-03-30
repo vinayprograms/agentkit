@@ -5,14 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// AnthropicProvider implements the Provider interface using the official Anthropic SDK.
-type AnthropicProvider struct {
+// Anthropic beta feature headers. These are versioned and may change as features graduate.
+const (
+	anthropicOAuthBetaHeader = "oauth-2025-04-20"
+)
+
+// anthropicAuthOptions returns the SDK options for authenticating with Anthropic.
+func anthropicAuthOptions(cfg anthropicConfig) []option.RequestOption {
+	if cfg.IsOAuthToken {
+		return []option.RequestOption{
+			option.WithAuthToken(cfg.APIKey),
+			option.WithHeader("anthropic-beta", anthropicOAuthBetaHeader),
+		}
+	}
+	return []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+	}
+}
+
+// anthropicModel implements the Provider interface using the official Anthropic SDK.
+type anthropicModel struct {
 	client    *anthropic.Client
 	model     string
 	maxTokens int
@@ -20,8 +37,8 @@ type AnthropicProvider struct {
 	retry     RetryConfig
 }
 
-// AnthropicConfig holds configuration for the Anthropic provider.
-type AnthropicConfig struct {
+// anthropicConfig holds configuration for the Anthropic provider.
+type anthropicConfig struct {
 	APIKey       string
 	IsOAuthToken bool   // True if APIKey is an OAuth access token (uses Bearer auth)
 	BaseURL      string // Optional custom endpoint
@@ -31,8 +48,8 @@ type AnthropicConfig struct {
 	Retry        RetryConfig
 }
 
-// NewAnthropicProvider creates a new Anthropic provider using the official SDK.
-func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
+// newAnthropic creates a new Anthropic provider using the official SDK.
+func newAnthropic(cfg anthropicConfig) (*anthropicModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("api_key is required for anthropic")
 	}
@@ -43,24 +60,14 @@ func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
 		return nil, fmt.Errorf("max_tokens is required for anthropic")
 	}
 
-	var opts []option.RequestOption
-	if cfg.IsOAuthToken {
-		// OAuth tokens use Authorization: Bearer header + required beta header
-		opts = append(opts,
-			option.WithAuthToken(cfg.APIKey),
-			option.WithHeader("anthropic-beta", "oauth-2025-04-20"),
-		)
-	} else {
-		// API keys use x-api-key header
-		opts = append(opts, option.WithAPIKey(cfg.APIKey))
-	}
+	opts := anthropicAuthOptions(cfg)
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}
 
 	client := anthropic.NewClient(opts...)
 
-	return &AnthropicProvider{
+	return &anthropicModel{
 		client:    &client,
 		model:     cfg.Model,
 		maxTokens: cfg.MaxTokens,
@@ -69,30 +76,48 @@ func NewAnthropicProvider(cfg AnthropicConfig) (*AnthropicProvider, error) {
 	}, nil
 }
 
-// getRetryConfig returns effective retry settings with defaults.
-func (p *AnthropicProvider) getRetryConfig() (maxRetries int, initBackoff, maxBackoff time.Duration) {
-	maxRetries = p.retry.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = defaultMaxRetries
+// Chat implements the Provider interface.
+func (p *anthropicModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	systemPrompt, messages := toAnthropicMessages(req.Messages)
+	tools := toAnthropicTools(req.Tools)
+
+	maxTokens := int64(p.maxTokens)
+	if req.MaxTokens > 0 {
+		maxTokens = int64(req.MaxTokens)
 	}
-	initBackoff = p.retry.InitBackoff
-	if initBackoff <= 0 {
-		initBackoff = defaultInitBackoff
+
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(p.model),
+		MaxTokens: maxTokens,
+		Messages:  messages,
 	}
-	maxBackoff = p.retry.MaxBackoff
-	if maxBackoff <= 0 {
-		maxBackoff = defaultMaxBackoff
+
+	if systemPrompt != "" {
+		params.System = []anthropic.TextBlockParam{
+			{
+				Text:         systemPrompt,
+				CacheControl: anthropic.NewCacheControlEphemeralParam(),
+			},
+		}
 	}
-	return
+
+	if len(tools) > 0 {
+		tools[len(tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		params.Tools = tools
+	}
+
+	applyAnthropicThinking(p.thinking, req, &params, &maxTokens)
+
+	return p.chatStreaming(ctx, params)
 }
 
-// Chat implements the Provider interface.
-func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// Convert messages to Anthropic format
+// toAnthropicMessages converts generic messages to Anthropic format,
+// extracting the system prompt separately.
+func toAnthropicMessages(msgs []Message) (string, []anthropic.MessageParam) {
 	var systemPrompt string
-	messages := make([]anthropic.MessageParam, 0, len(req.Messages))
+	messages := make([]anthropic.MessageParam, 0, len(msgs))
 
-	for _, m := range req.Messages {
+	for _, m := range msgs {
 		switch m.Role {
 		case "system":
 			systemPrompt = m.Content
@@ -102,7 +127,6 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 			))
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
-				// Assistant message with tool calls
 				blocks := make([]anthropic.ContentBlockParamUnion, 0)
 				if m.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(m.Content))
@@ -121,17 +145,20 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 				))
 			}
 		case "tool":
-			// Tool result message
 			messages = append(messages, anthropic.NewUserMessage(
 				anthropic.NewToolResultBlock(m.ToolCallID, m.Content, false),
 			))
 		}
 	}
 
-	// Convert tools to Anthropic format
-	tools := make([]anthropic.ToolUnionParam, 0, len(req.Tools))
-	for _, t := range req.Tools {
-		tools = append(tools, anthropic.ToolUnionParam{
+	return systemPrompt, messages
+}
+
+// toAnthropicTools converts generic tool definitions to Anthropic format.
+func toAnthropicTools(tools []ToolDef) []anthropic.ToolUnionParam {
+	result := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        t.Name,
 				Description: anthropic.String(t.Description),
@@ -141,107 +168,61 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 			},
 		})
 	}
+	return result
+}
 
-	maxTokens := int64(p.maxTokens)
-	if req.MaxTokens > 0 {
-		maxTokens = int64(req.MaxTokens)
+// thinkingLevelToAnthropicBudget converts a thinking level to Anthropic budget tokens.
+func thinkingLevelToAnthropicBudget(level ThinkingLevel, configBudget int64) int64 {
+	if configBudget > 0 {
+		return configBudget
 	}
-
-	// Build request params
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(p.model),
-		MaxTokens: maxTokens,
-		Messages:  messages,
+	switch level {
+	case ThinkingHigh:
+		return 16000
+	case ThinkingMedium:
+		return 8000
+	case ThinkingLow:
+		return 4000
+	default:
+		return 0
 	}
+}
 
-	if systemPrompt != "" {
-		params.System = []anthropic.TextBlockParam{
-			{
-				Text:         systemPrompt,
-				CacheControl: anthropic.NewCacheControlEphemeralParam(),
-			},
-		}
+// applyAnthropicThinking configures extended thinking on the request params.
+func applyAnthropicThinking(cfg ThinkingConfig, req ChatRequest, params *anthropic.MessageNewParams, maxTokens *int64) {
+	level := ResolveThinkingLevel(cfg, req.Messages, req.Tools)
+	if level == ThinkingOff {
+		return
 	}
-
-	if len(tools) > 0 {
-		// Mark last tool for caching (cache breakpoint covers all preceding tools)
-		tools[len(tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
-		params.Tools = tools
+	budget := thinkingLevelToAnthropicBudget(level, cfg.BudgetTokens)
+	if budget <= 0 {
+		return
 	}
-
-	// Add thinking if configured
-	thinkingLevel := ResolveThinkingLevel(p.thinking, req.Messages, req.Tools)
-	if thinkingLevel != ThinkingOff {
-		budget := ThinkingLevelToAnthropicBudget(thinkingLevel, p.thinking.BudgetTokens)
-		if budget > 0 {
-			// Anthropic requires max_tokens > thinking.budget_tokens
-			// Add minimum 1024 for response beyond thinking
-			minMaxTokens := budget + 1024
-			if maxTokens < minMaxTokens {
-				maxTokens = minMaxTokens
-				params.MaxTokens = maxTokens
-			}
-			params.Thinking = anthropic.ThinkingConfigParamUnion{
-				OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-					BudgetTokens: int64(budget),
-				},
-			}
-		}
+	// Anthropic requires max_tokens > thinking.budget_tokens
+	minMaxTokens := budget + 1024
+	if *maxTokens < minMaxTokens {
+		*maxTokens = minMaxTokens
+		params.MaxTokens = *maxTokens
 	}
-
-	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
-
-	// Always use streaming for Anthropic. The API requires streaming for
-	// any request that may take >10 minutes, which can happen with extended
-	// thinking, large contexts, or high-latency swarm scenarios. Streaming
-	// is strictly more capable with no downside.
-	return p.chatStreaming(ctx, params, maxRetries, initBackoff, maxBackoff)
+	params.Thinking = anthropic.ThinkingConfigParamUnion{
+		OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+			BudgetTokens: int64(budget),
+		},
+	}
 }
 
 // chatStreaming makes a streaming request (required for extended thinking).
-func (p *AnthropicProvider) chatStreaming(
+func (p *anthropicModel) chatStreaming(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
-	maxRetries int,
-	initBackoff, maxBackoff time.Duration,
 ) (*ChatResponse, error) {
-	backoff := initBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		result, err := p.doStreamingRequest(ctx, params)
-		if err == nil {
-			return result, nil
-		}
-
-		if isBillingError(err) {
-			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-		}
-
-		if !isRetryableError(err) {
-			return nil, fmt.Errorf("anthropic streaming request failed: %w", err)
-		}
-
-		if attempt == maxRetries {
-			return nil, fmt.Errorf("anthropic streaming request failed after %d retries: %w", maxRetries, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-
-		backoff = time.Duration(float64(backoff) * backoffFactor)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
-
-	return nil, fmt.Errorf("unreachable")
+	return withRetry(ctx, p.retry, "anthropic", func() (*ChatResponse, error) {
+		return p.doStreamingRequest(ctx, params)
+	})
 }
 
 // doStreamingRequest executes a single streaming request.
-func (p *AnthropicProvider) doStreamingRequest(
+func (p *anthropicModel) doStreamingRequest(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
 ) (*ChatResponse, error) {
@@ -316,7 +297,9 @@ func (p *AnthropicProvider) doStreamingRequest(
 			case "tool_use":
 				var args map[string]interface{}
 				if text != "" {
-					json.Unmarshal([]byte(text), &args)
+					if err := json.Unmarshal([]byte(text), &args); err != nil {
+						return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", state.toolName, err)
+					}
 				}
 				result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
 					ID:   state.toolID,

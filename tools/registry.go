@@ -82,15 +82,10 @@ type Registry struct {
 	tools          map[string]Tool
 	policy         *policy.Policy
 	workspace      string // base working directory (runtime context)
-	summarizer     Summarizer
+	summarizer     *LLMSummarizer
 	memoryStore    MemoryStore
 	semanticMemory SemanticMemory
 	credentials    CredentialProvider
-}
-
-// Summarizer provides content summarization for web_fetch
-type Summarizer interface {
-	Summarize(ctx context.Context, content, question string) (string, error)
 }
 
 // SemanticMemory provides semantic memory operations.
@@ -127,7 +122,7 @@ func NewRegistry(pol *policy.Policy, workspace string) *Registry {
 }
 
 // SetSummarizer sets the summarizer for web_fetch tool
-func (r *Registry) SetSummarizer(s Summarizer) {
+func (r *Registry) SetSummarizer(s *LLMSummarizer) {
 	r.summarizer = s
 	// Update web_fetch tool with summarizer
 	if wf, ok := r.tools["web_fetch"].(*webFetchTool); ok {
@@ -913,7 +908,7 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 // webFetchTool implements the web_fetch tool (R5.4.1).
 type webFetchTool struct {
 	policy     *policy.Policy
-	summarizer Summarizer
+	summarizer *LLMSummarizer
 }
 
 func (t *webFetchTool) Name() string { return "web_fetch" }

@@ -9,7 +9,7 @@ import (
 
 // R4.1.1: Define Chat method
 func TestProvider_ChatMethod(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetResponse("Hello from LLM")
 
 	resp, err := provider.Chat(context.Background(), ChatRequest{
@@ -28,7 +28,7 @@ func TestProvider_ChatMethod(t *testing.T) {
 
 // R4.1.3: Support tool definitions
 func TestProvider_ToolDefinitions(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetToolCall("read", map[string]interface{}{"path": "/test.txt"})
 
 	resp, err := provider.Chat(context.Background(), ChatRequest{
@@ -65,7 +65,7 @@ func TestProvider_ToolDefinitions(t *testing.T) {
 
 // R4.1.4: Parse tool calls from response
 func TestProvider_ParseToolCalls(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetToolCall("write", map[string]interface{}{
 		"path":    "/output.txt",
 		"content": "hello",
@@ -87,7 +87,7 @@ func TestProvider_ParseToolCalls(t *testing.T) {
 
 // Test multiple tool calls
 func TestProvider_MultipleToolCalls(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetToolCalls([]ToolCallResponse{
 		{ID: "1", Name: "read", Args: map[string]interface{}{"path": "/a.txt"}},
 		{ID: "2", Name: "read", Args: map[string]interface{}{"path": "/b.txt"}},
@@ -105,7 +105,7 @@ func TestProvider_MultipleToolCalls(t *testing.T) {
 
 // Test tool result message
 func TestProvider_ToolResultMessage(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetResponse("File contains: hello world")
 
 	resp, err := provider.Chat(context.Background(), ChatRequest{
@@ -128,7 +128,7 @@ func TestProvider_ToolResultMessage(t *testing.T) {
 
 // Test token counting
 func TestProvider_TokenCounts(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetResponse("Response")
 	provider.SetTokenCounts(100, 50)
 
@@ -146,7 +146,7 @@ func TestProvider_TokenCounts(t *testing.T) {
 
 // Test stop reason
 func TestProvider_StopReason(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetResponse("Done")
 	provider.SetStopReason("end_turn")
 
@@ -161,7 +161,7 @@ func TestProvider_StopReason(t *testing.T) {
 
 // Test max tokens configuration
 func TestProvider_MaxTokens(t *testing.T) {
-	provider := NewMockProvider()
+	provider := newMock()
 	provider.SetResponse("Response")
 
 	_, err := provider.Chat(context.Background(), ChatRequest{
@@ -183,13 +183,13 @@ func TestProvider_MaxTokens(t *testing.T) {
 func TestProviderAdapter_ConfigValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  ProviderConfig
+		config  Config
 		wantErr bool
 	}{
 		{
 			name: "valid anthropic config",
-			config: ProviderConfig{
-				Provider: "anthropic",
+			config: Config{
+				Service: "anthropic",
 				Model:    "claude-3-5-sonnet-20241022",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
@@ -198,8 +198,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "valid openai config",
-			config: ProviderConfig{
-				Provider: "openai",
+			config: Config{
+				Service: "openai",
 				Model:    "gpt-4o",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
@@ -208,8 +208,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "valid google config",
-			config: ProviderConfig{
-				Provider: "google",
+			config: Config{
+				Service: "google",
 				Model:    "gemini-1.5-pro",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
@@ -218,8 +218,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "valid groq config",
-			config: ProviderConfig{
-				Provider: "groq",
+			config: Config{
+				Service: "groq",
 				Model:    "llama-3.1-70b-versatile",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
@@ -228,8 +228,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "valid mistral config",
-			config: ProviderConfig{
-				Provider: "mistral",
+			config: Config{
+				Service: "mistral",
 				Model:    "mistral-large-latest",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
@@ -238,7 +238,7 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "missing provider",
-			config: ProviderConfig{
+			config: Config{
 				Model:  "claude-3-5-sonnet-20241022",
 				APIKey: "test-key",
 			},
@@ -246,8 +246,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "missing model",
-			config: ProviderConfig{
-				Provider: "anthropic",
+			config: Config{
+				Service: "anthropic",
 				APIKey:   "test-key",
 				MaxTokens: 4096,
 			},
@@ -255,8 +255,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "missing api key",
-			config: ProviderConfig{
-				Provider: "anthropic",
+			config: Config{
+				Service: "anthropic",
 				Model:    "claude-3-5-sonnet-20241022",
 			},
 			wantErr: true,
@@ -273,8 +273,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 	}
 }
 
-// TestNewProvider_AllProviders tests that all supported providers can be instantiated
-func TestNewProvider_AllProviders(t *testing.T) {
+// TestNew_AllProviders tests that all supported providers can be instantiated
+func TestNew_AllProviders(t *testing.T) {
 	providers := []struct {
 		name  string
 		model string
@@ -292,41 +292,41 @@ func TestNewProvider_AllProviders(t *testing.T) {
 
 	for _, p := range providers {
 		t.Run(p.name, func(t *testing.T) {
-			cfg := ProviderConfig{
-				Provider:  p.name,
+			cfg := Config{
+				Service:  p.name,
 				Model:     p.model,
 				APIKey:    "test-key-for-" + p.name,
 				MaxTokens: 4096,
 			}
 
-			provider, err := NewProvider(cfg)
+			provider, err := New(cfg)
 			if err != nil {
-				t.Fatalf("NewProvider(%s) failed: %v", p.name, err)
+				t.Fatalf("New(%s) failed: %v", p.name, err)
 			}
 			if provider == nil {
-				t.Errorf("NewProvider(%s) returned nil provider", p.name)
+				t.Errorf("New(%s) returned nil provider", p.name)
 			}
 		})
 	}
 }
 
-// TestNewProvider_UnsupportedProvider tests that unsupported providers return an error
-func TestNewProvider_UnsupportedProvider(t *testing.T) {
-	cfg := ProviderConfig{
-		Provider: "unsupported-provider",
+// TestNew_UnsupportedProvider tests that unsupported providers return an error
+func TestNew_UnsupportedProvider(t *testing.T) {
+	cfg := Config{
+		Service: "unsupported-provider",
 		Model:    "some-model",
 		APIKey:   "test-key",
 				MaxTokens: 4096,
 	}
 
-	_, err := NewProvider(cfg)
+	_, err := New(cfg)
 	if err == nil {
 		t.Error("expected error for unsupported provider")
 	}
 }
 
-// TestInferProviderFromModel tests model name to provider inference
-func TestInferProviderFromModel(t *testing.T) {
+// TestInferService tests model name to provider inference
+func TestInferService(t *testing.T) {
 	tests := []struct {
 		model    string
 		expected string
@@ -370,16 +370,16 @@ func TestInferProviderFromModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			result := InferProviderFromModel(tt.model)
+			result := InferService(tt.model)
 			if result != tt.expected {
-				t.Errorf("InferProviderFromModel(%q) = %q, want %q", tt.model, result, tt.expected)
+				t.Errorf("InferService(%q) = %q, want %q", tt.model, result, tt.expected)
 			}
 		})
 	}
 }
 
-// TestNewProvider_InferredProvider tests that provider can be inferred from model name
-func TestNewProvider_InferredProvider(t *testing.T) {
+// TestNew_InferredProvider tests that provider can be inferred from model name
+func TestNew_InferredProvider(t *testing.T) {
 	tests := []struct {
 		model    string
 		wantErr  bool
@@ -393,24 +393,24 @@ func TestNewProvider_InferredProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			cfg := ProviderConfig{
+			cfg := Config{
 				// Provider not set - should be inferred
 				Model:     tt.model,
 				APIKey:    "test-key",
 				MaxTokens: 4096,
 			}
 
-			_, err := NewProvider(cfg)
+			_, err := New(cfg)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("NewProvider() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestProviderConfig_MaxTokensMandatory(t *testing.T) {
-	cfg := ProviderConfig{
-		Provider: "anthropic",
+func TestConfig_MaxTokensMandatory(t *testing.T) {
+	cfg := Config{
+		Service: "anthropic",
 		Model:    "claude-3-5-sonnet-20241022",
 		APIKey:   "test-key",
 		// MaxTokens not set - should fail validation
@@ -427,4 +427,69 @@ func TestProviderConfig_MaxTokensMandatory(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected validation error: %v", err)
 	}
+}
+
+// mockModel is a mock LLM provider for testing.
+type mockModel struct {
+	response     string
+	toolCalls    []ToolCallResponse
+	stopReason   string
+	inputTokens  int
+	outputTokens int
+	lastRequest  *ChatRequest
+	err          error
+	callCount    int
+	ChatFunc     func(ctx context.Context, req ChatRequest) (*ChatResponse, error)
+}
+
+func newMock() *mockModel {
+	return &mockModel{stopReason: "end_turn"}
+}
+
+func (p *mockModel) SetResponse(content string)            { p.response = content }
+func (p *mockModel) SetToolCall(name string, args map[string]interface{}) {
+	p.toolCalls = []ToolCallResponse{{ID: "tc-1", Name: name, Args: args}}
+}
+func (p *mockModel) SetToolCalls(calls []ToolCallResponse)  { p.toolCalls = calls }
+func (p *mockModel) SetTokenCounts(input, output int)       { p.inputTokens = input; p.outputTokens = output }
+func (p *mockModel) SetStopReason(reason string)            { p.stopReason = reason }
+func (p *mockModel) SetError(err error)                     { p.err = err }
+func (p *mockModel) LastRequest() *ChatRequest              { return p.lastRequest }
+func (p *mockModel) CallCount() int                         { return p.callCount }
+
+func (p *mockModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	p.callCount++
+	p.lastRequest = &req
+
+	if p.ChatFunc != nil {
+		return p.ChatFunc(ctx, req)
+	}
+	if p.err != nil {
+		return nil, p.err
+	}
+
+	hasToolResult := false
+	for _, msg := range req.Messages {
+		if msg.Role == "tool" {
+			hasToolResult = true
+			break
+		}
+	}
+
+	if hasToolResult {
+		return &ChatResponse{
+			Content:      p.response,
+			StopReason:   p.stopReason,
+			InputTokens:  p.inputTokens,
+			OutputTokens: p.outputTokens,
+		}, nil
+	}
+
+	return &ChatResponse{
+		Content:      p.response,
+		ToolCalls:    p.toolCalls,
+		StopReason:   p.stopReason,
+		InputTokens:  p.inputTokens,
+		OutputTokens: p.outputTokens,
+	}, nil
 }

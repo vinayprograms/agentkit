@@ -10,7 +10,7 @@ import (
 
 func TestOllamaCloudProvider_Config(t *testing.T) {
 	// Test missing API key
-	_, err := NewOllamaCloudProvider(OllamaCloudConfig{
+	_, err := newOllamaCloud(ollamaCloudConfig{
 		Model: "gpt-oss:120b",
 	})
 	if err == nil {
@@ -18,7 +18,7 @@ func TestOllamaCloudProvider_Config(t *testing.T) {
 	}
 
 	// Test missing model
-	_, err = NewOllamaCloudProvider(OllamaCloudConfig{
+	_, err = newOllamaCloud(ollamaCloudConfig{
 		APIKey: "test-key",
 	})
 	if err == nil {
@@ -26,7 +26,7 @@ func TestOllamaCloudProvider_Config(t *testing.T) {
 	}
 
 	// Test valid config
-	p, err := NewOllamaCloudProvider(OllamaCloudConfig{
+	p, err := newOllamaCloud(ollamaCloudConfig{
 		APIKey: "test-key",
 		Model:  "gpt-oss:120b",
 	})
@@ -84,7 +84,7 @@ func TestOllamaCloudProvider_Chat(t *testing.T) {
 	defer server.Close()
 
 	// Create provider with mock server
-	p, err := NewOllamaCloudProvider(OllamaCloudConfig{
+	p, err := newOllamaCloud(ollamaCloudConfig{
 		APIKey:  "test-key",
 		BaseURL: server.URL,
 		Model:   "gpt-oss:120b",
@@ -136,7 +136,7 @@ func TestOllamaCloudProvider_ToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p, _ := NewOllamaCloudProvider(OllamaCloudConfig{
+	p, _ := newOllamaCloud(ollamaCloudConfig{
 		APIKey:  "test-key",
 		BaseURL: server.URL,
 		Model:   "gpt-oss:120b",
@@ -159,5 +159,71 @@ func TestOllamaCloudProvider_ToolCalls(t *testing.T) {
 	}
 	if resp.ToolCalls[0].Name != "get_weather" {
 		t.Errorf("expected tool name get_weather, got %s", resp.ToolCalls[0].Name)
+	}
+}
+
+// Test Ollama conversion helpers
+
+func TestToOllamaMessages(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "Be helpful."},
+		{Role: "user", Content: "Hi"},
+	}
+	result := toOllamaMessages(msgs)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
+	}
+	if result[0].Role != "system" {
+		t.Errorf("expected system role, got %q", result[0].Role)
+	}
+}
+
+func TestToOllamaTools(t *testing.T) {
+	tools := []ToolDef{
+		{Name: "ls", Description: "List files", Parameters: map[string]any{"type": "object"}},
+	}
+	result := toOllamaTools(tools)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(result))
+	}
+	if result[0].Function.Name != "ls" {
+		t.Errorf("expected tool name 'ls', got %q", result[0].Function.Name)
+	}
+}
+
+func TestFromOllamaResponse(t *testing.T) {
+	resp := &ollamaChatResponse{
+		Model: "llama3",
+		Message: ollamaMessage{
+			Content: "Hello!",
+		},
+		DoneReason:      "stop",
+		PromptEvalCount: 10,
+		EvalCount:       5,
+	}
+	result := fromOllamaResponse(resp)
+	if result.Content != "Hello!" {
+		t.Errorf("expected content 'Hello!', got %q", result.Content)
+	}
+	if result.InputTokens != 10 || result.OutputTokens != 5 {
+		t.Errorf("unexpected tokens: in=%d out=%d", result.InputTokens, result.OutputTokens)
+	}
+}
+
+func TestFromOllamaResponse_ToolCalls(t *testing.T) {
+	resp := &ollamaChatResponse{
+		Model: "llama3",
+		Message: ollamaMessage{
+			ToolCalls: []ollamaToolCall{
+				{Function: ollamaFunction{Name: "search", Arguments: map[string]any{"q": "go"}}},
+			},
+		},
+	}
+	result := fromOllamaResponse(resp)
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Name != "search" {
+		t.Errorf("expected tool name 'search', got %q", result.ToolCalls[0].Name)
 	}
 }

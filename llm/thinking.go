@@ -230,26 +230,3 @@ func ResolveThinkingLevel(config ThinkingConfig, messages []Message, tools []Too
 	return config.Level
 }
 
-// ThinkingLevelToBool converts a thinking level to a boolean for providers that only support on/off.
-func ThinkingLevelToBool(level ThinkingLevel) bool {
-	return level != ThinkingOff && level != ""
-}
-
-// ThinkingLevelToAnthropicBudget converts a thinking level to Anthropic budget tokens.
-// Returns 0 for off, or a reasonable default for each level.
-func ThinkingLevelToAnthropicBudget(level ThinkingLevel, configBudget int64) int64 {
-	if configBudget > 0 {
-		return configBudget
-	}
-	
-	switch level {
-	case ThinkingHigh:
-		return 16000 // ~4 pages of reasoning
-	case ThinkingMedium:
-		return 8000
-	case ThinkingLow:
-		return 4000
-	default:
-		return 0
-	}
-}

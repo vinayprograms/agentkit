@@ -4,89 +4,49 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
-// Message represents an LLM message.
-type Message struct {
-	Role       string             `json:"role"` // user, assistant, tool, system
-	Content    string             `json:"content"`
-	ToolCalls  []ToolCallResponse `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"` // For tool result messages
-}
-
-// ToolDef represents a tool definition for the LLM.
-type ToolDef struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
-// ToolCallResponse represents a tool call from the LLM.
-type ToolCallResponse struct {
-	ID   string                 `json:"id"`
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"args"`
-}
-
-// ChatRequest represents a chat request to the LLM.
-type ChatRequest struct {
-	Messages  []Message `json:"messages"`
-	Tools     []ToolDef `json:"tools,omitempty"`
-	MaxTokens int       `json:"max_tokens,omitempty"`
-}
-
-// ChatResponse represents a chat response from the LLM.
-type ChatResponse struct {
-	Content      string             `json:"content"`
-	Thinking     string             `json:"thinking,omitempty"`
-	ToolCalls    []ToolCallResponse `json:"tool_calls,omitempty"`
-	StopReason   string             `json:"stop_reason"`
-	InputTokens  int                `json:"input_tokens"`
-	OutputTokens int                `json:"output_tokens"`
-	Model        string             `json:"model"`
-	TTFTMs       int64              `json:"ttft_ms,omitempty"` // Time to first token in milliseconds
-
-	// Cache metrics (Anthropic prompt caching)
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
-}
-
-// Provider is the interface for LLM providers.
-type Provider interface {
-	// Chat sends a chat request and returns the response.
+// Model is the interface for LLM access.
+// Use llm.Prompt() to build simple requests from a text prompt.
+type Model interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 }
 
-// ProviderConfig holds configuration for the Provider adapter.
-type ProviderConfig struct {
-	Provider     string         `json:"provider"` // anthropic, openai, google, groq, mistral, openai-compat
+// Resolver looks up a Model by profile name.
+type Resolver interface {
+	Model(profile string) (Model, error)
+}
+
+// Config holds configuration for connecting to an LLM service.
+type Config struct {
+	Service      string         `json:"service"` // anthropic, openai, google, groq, mistral, openai-compat, etc.
 	Model        string         `json:"model"`
 	APIKey       string         `json:"api_key"`
-	IsOAuthToken bool           `json:"is_oauth_token"` // True if APIKey is an OAuth access token (Anthropic only)
+	IsOAuthToken bool           `json:"is_oauth_token"` // True if APIKey is an OAuth access token (Anthropic)
 	MaxTokens    int            `json:"max_tokens"`
-	BaseURL      string         `json:"base_url"` // Custom API endpoint (for OpenRouter, LiteLLM, Ollama, LMStudio)
-	Thinking     ThinkingConfig `json:"thinking"` // Thinking/reasoning configuration
-	RetryConfig  RetryConfig    `json:"retry"`    // Retry configuration
+	BaseURL      string         `json:"base_url"` // Custom API endpoint
+	Thinking     ThinkingConfig `json:"thinking"`
+	Retry        RetryConfig    `json:"retry"`
 }
 
 // RetryConfig holds retry settings for LLM calls.
 type RetryConfig struct {
-	MaxRetries  int           `json:"max_retries"`  // Max retry attempts (default 5)
-	MaxBackoff  time.Duration `json:"max_backoff"`  // Max backoff duration (default 60s)
-	InitBackoff time.Duration `json:"init_backoff"` // Initial backoff (default 1s)
+	MaxRetries  int           `json:"max_retries"`
+	MaxBackoff  time.Duration `json:"max_backoff"`
+	InitBackoff time.Duration `json:"init_backoff"`
 }
 
 // Validate validates the configuration.
-func (c *ProviderConfig) Validate() error {
-	if c.Provider == "" {
-		return fmt.Errorf("provider is required")
+func (c *Config) Validate() error {
+	if c.Service == "" {
+		return fmt.Errorf("service is required")
 	}
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	// Ollama local and LM Studio don't require API keys
-	if c.APIKey == "" && !isLocalProvider(c.Provider) {
+	if c.APIKey == "" && !isLocalService(c.Service) {
 		return fmt.Errorf("api key is required")
 	}
 	if c.MaxTokens == 0 {
@@ -95,9 +55,8 @@ func (c *ProviderConfig) Validate() error {
 	return nil
 }
 
-// isLocalProvider returns true if the provider is a local server that doesn't need an API key.
-func isLocalProvider(provider string) bool {
-	switch provider {
+func isLocalService(service string) bool {
+	switch service {
 	case "ollama", "ollama-local", "lmstudio":
 		return true
 	default:
@@ -105,145 +64,100 @@ func isLocalProvider(provider string) bool {
 	}
 }
 
-// ApplyDefaults applies default values.
-func (c *ProviderConfig) ApplyDefaults() {
-	// No defaults to apply - all required fields must be set explicitly
-}
-
-// ProviderFactory creates providers based on configuration.
-type ProviderFactory interface {
-	// GetProvider returns a provider for the given profile name.
-	// Empty profile name returns the default provider.
-	GetProvider(profile string) (Provider, error)
-}
-
-// SingleProviderFactory wraps a single provider (for backward compatibility).
-type SingleProviderFactory struct {
-	provider Provider
-}
-
-// NewSingleProviderFactory creates a factory that always returns the same provider.
-func NewSingleProviderFactory(p Provider) *SingleProviderFactory {
-	return &SingleProviderFactory{provider: p}
-}
-
-// GetProvider returns the single provider regardless of profile.
-func (f *SingleProviderFactory) GetProvider(profile string) (Provider, error) {
-	return f.provider, nil
-}
-
-// --- Mock Provider for Testing ---
-
-// MockProvider is a mock LLM provider for testing.
-type MockProvider struct {
-	response     string
-	toolCalls    []ToolCallResponse
-	stopReason   string
-	inputTokens  int
-	outputTokens int
-	lastRequest  *ChatRequest
-	err          error
-	callCount    int
-
-	// ChatFunc can be overridden for custom behavior
-	ChatFunc func(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-}
-
-// NewMockProvider creates a new mock provider.
-func NewMockProvider() *MockProvider {
-	p := &MockProvider{
-		stopReason: "end_turn",
-	}
-	return p
-}
-
-// SetResponse sets the response content.
-func (p *MockProvider) SetResponse(content string) {
-	p.response = content
-}
-
-// SetToolCall sets a single tool call response.
-func (p *MockProvider) SetToolCall(name string, args map[string]interface{}) {
-	p.toolCalls = []ToolCallResponse{
-		{ID: "tc-1", Name: name, Args: args},
-	}
-}
-
-// SetToolCalls sets multiple tool call responses.
-func (p *MockProvider) SetToolCalls(calls []ToolCallResponse) {
-	p.toolCalls = calls
-}
-
-// SetTokenCounts sets the token counts.
-func (p *MockProvider) SetTokenCounts(input, output int) {
-	p.inputTokens = input
-	p.outputTokens = output
-}
-
-// SetStopReason sets the stop reason.
-func (p *MockProvider) SetStopReason(reason string) {
-	p.stopReason = reason
-}
-
-// SetError sets an error to return.
-func (p *MockProvider) SetError(err error) {
-	p.err = err
-}
-
-// LastRequest returns the last request.
-func (p *MockProvider) LastRequest() *ChatRequest {
-	return p.lastRequest
-}
-
-// CallCount returns the number of Chat calls made.
-func (p *MockProvider) CallCount() int {
-	return p.callCount
-}
-
-// Reset resets the call count.
-func (p *MockProvider) Reset() {
-	p.callCount = 0
-}
-
-// Chat implements the Provider interface.
-func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	p.callCount++
-	p.lastRequest = &req
-
-	// Use custom function if set
-	if p.ChatFunc != nil {
-		return p.ChatFunc(ctx, req)
-	}
-
-	if p.err != nil {
-		return nil, p.err
-	}
-
-	// If toolCalls are set, return them only on first call per goal
-	// After tool results come back (detected by tool messages), return content
-	hasToolResult := false
-	for _, msg := range req.Messages {
-		if msg.Role == "tool" {
-			hasToolResult = true
-			break
+// New creates an LLM model based on the configuration.
+// If Service is empty, it will be inferred from the Model name.
+func New(cfg Config) (Model, error) {
+	if cfg.Service == "" && cfg.Model != "" {
+		cfg.Service = InferService(cfg.Model)
+		if cfg.Service == "" {
+			return nil, fmt.Errorf("cannot determine service for model %q; set service explicitly", cfg.Model)
 		}
 	}
 
-	if hasToolResult {
-		// Tool results received, complete the goal
-		return &ChatResponse{
-			Content:      p.response,
-			StopReason:   p.stopReason,
-			InputTokens:  p.inputTokens,
-			OutputTokens: p.outputTokens,
-		}, nil
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 
-	return &ChatResponse{
-		Content:      p.response,
-		ToolCalls:    p.toolCalls,
-		StopReason:   p.stopReason,
-		InputTokens:  p.inputTokens,
-		OutputTokens: p.outputTokens,
-	}, nil
+	switch cfg.Service {
+	case "anthropic":
+		return newAnthropic(anthropicConfig{
+			APIKey:       cfg.APIKey,
+			IsOAuthToken: cfg.IsOAuthToken,
+			BaseURL:      cfg.BaseURL,
+			Model:        cfg.Model,
+			MaxTokens:    cfg.MaxTokens,
+			Thinking:     cfg.Thinking,
+			Retry:        cfg.Retry,
+		})
+
+	case "openai":
+		return newOpenAI(openAIConfig{
+			APIKey:    cfg.APIKey,
+			BaseURL:   cfg.BaseURL,
+			Model:     cfg.Model,
+			MaxTokens: cfg.MaxTokens,
+			Thinking:  cfg.Thinking,
+			Retry:     cfg.Retry,
+		})
+
+	case "google":
+		return newGoogle(googleConfig{
+			APIKey:    cfg.APIKey,
+			Model:     cfg.Model,
+			MaxTokens: cfg.MaxTokens,
+			Thinking:  cfg.Thinking,
+			Retry:     cfg.Retry,
+		})
+
+	case "ollama-cloud":
+		return newOllamaCloud(ollamaCloudConfig{
+			APIKey:    cfg.APIKey,
+			BaseURL:   cfg.BaseURL,
+			Model:     cfg.Model,
+			MaxTokens: cfg.MaxTokens,
+			Thinking:  cfg.Thinking,
+			Retry:     cfg.Retry,
+		})
+
+	case "groq", "mistral", "xai", "openrouter", "ollama-local", "ollama",
+		"lmstudio", "cerebras", "openai-compat", "litellm":
+		return newOpenAICompat(cfg.Service, openAICompatConfig{
+			APIKey:    cfg.APIKey,
+			BaseURL:   cfg.BaseURL,
+			Model:     cfg.Model,
+			MaxTokens: cfg.MaxTokens,
+			Thinking:  cfg.Thinking,
+			Retry:     cfg.Retry,
+		})
+
+	default:
+		return nil, fmt.Errorf("unsupported service: %s", cfg.Service)
+	}
+}
+
+// InferService returns the provider name based on model name patterns.
+func InferService(model string) string {
+	model = strings.ToLower(model)
+
+	if strings.HasPrefix(model, "claude") {
+		return "anthropic"
+	}
+	if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "chatgpt") {
+		return "openai"
+	}
+	if strings.HasPrefix(model, "gemini") || strings.HasPrefix(model, "gemma") {
+		return "google"
+	}
+	if strings.HasPrefix(model, "mistral") || strings.HasPrefix(model, "mixtral") ||
+		strings.HasPrefix(model, "codestral") || strings.HasPrefix(model, "pixtral") {
+		return "mistral"
+	}
+	if strings.HasPrefix(model, "grok") {
+		return "xai"
+	}
+	if strings.HasPrefix(model, "cerebras") {
+		return "cerebras"
+	}
+	return ""
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/vinayprograms/agentkit/llm"
 )
 
 // CheckResult contains the result of a bash command check.
@@ -15,26 +17,14 @@ type CheckResult struct {
 	OutputTokens int
 }
 
-// LLMProvider is the minimal interface needed for policy checking.
-type LLMProvider interface {
-	Generate(ctx context.Context, prompt string) (*GenerateResult, error)
-}
-
-// GenerateResult contains the LLM response with token counts.
-type GenerateResult struct {
-	Content      string
-	InputTokens  int
-	OutputTokens int
-}
-
 // SmallLLMChecker implements LLMPolicyChecker using a fast/cheap LLM.
 type SmallLLMChecker struct {
-	provider      LLMProvider
+	provider      llm.Model
 	securityScope string
 }
 
 // NewSmallLLMChecker creates a new LLM-based policy checker.
-func NewSmallLLMChecker(provider LLMProvider) *SmallLLMChecker {
+func NewSmallLLMChecker(provider llm.Model) *SmallLLMChecker {
 	return &SmallLLMChecker{provider: provider}
 }
 
@@ -134,7 +124,7 @@ Respond with ONLY a JSON object, nothing else:
 		command,
 	)
 
-	result, err := c.provider.Generate(ctx, prompt)
+	result, err := c.provider.Chat(ctx, llm.Prompt(prompt))
 	if err != nil {
 		return &CheckResult{
 			Allowed: false,

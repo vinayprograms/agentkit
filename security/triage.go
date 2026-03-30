@@ -11,12 +11,12 @@ import (
 
 // Triage performs Tier 2 cheap model triage on a potentially suspicious action.
 type Triage struct {
-	provider      llm.Provider
+	provider      llm.Model
 	researchScope string
 }
 
 // NewTriage creates a new triage instance with the given LLM provider.
-func NewTriage(provider llm.Provider) *Triage {
+func NewTriage(provider llm.Model) *Triage {
 	return &Triage{provider: provider}
 }
 

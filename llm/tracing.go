@@ -9,22 +9,22 @@ import (
 	"github.com/vinayprograms/agentkit/telemetry"
 )
 
-// TracingProvider wraps a Provider with OpenTelemetry tracing.
-type TracingProvider struct {
-	provider     Provider
-	providerName string
+// tracingModel wraps a Provider with OpenTelemetry tracing.
+type tracingModel struct {
+	provider     Model
+	serviceName string
 }
 
 // WithTracing wraps a provider with tracing instrumentation.
-func WithTracing(p Provider, providerName string) Provider {
-	return &TracingProvider{
+func WithTracing(p Model, serviceName string) Model {
+	return &tracingModel{
 		provider:     p,
-		providerName: providerName,
+		serviceName: serviceName,
 	}
 }
 
 // Chat implements Provider with tracing.
-func (tp *TracingProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+func (tp *tracingModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	tracer := telemetry.GetTracer()
 
 	ctx, span := tracer.StartLLMSpan(ctx, "llm.chat")
@@ -33,7 +33,7 @@ func (tp *TracingProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 
 	// Build span options
 	opts := telemetry.LLMSpanOptions{
-		Provider: tp.providerName,
+		Provider: tp.serviceName,
 	}
 
 	if resp != nil {

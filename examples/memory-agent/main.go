@@ -98,7 +98,7 @@ Always tell the user what you remembered or found.`,
 
 // agentLoop is the same core pattern as simple-llm-agent, with tool dispatch
 // wired to memory operations.
-func agentLoop(ctx context.Context, provider llm.Provider, history []llm.Message, tools []llm.ToolDef, store memory.Store) (string, error) {
+func agentLoop(ctx context.Context, provider llm.Model, history []llm.Message, tools []llm.ToolDef, store memory.Store) (string, error) {
 	messages := make([]llm.Message, len(history))
 	copy(messages, history)
 
@@ -237,7 +237,7 @@ func executeRecall(ctx context.Context, args map[string]interface{}, store memor
 }
 
 // newProvider creates an LLM provider from environment variables.
-func newProvider() (llm.Provider, error) {
+func newProvider() (llm.Model, error) {
 	providers := []struct {
 		envKey   string
 		provider string
@@ -251,8 +251,8 @@ func newProvider() (llm.Provider, error) {
 	for _, p := range providers {
 		key := os.Getenv(p.envKey)
 		if key != "" {
-			return llm.NewProvider(llm.ProviderConfig{
-				Provider:  p.provider,
+			return llm.New(llm.Config{
+				Service:  p.provider,
 				Model:     p.model,
 				APIKey:    key,
 				MaxTokens: 4096,

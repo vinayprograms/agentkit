@@ -77,7 +77,7 @@ func main() {
 // agentLoop sends messages to the LLM and executes tool calls until the LLM
 // produces a final response with no tool calls. This is the core pattern for
 // building agents with agentkit.
-func agentLoop(ctx context.Context, provider llm.Provider, history []llm.Message, tools []llm.ToolDef) (string, error) {
+func agentLoop(ctx context.Context, provider llm.Model, history []llm.Message, tools []llm.ToolDef) (string, error) {
 	messages := make([]llm.Message, len(history))
 	copy(messages, history)
 
@@ -304,7 +304,7 @@ func executeCurrentTime(args map[string]interface{}) string {
 }
 
 // newProvider creates an LLM provider from environment variables.
-func newProvider() (llm.Provider, error) {
+func newProvider() (llm.Model, error) {
 	// Try providers in order of preference.
 	providers := []struct {
 		envKey   string
@@ -319,8 +319,8 @@ func newProvider() (llm.Provider, error) {
 	for _, p := range providers {
 		key := os.Getenv(p.envKey)
 		if key != "" {
-			return llm.NewProvider(llm.ProviderConfig{
-				Provider:  p.provider,
+			return llm.New(llm.Config{
+				Service:  p.provider,
 				Model:     p.model,
 				APIKey:    key,
 				MaxTokens: 4096,

@@ -32,10 +32,10 @@ type Config struct {
 	UserTrust TrustLevel
 
 	// TriageProvider is the LLM provider for Tier 2 triage (cheap/fast model).
-	TriageProvider llm.Provider
+	TriageProvider llm.Model
 
 	// SupervisorProvider is the LLM provider for Tier 3 supervision (capable model).
-	SupervisorProvider llm.Provider
+	SupervisorProvider llm.Model
 
 	// Logger for security events.
 	Logger *logging.Logger

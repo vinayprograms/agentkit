@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// OllamaCloudProvider implements the Provider interface for Ollama's cloud API.
+// ollamaCloudModel implements the Provider interface for Ollama's cloud API.
 // This uses Ollama's native /api/chat endpoint, not the OpenAI-compatible endpoint.
-type OllamaCloudProvider struct {
+type ollamaCloudModel struct {
 	apiKey    string
 	baseURL   string
 	model     string
@@ -23,8 +23,8 @@ type OllamaCloudProvider struct {
 	client    *http.Client
 }
 
-// OllamaCloudConfig holds configuration for the Ollama Cloud provider.
-type OllamaCloudConfig struct {
+// ollamaCloudConfig holds configuration for the Ollama Cloud provider.
+type ollamaCloudConfig struct {
 	APIKey    string
 	BaseURL   string // defaults to https://ollama.com
 	Model     string
@@ -33,8 +33,9 @@ type OllamaCloudConfig struct {
 	Retry     RetryConfig
 }
 
-// NewOllamaCloudProvider creates a new Ollama Cloud provider.
-func NewOllamaCloudProvider(cfg OllamaCloudConfig) (*OllamaCloudProvider, error) {
+
+// newOllamaCloud creates a new Ollama Cloud provider.
+func newOllamaCloud(cfg ollamaCloudConfig) (*ollamaCloudModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("api_key is required for ollama-cloud")
 	}
@@ -52,7 +53,7 @@ func NewOllamaCloudProvider(cfg OllamaCloudConfig) (*OllamaCloudProvider, error)
 		maxTokens = 4096
 	}
 
-	return &OllamaCloudProvider{
+	return &ollamaCloudModel{
 		apiKey:    cfg.APIKey,
 		baseURL:   baseURL,
 		model:     cfg.Model,
@@ -63,23 +64,6 @@ func NewOllamaCloudProvider(cfg OllamaCloudConfig) (*OllamaCloudProvider, error)
 			Timeout: 5 * time.Minute,
 		},
 	}, nil
-}
-
-// getRetryConfig returns effective retry settings with defaults.
-func (p *OllamaCloudProvider) getRetryConfig() (maxRetries int, initBackoff, maxBackoff time.Duration) {
-	maxRetries = p.retry.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = defaultMaxRetries
-	}
-	initBackoff = p.retry.InitBackoff
-	if initBackoff <= 0 {
-		initBackoff = defaultInitBackoff
-	}
-	maxBackoff = p.retry.MaxBackoff
-	if maxBackoff <= 0 {
-		maxBackoff = defaultMaxBackoff
-	}
-	return
 }
 
 // ollamaMessage represents a message in Ollama's API format.
@@ -142,42 +126,9 @@ type ollamaChatResponse struct {
 }
 
 // Chat implements the Provider interface.
-func (p *OllamaCloudProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// Convert messages to Ollama format
-	messages := make([]ollamaMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msg := ollamaMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
-		
-		// Convert tool calls if present
-		if len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				msg.ToolCalls = append(msg.ToolCalls, ollamaToolCall{
-					Function: ollamaFunction{
-						Name:      tc.Name,
-						Arguments: tc.Args,
-					},
-				})
-			}
-		}
-		
-		messages = append(messages, msg)
-	}
-
-	// Convert tools to Ollama format
-	var tools []ollamaTool
-	for _, t := range req.Tools {
-		tools = append(tools, ollamaTool{
-			Type: "function",
-			Function: ollamaToolFunction{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
-		})
-	}
+func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	messages := toOllamaMessages(req.Messages)
+	tools := toOllamaTools(req.Tools)
 
 	maxTokens := p.maxTokens
 	if req.MaxTokens > 0 {
@@ -208,42 +159,17 @@ func (p *OllamaCloudProvider) Chat(ctx context.Context, req ChatRequest) (*ChatR
 	}
 
 	// Make request with retry
-	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
-	var resp *ollamaChatResponse
-	var err error
-	backoff := initBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err = p.doRequest(ctx, ollamaReq)
-		if err == nil {
-			break
-		}
-
-		if isBillingError(err) {
-			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-		}
-
-		if !isRetryableError(err) {
-			return nil, fmt.Errorf("ollama cloud request failed: %w", err)
-		}
-
-		if attempt == maxRetries {
-			return nil, fmt.Errorf("ollama cloud request failed after %d retries: %w", maxRetries, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-
-		backoff = time.Duration(float64(backoff) * backoffFactor)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
+	resp, err := withRetry(ctx, p.retry, "ollama-cloud", func() (*ollamaChatResponse, error) {
+		return p.doRequest(ctx, ollamaReq)
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Convert response
+	return fromOllamaResponse(resp), nil
+}
+
+func fromOllamaResponse(resp *ollamaChatResponse) *ChatResponse {
 	result := &ChatResponse{
 		Content:      resp.Message.Content,
 		Thinking:     resp.Message.Thinking,
@@ -252,8 +178,6 @@ func (p *OllamaCloudProvider) Chat(ctx context.Context, req ChatRequest) (*ChatR
 		OutputTokens: resp.EvalCount,
 		Model:        resp.Model,
 	}
-
-	// Convert tool calls
 	for i, tc := range resp.Message.ToolCalls {
 		result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
 			ID:   fmt.Sprintf("call_%d", i),
@@ -261,12 +185,11 @@ func (p *OllamaCloudProvider) Chat(ctx context.Context, req ChatRequest) (*ChatR
 			Args: tc.Function.Arguments,
 		})
 	}
-
-	return result, nil
+	return result
 }
 
 // doRequest makes the HTTP request to Ollama's API.
-func (p *OllamaCloudProvider) doRequest(ctx context.Context, req ollamaChatRequest) (*ollamaChatResponse, error) {
+func (p *ollamaCloudModel) doRequest(ctx context.Context, req ollamaChatRequest) (*ollamaChatResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -308,6 +231,47 @@ func (p *OllamaCloudProvider) doRequest(ctx context.Context, req ollamaChatReque
 	}
 
 	return &resp, nil
+}
+
+// toOllamaMessages converts generic messages to Ollama format.
+func toOllamaMessages(msgs []Message) []ollamaMessage {
+	messages := make([]ollamaMessage, 0, len(msgs))
+	for _, m := range msgs {
+		msg := ollamaMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		}
+
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, ollamaToolCall{
+					Function: ollamaFunction{
+						Name:      tc.Name,
+						Arguments: tc.Args,
+					},
+				})
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+	return messages
+}
+
+// toOllamaTools converts generic tool definitions to Ollama format.
+func toOllamaTools(tools []ToolDef) []ollamaTool {
+	result := make([]ollamaTool, 0, len(tools))
+	for _, t := range tools {
+		result = append(result, ollamaTool{
+			Type: "function",
+			Function: ollamaToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		})
+	}
+	return result
 }
 
 // isGPTOSSModel checks if the model is GPT-OSS which uses string think levels.

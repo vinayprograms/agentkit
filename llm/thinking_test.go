@@ -149,34 +149,6 @@ func TestResolveThinkingLevel(t *testing.T) {
 	}
 }
 
-func TestThinkingLevelToAnthropicBudget(t *testing.T) {
-	// Config budget takes precedence
-	budget := ThinkingLevelToAnthropicBudget(ThinkingHigh, 20000)
-	if budget != 20000 {
-		t.Errorf("expected config budget 20000, got %d", budget)
-	}
-
-	// Default budgets
-	budget = ThinkingLevelToAnthropicBudget(ThinkingHigh, 0)
-	if budget != 16000 {
-		t.Errorf("expected high budget 16000, got %d", budget)
-	}
-
-	budget = ThinkingLevelToAnthropicBudget(ThinkingMedium, 0)
-	if budget != 8000 {
-		t.Errorf("expected medium budget 8000, got %d", budget)
-	}
-
-	budget = ThinkingLevelToAnthropicBudget(ThinkingLow, 0)
-	if budget != 4000 {
-		t.Errorf("expected low budget 4000, got %d", budget)
-	}
-
-	budget = ThinkingLevelToAnthropicBudget(ThinkingOff, 0)
-	if budget != 0 {
-		t.Errorf("expected off budget 0, got %d", budget)
-	}
-}
 
 func TestContainsMathExpression(t *testing.T) {
 	tests := []struct {

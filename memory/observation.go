@@ -30,11 +30,11 @@ type Observation struct {
 
 // ObservationExtractor extracts observations from step outputs using an LLM.
 type ObservationExtractor struct {
-	provider llm.Provider
+	provider llm.Model
 }
 
 // NewObservationExtractor creates a new observation extractor.
-func NewObservationExtractor(provider llm.Provider) *ObservationExtractor {
+func NewObservationExtractor(provider llm.Model) *ObservationExtractor {
 	return &ObservationExtractor{
 		provider: provider,
 	}

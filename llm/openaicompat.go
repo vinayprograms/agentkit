@@ -10,9 +10,20 @@ import (
 	"time"
 )
 
-// OpenAICompatProvider implements the Provider interface for OpenAI-compatible APIs.
+// Provider-specific base URLs
+const (
+	GroqBaseURL       = "https://api.groq.com/openai/v1"
+	MistralBaseURL    = "https://api.mistral.ai/v1"
+	XAIBaseURL        = "https://api.x.ai/v1"
+	OpenRouterBaseURL = "https://openrouter.ai/api/v1"
+	CerebrasBaseURL   = "https://api.cerebras.ai/v1"
+	OllamaLocalURL    = "http://localhost:11434/v1"
+	LMStudioLocalURL  = "http://localhost:1234/v1"
+)
+
+// openAICompatModel implements the Provider interface for OpenAI-compatible APIs.
 // This includes Groq, Mistral, LiteLLM, OpenRouter, local Ollama, LMStudio, etc.
-type OpenAICompatProvider struct {
+type openAICompatModel struct {
 	apiKey       string
 	baseURL      string
 	model        string
@@ -23,21 +34,38 @@ type OpenAICompatProvider struct {
 	client       *http.Client
 }
 
-// OpenAICompatConfig holds configuration for OpenAI-compatible providers.
-type OpenAICompatConfig struct {
-	APIKey       string
-	BaseURL      string
-	Model        string
-	MaxTokens    int
-	ProviderName string // For logging/identification
-	Thinking     ThinkingConfig
-	Retry        RetryConfig
+// openAICompatConfig holds configuration for OpenAI-compatible providers.
+type openAICompatConfig struct {
+	APIKey    string
+	BaseURL   string
+	Model     string
+	MaxTokens int
+	Thinking  ThinkingConfig
+	Retry     RetryConfig
 }
 
-// NewOpenAICompatProvider creates a new OpenAI-compatible provider.
-func NewOpenAICompatProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
+// defaultBaseURLs maps provider names to their default API base URLs.
+var defaultBaseURLs = map[string]string{
+	"groq":         GroqBaseURL,
+	"mistral":      MistralBaseURL,
+	"xai":          XAIBaseURL,
+	"openrouter":   OpenRouterBaseURL,
+	"ollama-local": OllamaLocalURL,
+	"ollama":       OllamaLocalURL,
+	"lmstudio":     LMStudioLocalURL,
+	"cerebras":     CerebrasBaseURL,
+}
+
+
+// newOpenAICompat creates a new OpenAI-compatible provider.
+// providerName is used for logging and to resolve default base URLs.
+func newOpenAICompat(providerName string, cfg openAICompatConfig) (*openAICompatModel, error) {
 	if cfg.BaseURL == "" {
-		return nil, fmt.Errorf("base_url is required for openai-compatible provider")
+		if defaultURL, ok := defaultBaseURLs[providerName]; ok {
+			cfg.BaseURL = defaultURL
+		} else {
+			return nil, fmt.Errorf("base_url is required for provider %s", providerName)
+		}
 	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model is required")
@@ -46,35 +74,18 @@ func NewOpenAICompatProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, err
 		return nil, fmt.Errorf("max_tokens is required")
 	}
 
-	return &OpenAICompatProvider{
+	return &openAICompatModel{
 		apiKey:       cfg.APIKey,
 		baseURL:      cfg.BaseURL,
 		model:        cfg.Model,
 		maxTokens:    cfg.MaxTokens,
-		providerName: cfg.ProviderName,
+		providerName: providerName,
 		thinking:     cfg.Thinking,
 		retry:        cfg.Retry,
 		client: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
 	}, nil
-}
-
-// getRetryConfig returns effective retry settings with defaults.
-func (p *OpenAICompatProvider) getRetryConfig() (maxRetries int, initBackoff, maxBackoff time.Duration) {
-	maxRetries = p.retry.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = defaultMaxRetries
-	}
-	initBackoff = p.retry.InitBackoff
-	if initBackoff <= 0 {
-		initBackoff = defaultInitBackoff
-	}
-	maxBackoff = p.retry.MaxBackoff
-	if maxBackoff <= 0 {
-		maxBackoff = defaultMaxBackoff
-	}
-	return
 }
 
 // OpenAI-compatible request/response types
@@ -98,8 +109,8 @@ type oaiFunction struct {
 }
 
 type oaiTool struct {
-	Type     string             `json:"type"`
-	Function oaiToolDefinition  `json:"function"`
+	Type     string            `json:"type"`
+	Function oaiToolDefinition `json:"function"`
 }
 
 type oaiToolDefinition struct {
@@ -137,49 +148,9 @@ type oaiResponse struct {
 }
 
 // Chat implements the Provider interface.
-func (p *OpenAICompatProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// Convert messages to OpenAI format
-	messages := make([]oaiMessage, 0, len(req.Messages))
-
-	for _, m := range req.Messages {
-		msg := oaiMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
-
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				argsJSON, _ := json.Marshal(tc.Args)
-				msg.ToolCalls = append(msg.ToolCalls, oaiToolCall{
-					ID:   tc.ID,
-					Type: "function",
-					Function: oaiFunction{
-						Name:      tc.Name,
-						Arguments: string(argsJSON),
-					},
-				})
-			}
-		}
-
-		if m.Role == "tool" {
-			msg.ToolCallID = m.ToolCallID
-		}
-
-		messages = append(messages, msg)
-	}
-
-	// Convert tools
-	tools := make([]oaiTool, 0, len(req.Tools))
-	for _, t := range req.Tools {
-		tools = append(tools, oaiTool{
-			Type: "function",
-			Function: oaiToolDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
-		})
-	}
+func (p *openAICompatModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	messages := toOAICompatMessages(req.Messages)
+	tools := toOAICompatTools(req.Tools)
 
 	maxTokens := p.maxTokens
 	if req.MaxTokens > 0 {
@@ -197,42 +168,17 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, req ChatRequest) (*Chat
 	}
 
 	// Make request with retry
-	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
-	var resp *oaiResponse
-	var err error
-	backoff := initBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err = p.doRequest(ctx, oaiReq)
-		if err == nil {
-			break
-		}
-
-		if isBillingError(err) {
-			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-		}
-
-		if !isRetryableError(err) {
-			return nil, fmt.Errorf("%s request failed: %w", p.providerName, err)
-		}
-
-		if attempt == maxRetries {
-			return nil, fmt.Errorf("%s request failed after %d retries: %w", p.providerName, maxRetries, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-
-		backoff = time.Duration(float64(backoff) * backoffFactor)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
+	resp, err := withRetry(ctx, p.retry, p.providerName, func() (*oaiResponse, error) {
+		return p.doRequest(ctx, oaiReq)
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Convert response
+	return fromOAICompatResponse(resp)
+}
+
+func fromOAICompatResponse(resp *oaiResponse) (*ChatResponse, error) {
 	result := &ChatResponse{
 		Model:        resp.Model,
 		InputTokens:  resp.Usage.PromptTokens,
@@ -244,10 +190,11 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, req ChatRequest) (*Chat
 		result.Content = choice.Message.Content
 		result.StopReason = choice.FinishReason
 
-		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
 			var args map[string]interface{}
-			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", tc.Function.Name, err)
+			}
 			result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
 				ID:   tc.ID,
 				Name: tc.Function.Name,
@@ -260,7 +207,7 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, req ChatRequest) (*Chat
 }
 
 // doRequest makes the HTTP request.
-func (p *OpenAICompatProvider) doRequest(ctx context.Context, req oaiRequest) (*oaiResponse, error) {
+func (p *openAICompatModel) doRequest(ctx context.Context, req oaiRequest) (*oaiResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -309,92 +256,52 @@ func (p *OpenAICompatProvider) doRequest(ctx context.Context, req oaiRequest) (*
 	return &resp, nil
 }
 
-// Provider-specific base URLs
-const (
-	GroqBaseURL       = "https://api.groq.com/openai/v1"
-	MistralBaseURL    = "https://api.mistral.ai/v1"
-	XAIBaseURL        = "https://api.x.ai/v1"
-	OpenRouterBaseURL = "https://openrouter.ai/api/v1"
-	CerebrasBaseURL   = "https://api.cerebras.ai/v1"
-	OllamaLocalURL    = "http://localhost:11434/v1"
-	LMStudioLocalURL  = "http://localhost:1234/v1"
-)
+// toOAICompatMessages converts generic messages to OpenAI-compatible format.
+func toOAICompatMessages(msgs []Message) []oaiMessage {
+	messages := make([]oaiMessage, 0, len(msgs))
 
-// NewGroqProvider creates a Groq provider (uses OpenAI-compatible API).
-func NewGroqProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = GroqBaseURL
+	for _, m := range msgs {
+		msg := oaiMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		}
+
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Args)
+				msg.ToolCalls = append(msg.ToolCalls, oaiToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: oaiFunction{
+						Name:      tc.Name,
+						Arguments: string(argsJSON),
+					},
+				})
+			}
+		}
+
+		if m.Role == "tool" {
+			msg.ToolCallID = m.ToolCallID
+		}
+
+		messages = append(messages, msg)
 	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "groq"
-	}
-	return NewOpenAICompatProvider(cfg)
+
+	return messages
 }
 
-// NewMistralProvider creates a Mistral provider (uses OpenAI-compatible API).
-func NewMistralProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = MistralBaseURL
+// toOAICompatTools converts generic tool definitions to OpenAI-compatible format.
+func toOAICompatTools(tools []ToolDef) []oaiTool {
+	result := make([]oaiTool, 0, len(tools))
+	for _, t := range tools {
+		result = append(result, oaiTool{
+			Type: "function",
+			Function: oaiToolDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		})
 	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "mistral"
-	}
-	return NewOpenAICompatProvider(cfg)
-}
-
-// NewXAIProvider creates an xAI (Grok) provider (uses OpenAI-compatible API).
-func NewXAIProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = XAIBaseURL
-	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "xai"
-	}
-	return NewOpenAICompatProvider(cfg)
-}
-
-// NewOpenRouterProvider creates an OpenRouter provider (uses OpenAI-compatible API).
-func NewOpenRouterProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = OpenRouterBaseURL
-	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "openrouter"
-	}
-	return NewOpenAICompatProvider(cfg)
-}
-
-// NewOllamaLocalProvider creates an Ollama local provider (uses OpenAI-compatible API).
-func NewOllamaLocalProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = OllamaLocalURL
-	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "ollama-local"
-	}
-	// API key not required for local
-	return NewOpenAICompatProvider(cfg)
-}
-
-// NewLMStudioProvider creates an LMStudio local provider (uses OpenAI-compatible API).
-func NewLMStudioProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = LMStudioLocalURL
-	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "lmstudio"
-	}
-	// API key not required for local
-	return NewOpenAICompatProvider(cfg)
-}
-
-// NewCerebrasProvider creates a Cerebras provider (uses OpenAI-compatible API).
-func NewCerebrasProvider(cfg OpenAICompatConfig) (*OpenAICompatProvider, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = CerebrasBaseURL
-	}
-	if cfg.ProviderName == "" {
-		cfg.ProviderName = "cerebras"
-	}
-	return NewOpenAICompatProvider(cfg)
+	return result
 }

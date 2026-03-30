@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 )
 
-// OpenAIProvider implements the Provider interface using the official OpenAI SDK.
-type OpenAIProvider struct {
+// openAIModel implements the Provider interface using the official OpenAI SDK.
+type openAIModel struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
@@ -20,8 +19,8 @@ type OpenAIProvider struct {
 	retry     RetryConfig
 }
 
-// OpenAIConfig holds configuration for the OpenAI provider.
-type OpenAIConfig struct {
+// openAIConfig holds configuration for the OpenAI provider.
+type openAIConfig struct {
 	APIKey    string
 	BaseURL   string // Optional custom endpoint
 	Model     string
@@ -30,8 +29,9 @@ type OpenAIConfig struct {
 	Retry     RetryConfig
 }
 
-// NewOpenAIProvider creates a new OpenAI provider using the official SDK.
-func NewOpenAIProvider(cfg OpenAIConfig) (*OpenAIProvider, error) {
+
+// newOpenAI creates a new OpenAI provider using the official SDK.
+func newOpenAI(cfg openAIConfig) (*openAIModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("api_key is required for openai")
 	}
@@ -51,7 +51,7 @@ func NewOpenAIProvider(cfg OpenAIConfig) (*OpenAIProvider, error) {
 
 	client := openai.NewClient(opts...)
 
-	return &OpenAIProvider{
+	return &openAIModel{
 		client:    &client,
 		model:     cfg.Model,
 		maxTokens: cfg.MaxTokens,
@@ -60,84 +60,16 @@ func NewOpenAIProvider(cfg OpenAIConfig) (*OpenAIProvider, error) {
 	}, nil
 }
 
-// getRetryConfig returns effective retry settings with defaults.
-func (p *OpenAIProvider) getRetryConfig() (maxRetries int, initBackoff, maxBackoff time.Duration) {
-	maxRetries = p.retry.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = defaultMaxRetries
-	}
-	initBackoff = p.retry.InitBackoff
-	if initBackoff <= 0 {
-		initBackoff = defaultInitBackoff
-	}
-	maxBackoff = p.retry.MaxBackoff
-	if maxBackoff <= 0 {
-		maxBackoff = defaultMaxBackoff
-	}
-	return
-}
-
 // Chat implements the Provider interface.
-func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// Convert messages to OpenAI format
-	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
-
-	for _, m := range req.Messages {
-		switch m.Role {
-		case "system":
-			messages = append(messages, openai.SystemMessage(m.Content))
-		case "user":
-			messages = append(messages, openai.UserMessage(m.Content))
-		case "assistant":
-			if len(m.ToolCalls) > 0 {
-				// Assistant message with tool calls
-				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, 0, len(m.ToolCalls))
-				for _, tc := range m.ToolCalls {
-					argsJSON, _ := json.Marshal(tc.Args)
-					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
-						ID: tc.ID,
-						Function: openai.ChatCompletionMessageToolCallFunctionParam{
-							Name:      tc.Name,
-							Arguments: string(argsJSON),
-						},
-					})
-				}
-				messages = append(messages, openai.ChatCompletionMessageParamUnion{
-					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-						Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfString: openai.String(m.Content)},
-						ToolCalls: toolCalls,
-					},
-				})
-			} else {
-				messages = append(messages, openai.AssistantMessage(m.Content))
-			}
-		case "tool":
-			messages = append(messages, openai.ToolMessage(m.Content, m.ToolCallID))
-		}
-	}
-
-	// Convert tools to OpenAI format
-	tools := make([]openai.ChatCompletionToolParam, 0, len(req.Tools))
-	for _, t := range req.Tools {
-		schemaJSON, _ := json.Marshal(t.Parameters)
-		var schema shared.FunctionParameters
-		json.Unmarshal(schemaJSON, &schema)
-
-		tools = append(tools, openai.ChatCompletionToolParam{
-			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: openai.String(t.Description),
-				Parameters:  schema,
-			},
-		})
-	}
+func (p *openAIModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	messages := toOpenAIMessages(req.Messages)
+	tools := toOpenAITools(req.Tools)
 
 	maxTokens := int64(p.maxTokens)
 	if req.MaxTokens > 0 {
 		maxTokens = int64(req.MaxTokens)
 	}
 
-	// Build request params
 	params := openai.ChatCompletionNewParams{
 		Model:     shared.ChatModel(p.model),
 		Messages:  messages,
@@ -164,44 +96,21 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	}
 
 	// Make request with retry
-	maxRetries, initBackoff, maxBackoff := p.getRetryConfig()
-	var resp *openai.ChatCompletion
-	var err error
-	backoff := initBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err = p.client.Chat.Completions.New(ctx, params)
-		if err == nil {
-			break
-		}
-
-		if isBillingError(err) {
-			return nil, fmt.Errorf("billing/payment error (fatal): %w", err)
-		}
-
-		if !isRetryableError(err) {
-			return nil, fmt.Errorf("openai request failed: %w", err)
-		}
-
-		if attempt == maxRetries {
-			return nil, fmt.Errorf("openai request failed after %d retries: %w", maxRetries, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-
-		backoff = time.Duration(float64(backoff) * backoffFactor)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
+	resp, err := withRetry(ctx, p.retry, "openai", func() (*openai.ChatCompletion, error) {
+		return p.client.Chat.Completions.New(ctx, params)
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Convert response
+	return fromOpenAIResponse(resp)
+}
+
+func fromOpenAIResponse(resp *openai.ChatCompletion) (*ChatResponse, error) {
 	result := &ChatResponse{
-		Model: resp.Model,
+		Model:        resp.Model,
+		InputTokens:  int(resp.Usage.PromptTokens),
+		OutputTokens: int(resp.Usage.CompletionTokens),
 	}
 
 	if len(resp.Choices) > 0 {
@@ -209,10 +118,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 		result.Content = choice.Message.Content
 		result.StopReason = string(choice.FinishReason)
 
-		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
 			var args map[string]interface{}
-			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", tc.Function.Name, err)
+			}
 			result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
 				ID:   tc.ID,
 				Name: tc.Function.Name,
@@ -221,10 +131,66 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 		}
 	}
 
-	result.InputTokens = int(resp.Usage.PromptTokens)
-	result.OutputTokens = int(resp.Usage.CompletionTokens)
-
 	return result, nil
+}
+
+// toOpenAIMessages converts generic messages to OpenAI format.
+func toOpenAIMessages(msgs []Message) []openai.ChatCompletionMessageParamUnion {
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
+
+	for _, m := range msgs {
+		switch m.Role {
+		case "system":
+			messages = append(messages, openai.SystemMessage(m.Content))
+		case "user":
+			messages = append(messages, openai.UserMessage(m.Content))
+		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, 0, len(m.ToolCalls))
+				for _, tc := range m.ToolCalls {
+					argsJSON, _ := json.Marshal(tc.Args)
+					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: string(argsJSON),
+						},
+					})
+				}
+				messages = append(messages, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfString: openai.String(m.Content)},
+						ToolCalls: toolCalls,
+					},
+				})
+			} else {
+				messages = append(messages, openai.AssistantMessage(m.Content))
+			}
+		case "tool":
+			messages = append(messages, openai.ToolMessage(m.Content, m.ToolCallID))
+		}
+	}
+
+	return messages
+}
+
+// toOpenAITools converts generic tool definitions to OpenAI format.
+func toOpenAITools(tools []ToolDef) []openai.ChatCompletionToolParam {
+	result := make([]openai.ChatCompletionToolParam, 0, len(tools))
+	for _, t := range tools {
+		schemaJSON, _ := json.Marshal(t.Parameters)
+		var schema shared.FunctionParameters
+		json.Unmarshal(schemaJSON, &schema)
+
+		result = append(result, openai.ChatCompletionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        t.Name,
+				Description: openai.String(t.Description),
+				Parameters:  schema,
+			},
+		})
+	}
+	return result
 }
 
 // isReasoningModel checks if the model supports reasoning effort (o1, o3 models).
