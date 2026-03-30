@@ -104,6 +104,14 @@ func TestFishShell_HasChainedCommands(t *testing.T) {
 	}
 }
 
+func TestFishShell_SplitSegments(t *testing.T) {
+	sh := Fish()
+	result := sh.SplitSegments("ls; echo done")
+	if len(result) != 2 || result[0] != "ls" || result[1] != "echo done" {
+		t.Errorf("SplitSegments = %v, want [ls, echo done]", result)
+	}
+}
+
 func TestFishShell_ExtractCommand(t *testing.T) {
 	sh := Fish()
 	tests := []struct {
