@@ -229,3 +229,72 @@ func TestDetectSensitiveKeywords(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterCustomPatterns(t *testing.T) {
+	err := RegisterCustomPatterns([]string{"test_pattern:(?i)test.*injection"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	matches := DetectSuspiciousPatterns("This is a test injection attempt")
+	found := false
+	for _, m := range matches {
+		if m.Name == "test_pattern" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected custom pattern to match")
+	}
+
+	// Reset
+	RegisterCustomPatterns(nil)
+}
+
+func TestRegisterCustomPatterns_Invalid(t *testing.T) {
+	err := RegisterCustomPatterns([]string{"bad_format_no_colon"})
+	if err == nil {
+		t.Error("expected error for invalid pattern format")
+	}
+}
+
+func TestRegisterCustomKeywords(t *testing.T) {
+	RegisterCustomKeywords([]string{"custom_secret"})
+
+	matches := DetectSensitiveKeywords("this has custom_secret in it")
+	found := false
+	for _, m := range matches {
+		if m.Keyword == "custom_secret" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected custom keyword to match")
+	}
+
+	RegisterCustomKeywords(nil)
+}
+
+func TestHasSensitiveKeywords(t *testing.T) {
+	if !HasSensitiveKeywords("contains api_key here") {
+		t.Error("expected to detect api_key")
+	}
+	if HasSensitiveKeywords("nothing special here") {
+		t.Error("expected no sensitive keywords")
+	}
+}
+
+func TestIsValidHex(t *testing.T) {
+	if !isValidHex("deadbeef0123456789abcdef") {
+		t.Error("expected valid hex")
+	}
+	if isValidHex("not hex!") {
+		t.Error("expected invalid hex")
+	}
+}
+
+func TestIsValidBase64URL(t *testing.T) {
+	if !isValidBase64URL("SGVsbG8tV29ybGQ") {
+		t.Error("expected valid base64url")
+	}
+}

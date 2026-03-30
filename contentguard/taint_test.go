@@ -110,3 +110,23 @@ func TestPropagatedTrust(t *testing.T) {
 		})
 	}
 }
+
+func TestTaint_IsInstruction(t *testing.T) {
+	taint := newTaint("t1", Trusted, Instruction, false, "do this", "system")
+	if !taint.IsInstruction() {
+		t.Error("expected IsInstruction true")
+	}
+	if taint.IsData() {
+		t.Error("expected IsData false")
+	}
+}
+
+func TestTaint_IsData(t *testing.T) {
+	taint := newTaint("t1", Untrusted, Data, true, "content", "web_fetch")
+	if !taint.IsData() {
+		t.Error("expected IsData true")
+	}
+	if taint.IsInstruction() {
+		t.Error("expected IsInstruction false")
+	}
+}
