@@ -1,17 +1,19 @@
-package bashsec
+package shellguard
 
 import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/vinayprograms/agentkit/llm"
 )
 
-func newTestChecker(workspace string, allowedDirs, userDenied []string) *Checker {
-	return NewChecker(workspace, allowedDirs, userDenied)
+func newTestGate(workspace string, allowedDirs, userDenied []string) *Gate {
+	return New(workspace, allowedDirs, userDenied, nil, "")
 }
 
 func TestChecker_BannedCommands(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, nil)
+	gate := newTestGate("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -36,7 +38,7 @@ func TestChecker_BannedCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -48,7 +50,7 @@ func TestChecker_BannedCommands(t *testing.T) {
 }
 
 func TestChecker_BannedSubcommandPatterns(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, nil)
+	gate := newTestGate("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -72,7 +74,7 @@ func TestChecker_BannedSubcommandPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -84,7 +86,7 @@ func TestChecker_BannedSubcommandPatterns(t *testing.T) {
 }
 
 func TestChecker_DangerousPipes(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, nil)
+	gate := newTestGate("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -103,7 +105,7 @@ func TestChecker_DangerousPipes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -115,7 +117,7 @@ func TestChecker_DangerousPipes(t *testing.T) {
 }
 
 func TestChecker_ChainedCommands(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, nil)
+	gate := newTestGate("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -131,7 +133,7 @@ func TestChecker_ChainedCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -143,7 +145,7 @@ func TestChecker_ChainedCommands(t *testing.T) {
 }
 
 func TestChecker_UserDenylist(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, []string{"docker", "podman", "kubectl"})
+	gate := newTestGate("/workspace", nil, []string{"docker", "podman", "kubectl"})
 
 	tests := []struct {
 		name    string
@@ -158,7 +160,7 @@ func TestChecker_UserDenylist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -170,7 +172,7 @@ func TestChecker_UserDenylist(t *testing.T) {
 }
 
 func TestChecker_PathStripping(t *testing.T) {
-	checker := newTestChecker("/workspace", nil, nil)
+	gate := newTestGate("/workspace", nil, nil)
 
 	tests := []struct {
 		name    string
@@ -185,7 +187,7 @@ func TestChecker_PathStripping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -196,33 +198,45 @@ func TestChecker_PathStripping(t *testing.T) {
 	}
 }
 
-func TestChecker_WithLLMChecker(t *testing.T) {
-	mockLLMChecker := func(ctx context.Context, command string, allowedDirs []string) (*CheckResult, error) {
-		hasAbsPath := strings.Contains(command, " /")
-		if !hasAbsPath {
-			return &CheckResult{Allowed: true}, nil
-		}
+// mockModel returns ALLOW/BLOCK verdicts based on whether the command
+// references paths in the allowed dirs.
+type mockModel struct {
+	allowedDirs []string
+}
 
-		if strings.Contains(command, "/etc") || strings.Contains(command, "/root") {
-			for _, dir := range allowedDirs {
-				if strings.Contains(command, dir) {
-					return &CheckResult{Allowed: true}, nil
-				}
-			}
-			return &CheckResult{Allowed: false, Reason: "path outside allowed directories"}, nil
-		}
+func (m *mockModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	prompt := req.Messages[len(req.Messages)-1].Content
 
-		for _, dir := range allowedDirs {
-			if strings.Contains(command, dir) {
-				return &CheckResult{Allowed: true}, nil
-			}
-		}
-
-		return &CheckResult{Allowed: false, Reason: "path outside allowed directories"}, nil
+	// Extract the command from the COMMAND: section of the prompt
+	cmdStart := strings.Index(prompt, "COMMAND:\n")
+	cmdEnd := strings.Index(prompt, "\n\nRULES:")
+	command := ""
+	if cmdStart >= 0 && cmdEnd > cmdStart {
+		command = strings.TrimSpace(prompt[cmdStart+len("COMMAND:\n") : cmdEnd])
 	}
 
-	checker := newTestChecker("/workspace", []string{"/workspace", "/tmp"}, nil)
-	checker.LLMChecker = mockLLMChecker
+	// Block if command targets /etc or /root
+	if strings.Contains(command, "/etc") || strings.Contains(command, "/root") {
+		return &llm.ChatResponse{Content: `{"verdict":"BLOCK","reason":"path outside allowed directories"}`}, nil
+	}
+
+	// Allow if command targets an allowed dir or has no absolute paths
+	for _, dir := range m.allowedDirs {
+		if strings.Contains(command, dir) {
+			return &llm.ChatResponse{Content: `{"verdict":"ALLOW"}`}, nil
+		}
+	}
+
+	if !strings.Contains(command, " /") {
+		return &llm.ChatResponse{Content: `{"verdict":"ALLOW"}`}, nil
+	}
+
+	return &llm.ChatResponse{Content: `{"verdict":"BLOCK","reason":"path outside allowed directories"}`}, nil
+}
+
+func TestGate_WithLLM(t *testing.T) {
+	mock := &mockModel{allowedDirs: []string{"/workspace", "/tmp"}}
+	gate := New("/workspace", []string{"/workspace", "/tmp"}, nil, mock, "")
 
 	tests := []struct {
 		name    string
@@ -238,7 +252,7 @@ func TestChecker_WithLLMChecker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := checker.Check(context.Background(), tt.command)
+			allowed, reason, err := gate.Check(context.Background(), tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -250,7 +264,7 @@ func TestChecker_WithLLMChecker(t *testing.T) {
 }
 
 func TestChecker_DeterministicDoesNotBlockPaths(t *testing.T) {
-	checker := newTestChecker("/workspace", []string{"/workspace"}, nil)
+	gate := newTestGate("/workspace", []string{"/workspace"}, nil)
 
 	commands := []string{
 		"cat /etc/passwd",
@@ -262,7 +276,7 @@ func TestChecker_DeterministicDoesNotBlockPaths(t *testing.T) {
 	}
 
 	for _, cmd := range commands {
-		allowed, reason := checker.CheckDeterministic(cmd)
+		allowed, reason := gate.CheckDeterministic(cmd)
 		if !allowed {
 			t.Errorf("CheckDeterministic(%q) = blocked (%s), want allowed", cmd, reason)
 		}

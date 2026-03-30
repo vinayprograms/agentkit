@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vinayprograms/agentkit/bashsec"
+	"github.com/vinayprograms/agentkit/shellguard"
 	"github.com/vinayprograms/agentkit/policy"
 	"github.com/vinayprograms/agentkit/telemetry"
 	"github.com/vinayprograms/agentkit/types"
@@ -200,29 +200,18 @@ func (r *Registry) SetSemanticMemory(mem SemanticMemory) {
 	r.Register(&recallTool{memory: mem})
 }
 
-// SetBashChecker sets the bash security checker for the bash tool.
-// The checker performs two-step verification: deterministic denylist + LLM policy check.
-func (r *Registry) SetBashChecker(checker *bashsec.Checker) {
+// SetBashGate sets the bash security gate for the bash tool.
+func (r *Registry) SetBashGate(gate *shellguard.Gate) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
-		bt.checker = checker
-	}
-}
-
-// SetBashLLMChecker sets the LLM-based policy checker for directory access.
-// This enables Step 2 of bash security checking.
-func (r *Registry) SetBashLLMChecker(llmChecker bashsec.LLMPolicyChecker) {
-	if bt, ok := r.tools["bash"].(*bashTool); ok {
-		if bt.checker != nil {
-			bt.checker.SetLLMChecker(llmChecker)
-		}
+		bt.gate = gate
 	}
 }
 
 // SetBashSecurityCallback sets a callback for bash security decisions (for logging/auditing).
 func (r *Registry) SetBashSecurityCallback(fn func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)) {
 	if bt, ok := r.tools["bash"].(*bashTool); ok {
-		if bt.checker != nil {
-			bt.checker.OnDecision = fn
+		if bt.gate != nil {
+			bt.gate.OnDecision = fn
 		}
 	}
 }
@@ -777,7 +766,7 @@ func (t *lsTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (i
 type bashTool struct {
 	policy    *policy.Policy
 	workspace string // base working directory (runtime context)
-	checker   *bashsec.Checker
+	gate    *shellguard.Gate
 }
 
 func (t *bashTool) Name() string { return "bash" }
@@ -810,9 +799,9 @@ func (t *bashTool) Execute(ctx context.Context, rawArgs map[string]interface{}) 
 		return nil, err
 	}
 
-	// Security check via bashsec.Checker (deterministic denylist + LLM policy).
-	if t.checker != nil {
-		allowed, reason, err := t.checker.Check(ctx, command)
+	// Security check via shellguard.Gate (deterministic denylist + LLM policy).
+	if t.gate != nil {
+		allowed, reason, err := t.gate.Check(ctx, command)
 		if err != nil {
 			return nil, fmt.Errorf("bash security check error: %w", err)
 		}

@@ -1,4 +1,4 @@
-package bashsec
+package shellguard
 
 import "testing"
 

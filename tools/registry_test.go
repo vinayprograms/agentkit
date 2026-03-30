@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vinayprograms/agentkit/bashsec"
+	"github.com/vinayprograms/agentkit/shellguard"
 	"github.com/vinayprograms/agentkit/policy"
 )
 
@@ -343,7 +343,7 @@ func TestTool_Bash(t *testing.T) {
 	}
 }
 
-// R5.3.1: bash tool - Enforce denylist via bashsec.Checker
+// R5.3.1: bash tool - Enforce denylist via shellguard.Gate
 func TestTool_Bash_PolicyDeny(t *testing.T) {
 	pol := policy.New()
 	
@@ -352,8 +352,8 @@ func TestTool_Bash_PolicyDeny(t *testing.T) {
 	}
 	reg := NewRegistry(pol, t.TempDir())
 	// BashChecker blocks "curl" via built-in BannedCommands.
-	checker := bashsec.NewChecker("", nil, nil)
-	reg.SetBashChecker(checker)
+	checker := shellguard.New("", nil, nil, nil, "")
+	reg.SetBashGate(checker)
 
 	tool := reg.Get("bash")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{

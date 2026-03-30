@@ -1,4 +1,4 @@
-package bashsec
+package shellguard
 
 import (
 	"context"
@@ -9,72 +9,10 @@ import (
 	"github.com/vinayprograms/agentkit/llm"
 )
 
-// CheckResult contains the result of a bash command check.
-type CheckResult struct {
-	Allowed      bool
-	Reason       string
-	InputTokens  int
-	OutputTokens int
-}
-
-// SmallLLMChecker implements LLMPolicyChecker using a fast/cheap LLM.
-type SmallLLMChecker struct {
-	provider      llm.Model
-	securityScope string
-}
-
-// NewSmallLLMChecker creates a new LLM-based policy checker.
-func NewSmallLLMChecker(provider llm.Model) *SmallLLMChecker {
-	return &SmallLLMChecker{provider: provider}
-}
-
-// SetSecurityScope sets the security research scope for exception handling.
-func (c *SmallLLMChecker) SetSecurityScope(scope string) {
-	c.securityScope = scope
-}
-
-type verdictResponse struct {
-	Verdict string `json:"verdict"`
-	Reason  string `json:"reason,omitempty"`
-}
-
-func parseVerdict(content string) (verdict, reason string) {
-	var resp verdictResponse
-	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil {
-		return strings.ToUpper(resp.Verdict), resp.Reason
-	}
-
-	start := strings.Index(content, "{")
-	end := strings.LastIndex(content, "}")
-	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(content[start:end+1]), &resp); err == nil {
-			return strings.ToUpper(resp.Verdict), resp.Reason
-		}
-	}
-
-	lines := strings.Split(content, "\n")
-	lastVerdict := ""
-	for _, line := range lines {
-		cleaned := strings.ToUpper(strings.Trim(strings.TrimSpace(line), "*_ "))
-		if cleaned == "ALLOW" || cleaned == "BLOCK" {
-			lastVerdict = cleaned
-		}
-	}
-	if lastVerdict != "" {
-		return lastVerdict, ""
-	}
-
-	return "", content
-}
-
-// CheckBashCommand asks the LLM if a bash command violates directory policy.
-func (c *SmallLLMChecker) CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*CheckResult, error) {
-	if c.provider == nil {
-		return &CheckResult{Allowed: true}, nil
-	}
-
+// llmCheck asks an LLM whether a bash command violates directory write policy.
+func llmCheck(ctx context.Context, model llm.Model, command string, allowedDirs []string, workingDir, securityScope string) (*Result, error) {
 	var securityContext string
-	if c.securityScope != "" {
+	if securityScope != "" {
 		securityContext = fmt.Sprintf(`
 SECURITY RESEARCH CONTEXT:
 This agent is conducting authorized security research within scope:
@@ -84,7 +22,7 @@ Commands that fall within this research scope should be ALLOWED even if they
 access paths outside the normal allowed directories. Use judgment to determine
 if the command is part of legitimate security research.
 
-`, c.securityScope)
+`, securityScope)
 	}
 
 	prompt := fmt.Sprintf(`Analyze this bash command for write access violations.
@@ -124,21 +62,18 @@ Respond with ONLY a JSON object, nothing else:
 		command,
 	)
 
-	result, err := c.provider.Chat(ctx, llm.Prompt(prompt))
+	resp, err := model.Chat(ctx, llm.Prompt(prompt))
 	if err != nil {
-		return &CheckResult{
-			Allowed: false,
-			Reason:  fmt.Sprintf("LLM check failed: %v", err),
-		}, err
+		return &Result{Allowed: false, Reason: fmt.Sprintf("LLM check failed: %v", err)}, err
 	}
 
-	content := strings.TrimSpace(result.Content)
+	content := strings.TrimSpace(resp.Content)
 	if content == "" {
-		return &CheckResult{
+		return &Result{
 			Allowed:      false,
 			Reason:       "LLM returned empty response",
-			InputTokens:  result.InputTokens,
-			OutputTokens: result.OutputTokens,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
 		}, nil
 	}
 
@@ -146,27 +81,47 @@ Respond with ONLY a JSON object, nothing else:
 
 	switch verdict {
 	case "ALLOW":
-		return &CheckResult{
-			Allowed:      true,
-			InputTokens:  result.InputTokens,
-			OutputTokens: result.OutputTokens,
-		}, nil
+		return &Result{Allowed: true, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
 	case "BLOCK":
 		if reason == "" {
-			reason = "blocked by LLM policy check"
+			reason = "blocked by LLM check"
 		}
-		return &CheckResult{
-			Allowed:      false,
-			Reason:       reason,
-			InputTokens:  result.InputTokens,
-			OutputTokens: result.OutputTokens,
-		}, nil
+		return &Result{Allowed: false, Reason: reason, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
 	default:
-		return &CheckResult{
-			Allowed:      false,
-			Reason:       content,
-			InputTokens:  result.InputTokens,
-			OutputTokens: result.OutputTokens,
-		}, nil
+		return &Result{Allowed: false, Reason: content, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
 	}
+}
+
+type verdictResponse struct {
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+func parseVerdict(content string) (verdict, reason string) {
+	var resp verdictResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil {
+		return strings.ToUpper(resp.Verdict), resp.Reason
+	}
+
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(content[start:end+1]), &resp); err == nil {
+			return strings.ToUpper(resp.Verdict), resp.Reason
+		}
+	}
+
+	lines := strings.Split(content, "\n")
+	lastVerdict := ""
+	for _, line := range lines {
+		cleaned := strings.ToUpper(strings.Trim(strings.TrimSpace(line), "*_ "))
+		if cleaned == "ALLOW" || cleaned == "BLOCK" {
+			lastVerdict = cleaned
+		}
+	}
+	if lastVerdict != "" {
+		return lastVerdict, ""
+	}
+
+	return "", content
 }

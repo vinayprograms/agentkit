@@ -1,144 +1,56 @@
-// Package bashsec provides bash command security checking with a two-step pipeline:
-// deterministic denylist checks followed by optional LLM-based path analysis.
-package bashsec
+package shellguard
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // BannedCommands is the hardcoded list of commands that are always blocked.
-// These are dangerous for system security and should never be executed by an agent.
 var BannedCommands = []string{
 	// Network/Download tools - prevent data exfiltration and arbitrary downloads
-	"alias",
-	"aria2c",
-	"axel",
-	"chrome",
-	"curl",
-	"curlie",
-	"firefox",
-	"http-prompt",
-	"httpie",
-	"links",
-	"lynx",
-	"nc",
-	"netcat",
-	"ncat",
-	"safari",
-	"scp",
-	"sftp",
-	"ssh",
-	"telnet",
-	"w3m",
-	"wget",
-	"xh",
+	"alias", "aria2c", "axel", "chrome", "curl", "curlie", "firefox",
+	"http-prompt", "httpie", "links", "lynx", "nc", "netcat", "ncat",
+	"safari", "scp", "sftp", "ssh", "telnet", "w3m", "wget", "xh",
 
 	// System administration - prevent privilege escalation
-	"doas",
-	"su",
-	"sudo",
-	"pkexec",
-	"gksudo",
-	"kdesudo",
+	"doas", "su", "sudo", "pkexec", "gksudo", "kdesudo",
 
 	// Package managers - prevent system modification
-	"apk",
-	"apt",
-	"apt-cache",
-	"apt-get",
-	"dnf",
-	"dpkg",
-	"emerge",
-	"home-manager",
-	"makepkg",
-	"opkg",
-	"pacman",
-	"paru",
-	"pkg",
-	"pkg_add",
-	"pkg_delete",
-	"portage",
-	"rpm",
-	"yay",
-	"yum",
-	"zypper",
-	"snap",
-	"flatpak",
-	"nix-env",
+	"apk", "apt", "apt-cache", "apt-get", "dnf", "dpkg", "emerge",
+	"home-manager", "makepkg", "opkg", "pacman", "paru", "pkg",
+	"pkg_add", "pkg_delete", "portage", "rpm", "yay", "yum", "zypper",
+	"snap", "flatpak", "nix-env",
 
 	// System modification - prevent system changes
-	"at",
-	"batch",
-	"chkconfig",
-	"crontab",
-	"fdisk",
-	"mkfs",
-	"mount",
-	"parted",
-	"service",
-	"systemctl",
-	"umount",
-	"shutdown",
-	"reboot",
-	"poweroff",
-	"init",
-	"telinit",
+	"at", "batch", "chkconfig", "crontab", "fdisk", "mkfs", "mount",
+	"parted", "service", "systemctl", "umount", "shutdown", "reboot",
+	"poweroff", "init", "telinit",
 
 	// Network configuration - prevent network changes
-	"firewall-cmd",
-	"ifconfig",
-	"ip",
-	"iptables",
-	"ip6tables",
-	"nft",
-	"netstat",
-	"pfctl",
-	"route",
-	"ufw",
-	"nmcli",
-	"networkctl",
+	"firewall-cmd", "ifconfig", "ip", "iptables", "ip6tables", "nft",
+	"netstat", "pfctl", "route", "ufw", "nmcli", "networkctl",
 
 	// User/group management - prevent identity changes
-	"useradd",
-	"userdel",
-	"usermod",
-	"groupadd",
-	"groupdel",
-	"groupmod",
-	"passwd",
-	"chpasswd",
-	"adduser",
-	"deluser",
+	"useradd", "userdel", "usermod", "groupadd", "groupdel", "groupmod",
+	"passwd", "chpasswd", "adduser", "deluser",
 
 	// Dangerous file operations
-	"shred",
-	"wipe",
-	"dd",
-	"losetup",
+	"shred", "wipe", "dd", "losetup",
 
 	// Process/capability manipulation
-	"setcap",
-	"getcap",
-	"chroot",
-	"unshare",
-	"nsenter",
+	"setcap", "getcap", "chroot", "unshare", "nsenter",
 }
 
 // BannedSubcommand defines specific subcommand patterns to block.
 type BannedSubcommand struct {
 	Command string
-	Args    []string // Subcommand arguments (e.g., ["install"])
-	Flags   []string // Flags that trigger block (e.g., ["--global", "-g"])
+	Args    []string
+	Flags   []string
 }
 
 // BannedSubcommandPatterns blocks specific subcommand patterns even if the base command is allowed.
-// Commands already in BannedCommands are not listed here — they're caught earlier.
 var BannedSubcommandPatterns = []BannedSubcommand{
-	// Language-specific package managers - block global/system installs
 	{Command: "brew", Args: []string{"install"}},
 	{Command: "cargo", Args: []string{"install"}},
 	{Command: "gem", Args: []string{"install"}},
@@ -148,15 +60,9 @@ var BannedSubcommandPatterns = []BannedSubcommand{
 	{Command: "pip3", Args: []string{"install"}, Flags: []string{"--user", "--system"}},
 	{Command: "pnpm", Args: []string{"add"}, Flags: []string{"--global", "-g"}},
 	{Command: "yarn", Args: []string{"global", "add"}},
-
-	// Dangerous go test usage (arbitrary command execution)
 	{Command: "go", Args: []string{"test"}, Flags: []string{"-exec"}},
-
-	// Git config manipulation (could change hooks, credentials)
 	{Command: "git", Args: []string{"config", "--global"}},
 	{Command: "git", Args: []string{"config", "--system"}},
-
-	// Docker/container escape attempts
 	{Command: "docker", Args: []string{"run"}, Flags: []string{"--privileged"}},
 	{Command: "docker", Args: []string{"run"}, Flags: []string{"-v", "/:/"}},
 	{Command: "podman", Args: []string{"run"}, Flags: []string{"--privileged"}},
@@ -173,86 +79,8 @@ var DangerousPipePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\|\s*base64\s+-d\s*\|\s*(ba)?sh`),
 }
 
-// Checker provides two-step bash command security checking.
-type Checker struct {
-	// AllowedDirs returns the directories the agent may write to.
-	// Called during LLM check (step 2). Nil means no LLM path checking.
-	AllowedDirs []string
-
-	// UserDeniedCommands are additional commands to block (from policy.toml).
-	UserDeniedCommands []string
-
-	// LLMChecker is called for step 2 (semantic check) if step 1 passes.
-	LLMChecker func(ctx context.Context, command string, allowedDirs []string) (*CheckResult, error)
-
-	// Workspace is the base working directory.
-	Workspace string
-
-	// OnDecision is called after each security decision for logging/auditing.
-	OnDecision func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)
-}
-
-// NewChecker creates a new bash security checker.
-func NewChecker(workspace string, allowedDirs, userDeniedCommands []string) *Checker {
-	return &Checker{
-		AllowedDirs:        allowedDirs,
-		UserDeniedCommands: userDeniedCommands,
-		Workspace:          workspace,
-	}
-}
-
-// LLMPolicyChecker is an interface for LLM-based policy checking.
-type LLMPolicyChecker interface {
-	CheckBashCommand(ctx context.Context, command string, allowedDirs []string, workingDir string) (*CheckResult, error)
-}
-
-// SetLLMChecker sets the LLM checker for directory policy verification.
-func (c *Checker) SetLLMChecker(checker LLMPolicyChecker) {
-	c.LLMChecker = func(ctx context.Context, command string, allowedDirs []string) (*CheckResult, error) {
-		return checker.CheckBashCommand(ctx, command, allowedDirs, c.Workspace)
-	}
-}
-
-// Check runs the two-tier security pipeline: deterministic then LLM.
-func (c *Checker) Check(ctx context.Context, command string) (bool, string, error) {
-	allowed, reason := c.checkDeterministic(command)
-	if !allowed {
-		if c.OnDecision != nil {
-			c.OnDecision(command, "deterministic", false, reason, 0, 0, 0)
-		}
-		return false, reason, nil
-	}
-	if c.OnDecision != nil {
-		c.OnDecision(command, "deterministic", true, "", 0, 0, 0)
-	}
-
-	if c.LLMChecker != nil && len(c.AllowedDirs) > 0 {
-		start := time.Now()
-		result, err := c.LLMChecker(ctx, command, c.AllowedDirs)
-		durationMs := time.Since(start).Milliseconds()
-		if err != nil {
-			if c.OnDecision != nil {
-				c.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
-			}
-			return false, fmt.Sprintf("LLM policy check failed: %v", err), err
-		}
-		if c.OnDecision != nil {
-			c.OnDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
-		}
-		if !result.Allowed {
-			return false, result.Reason, nil
-		}
-	}
-
-	return true, "", nil
-}
-
-// CheckDeterministic performs only the fast deterministic checks (for testing/preview).
-func (c *Checker) CheckDeterministic(command string) (bool, string) {
-	return c.checkDeterministic(command)
-}
-
-func (c *Checker) checkDeterministic(command string) (bool, string) {
+// checkDeterministic runs fast, zero-cost security checks.
+func (g *Gate) checkDeterministic(command string) (bool, string) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return false, "empty command"
@@ -270,7 +98,7 @@ func (c *Checker) checkDeterministic(command string) (bool, string) {
 	}
 
 	for _, seg := range segments {
-		if blocked, reason := c.checkSegment(seg); blocked {
+		if blocked, reason := g.checkSegment(seg); blocked {
 			return false, reason
 		}
 	}
@@ -278,7 +106,7 @@ func (c *Checker) checkDeterministic(command string) (bool, string) {
 	return true, ""
 }
 
-func (c *Checker) checkSegment(seg string) (bool, string) {
+func (g *Gate) checkSegment(seg string) (bool, string) {
 	base := extractBaseCommand(seg)
 
 	for _, banned := range BannedCommands {
@@ -286,16 +114,16 @@ func (c *Checker) checkSegment(seg string) (bool, string) {
 			return true, fmt.Sprintf("command '%s' is blocked for security", banned)
 		}
 	}
-	for _, denied := range c.UserDeniedCommands {
+	for _, denied := range g.userDeniedCommands {
 		if base == denied {
 			return true, fmt.Sprintf("command '%s' is blocked by policy", denied)
 		}
 	}
 
-	return c.checkSubcommandPatterns(seg)
+	return g.checkSubcommandPatterns(seg)
 }
 
-func (c *Checker) checkSubcommandPatterns(cmd string) (blocked bool, reason string) {
+func (g *Gate) checkSubcommandPatterns(cmd string) (blocked bool, reason string) {
 	words := strings.Fields(cmd)
 	if len(words) == 0 {
 		return false, ""
