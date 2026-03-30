@@ -93,8 +93,8 @@ func (g *Gate) checkDeterministic(command string) (bool, string) {
 	}
 
 	segments := []string{cmd}
-	if containsUnquotedMetachars(cmd) {
-		segments = splitCommandSegments(cmd)
+	if g.shell.HasChainedCommands(cmd) {
+		segments = g.shell.SplitSegments(cmd)
 	}
 
 	for _, seg := range segments {
@@ -107,7 +107,7 @@ func (g *Gate) checkDeterministic(command string) (bool, string) {
 }
 
 func (g *Gate) checkSegment(seg string) (bool, string) {
-	base := extractBaseCommand(seg)
+	base := g.shell.ExtractCommand(seg)
 
 	for _, banned := range BannedCommands {
 		if base == banned {
@@ -167,97 +167,3 @@ func (g *Gate) checkSubcommandPatterns(cmd string) (blocked bool, reason string)
 	return false, ""
 }
 
-func extractBaseCommand(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
-
-	if strings.HasPrefix(cmd, "env ") {
-		words := strings.Fields(cmd)
-		for i, w := range words[1:] {
-			if !strings.Contains(w, "=") {
-				return words[i+1]
-			}
-		}
-	}
-
-	words := strings.Fields(cmd)
-	if len(words) == 0 {
-		return ""
-	}
-
-	base := words[0]
-	if idx := strings.LastIndex(base, "/"); idx != -1 {
-		base = base[idx+1:]
-	}
-
-	return base
-}
-
-func containsUnquotedMetachars(cmd string) bool {
-	metachars := []string{"|", "&&", "||", ";", "`", "$(", "${"}
-	inSingle := false
-	inDouble := false
-
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		if c == '\'' && !inDouble {
-			inSingle = !inSingle
-		} else if c == '"' && !inSingle {
-			inDouble = !inDouble
-		}
-
-		if !inSingle && !inDouble {
-			remaining := cmd[i:]
-			for _, meta := range metachars {
-				if strings.HasPrefix(remaining, meta) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-func splitCommandSegments(cmd string) []string {
-	var segments []string
-	current := ""
-	inSingle := false
-	inDouble := false
-
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		if c == '\'' && !inDouble {
-			inSingle = !inSingle
-			current += string(c)
-		} else if c == '"' && !inSingle {
-			inDouble = !inDouble
-			current += string(c)
-		} else if !inSingle && !inDouble {
-			remaining := cmd[i:]
-			if strings.HasPrefix(remaining, "&&") || strings.HasPrefix(remaining, "||") {
-				if strings.TrimSpace(current) != "" {
-					segments = append(segments, strings.TrimSpace(current))
-				}
-				current = ""
-				i++
-				continue
-			}
-			if c == '|' || c == ';' {
-				if strings.TrimSpace(current) != "" {
-					segments = append(segments, strings.TrimSpace(current))
-				}
-				current = ""
-				continue
-			}
-			current += string(c)
-		} else {
-			current += string(c)
-		}
-	}
-
-	if strings.TrimSpace(current) != "" {
-		segments = append(segments, strings.TrimSpace(current))
-	}
-
-	return segments
-}

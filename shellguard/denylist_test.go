@@ -10,7 +10,7 @@ import (
 )
 
 func newTestGate(workspace string, allowedDirs, userDenied []string) *Gate {
-	return New(workspace, allowedDirs, userDenied, nil, "")
+	return New(Bash(), workspace, allowedDirs, userDenied, nil, "")
 }
 
 func TestChecker_BannedCommands(t *testing.T) {
@@ -237,7 +237,7 @@ func (m *mockModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRes
 
 func TestGate_WithLLM(t *testing.T) {
 	mock := &mockModel{allowedDirs: []string{"/workspace", "/tmp"}}
-	gate := New("/workspace", []string{"/workspace", "/tmp"}, nil, mock, "")
+	gate := New(Bash(), "/workspace", []string{"/workspace", "/tmp"}, nil, mock, "")
 
 	tests := []struct {
 		name    string
@@ -298,9 +298,9 @@ func TestExtractBaseCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := extractBaseCommand(tt.input)
+			result := Bash().ExtractCommand(tt.input)
 			if result != tt.expected {
-				t.Errorf("extractBaseCommand(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("Bash().ExtractCommand(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -320,9 +320,9 @@ func TestSplitCommandSegments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := splitCommandSegments(tt.input)
+			result := Bash().SplitSegments(tt.input)
 			if len(result) != len(tt.expected) {
-				t.Errorf("splitCommandSegments(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("Bash().SplitSegments(%q) = %v, want %v", tt.input, result, tt.expected)
 				return
 			}
 			for i, seg := range result {
@@ -357,7 +357,7 @@ func TestGate_EmptyCommand_Whitespace(t *testing.T) {
 }
 
 func TestExtractBaseCommand_Empty(t *testing.T) {
-	result := extractBaseCommand("")
+	result := Bash().ExtractCommand("")
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
 	}
@@ -391,7 +391,7 @@ func TestGate_OnDecision_Deterministic(t *testing.T) {
 
 func TestGate_OnDecision_LLM(t *testing.T) {
 	mock := &mockModel{allowedDirs: []string{"/workspace"}}
-	gate := New("/workspace", []string{"/workspace"}, nil, mock, "")
+	gate := New(Bash(), "/workspace", []string{"/workspace"}, nil, mock, "")
 	
 	var steps []string
 	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
@@ -410,7 +410,7 @@ func TestGate_OnDecision_LLM(t *testing.T) {
 
 func TestGate_LLM_ErrorPath(t *testing.T) {
 	errorModel := &errorMockModel{}
-	gate := New("/workspace", []string{"/workspace"}, nil, errorModel, "")
+	gate := New(Bash(), "/workspace", []string{"/workspace"}, nil, errorModel, "")
 
 	var lastStep string
 	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {

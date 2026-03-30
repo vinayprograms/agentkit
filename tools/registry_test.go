@@ -352,7 +352,7 @@ func TestTool_Bash_PolicyDeny(t *testing.T) {
 	}
 	reg := NewRegistry(pol, t.TempDir())
 	// BashChecker blocks "curl" via built-in BannedCommands.
-	checker := shellguard.New("", nil, nil, nil, "")
+	checker := shellguard.New(shellguard.Bash(), "", nil, nil, nil, "")
 	reg.SetBashGate(checker)
 
 	tool := reg.Get("bash")

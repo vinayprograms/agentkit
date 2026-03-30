@@ -22,6 +22,7 @@ type Result struct {
 // deterministic checks (banned commands, patterns, pipes) and optionally
 // LLM-based analysis before being allowed to execute.
 type Gate struct {
+	shell              Shell
 	allowedDirs        []string
 	userDeniedCommands []string
 	workspace          string
@@ -33,10 +34,12 @@ type Gate struct {
 }
 
 // New creates a new shell command security gate.
+// shell determines how commands are parsed (use BashShell{}, FishShell{}, or PosixShell{}).
 // model is optional (nil for deterministic-only checks).
 // securityScope is optional ("" for normal mode).
-func New(workspace string, allowedDirs, userDeniedCommands []string, model llm.Model, securityScope string) *Gate {
+func New(shell Shell, workspace string, allowedDirs, userDeniedCommands []string, model llm.Model, securityScope string) *Gate {
 	return &Gate{
+		shell:              shell,
 		allowedDirs:        allowedDirs,
 		userDeniedCommands: userDeniedCommands,
 		workspace:          workspace,
