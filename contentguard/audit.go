@@ -64,7 +64,7 @@ func (a *AuditTrail) RecordDecision(taint *Taint, tier1, tier2, tier3 string) *R
 		TaintID:     taint.ID,
 		SessionID:   a.sessionID,
 		Timestamp:   time.Now().UTC(),
-		ContentHash: hashContent(taint.Content),
+		ContentHash: hashBase64(taint.Content),
 		Trust:       string(taint.Trust),
 		Type:        string(taint.Type),
 		Tier1Result: tier1,
@@ -130,8 +130,8 @@ func (a *AuditTrail) canonicalJSON(record *Record) []byte {
 	return []byte(result)
 }
 
-// hashContent creates a SHA-256 hash of content.
-func hashContent(content string) string {
+// hashBase64 creates a SHA-256 hash of content.
+func hashBase64(content string) string {
 	hash := sha256.Sum256([]byte(content))
 	return base64.StdEncoding.EncodeToString(hash[:])
 }

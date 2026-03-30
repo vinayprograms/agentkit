@@ -92,96 +92,6 @@ func New(cfg Config, sessionID string) (*Guard, error) {
 	return g, nil
 }
 
-// AddBlock adds a content taint to the context.
-func (g *Guard) AddBlock(trust TrustLevel, typ ContentKind, mutable bool, content, source string) *Taint {
-	return g.addBlockInternal(trust, typ, mutable, content, source, "", 0, nil)
-}
-
-// AddBlockWithContext adds a content taint with an agent context identifier.
-func (g *Guard) AddBlockWithContext(trust TrustLevel, typ ContentKind, mutable bool, content, source, agentContext string) *Taint {
-	return g.addBlockInternal(trust, typ, mutable, content, source, agentContext, 0, nil)
-}
-
-// AddBlockWithTaint adds a content taint with explicit taint lineage.
-// eventSeq is the session event sequence when this taint was created.
-// taintedBy lists IDs of taints that influenced this taint.
-func (g *Guard) AddBlockWithTaint(trust TrustLevel, typ ContentKind, mutable bool, content, source, agentContext string, eventSeq uint64, taintedBy []string) *Taint {
-	return g.addBlockInternal(trust, typ, mutable, content, source, agentContext, eventSeq, taintedBy)
-}
-
-func (g *Guard) addBlockInternal(trust TrustLevel, typ ContentKind, mutable bool, content, source, agentContext string, eventSeq uint64, taintedBy []string) *Taint {
-	g.taintsMu.Lock()
-	defer g.taintsMu.Unlock()
-
-	// Compute content hash for de-duplication
-	contentHash := computeHash(content)
-
-	// Check if we've seen this exact content before (de-duplication)
-	// Only de-dupe untrusted content (trusted/vetted content doesn't need security checks)
-	if trust == Untrusted {
-		if existingID, exists := g.contentHashes[contentHash]; exists {
-			// Find the existing taint
-			for _, b := range g.taints {
-				if b.ID == existingID {
-					// Log de-duplication hit
-					if g.logger != nil {
-						g.logger.Debug("content deduplicated", map[string]interface{}{
-							"hash":         contentHash[:16] + "...",
-							"existing_id":  existingID,
-							"source":       source,
-						})
-					}
-					// Return a new taint that references the existing content
-					// but with the new source/taint info (for accurate taint tracking)
-					g.taintCounter++
-					id := fmt.Sprintf("b%04d", g.taintCounter)
-					taint := newTaint(id, trust, typ, mutable, content, source)
-					taint.AgentContext = agentContext
-					taint.CreatedAtSeq = eventSeq
-					taint.TaintedBy = taintedBy
-					taint.DedupeHit = true
-					// Link to original taint for verification skip
-					taint.TaintedBy = append(taint.TaintedBy, existingID)
-					g.taints = append(g.taints, taint)
-					return taint
-				}
-			}
-		}
-	}
-
-	// New content - create taint and register hash
-	g.taintCounter++
-	id := fmt.Sprintf("b%04d", g.taintCounter)
-
-	taint := newTaint(id, trust, typ, mutable, content, source)
-	taint.AgentContext = agentContext
-	taint.CreatedAtSeq = eventSeq
-	taint.TaintedBy = taintedBy
-	g.taints = append(g.taints, taint)
-
-	// Register content hash for untrusted content
-	if trust == Untrusted {
-		g.contentHashes[contentHash] = id
-	}
-
-	return taint
-}
-
-// GetCurrentUntrustedBlockIDs returns IDs of all untrusted taints in context.
-// Used to mark LLM responses as tainted by these taints.
-func (g *Guard) GetCurrentUntrustedBlockIDs() []string {
-	g.taintsMu.RLock()
-	defer g.taintsMu.RUnlock()
-
-	var ids []string
-	for _, b := range g.taints {
-		if b.Trust == Untrusted {
-			ids = append(ids, b.ID)
-		}
-	}
-	return ids
-}
-
 // HighRiskTools is the set of tools that require extra scrutiny.
 var HighRiskTools = map[string]bool{
 	"bash":        true,
@@ -204,7 +114,7 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]inte
 
 	// Build taint lineage for all related taints
 	if len(tier1Result.RelatedBlocks) > 0 {
-		result.TaintLineage = g.GetTaintLineageForBlocks(tier1Result.RelatedBlocks)
+		result.TaintLineage = g.TaintLineageFor(tier1Result.RelatedBlocks)
 	}
 
 	if tier1Result.Pass {
@@ -446,35 +356,6 @@ func (g *Guard) tier3Check(ctx context.Context, toolName string, args map[string
 	})
 }
 
-func (g *Guard) getUntrustedTaints() []*Taint {
-	return g.getUntrustedTaintsForContext("")
-}
-
-// getUntrustedTaintsForContext returns untrusted taints filtered by agent context.
-// If agentContext is empty, returns all untrusted taints.
-// If agentContext is set, returns taints matching that context OR taints with no context (shared taints).
-func (g *Guard) getUntrustedTaintsForContext(agentContext string) []*Taint {
-	g.taintsMu.RLock()
-	defer g.taintsMu.RUnlock()
-
-	var untrusted []*Taint
-	for _, b := range g.taints {
-		if b.Trust != Untrusted {
-			continue
-		}
-		// If no filter, include all
-		if agentContext == "" {
-			untrusted = append(untrusted, b)
-			continue
-		}
-		// Include if taint matches context OR has no context (shared)
-		if b.AgentContext == agentContext || b.AgentContext == "" {
-			untrusted = append(untrusted, b)
-		}
-	}
-	return untrusted
-}
-
 func (g *Guard) recordDecision(taint *Taint, tier1, tier2, tier3 string) {
 	if taint == nil {
 		return
@@ -513,89 +394,3 @@ func (g *Guard) ClearContext() {
 	g.taints = make([]*Taint, 0)
 }
 
-// TaintLineageNode represents a node in the taint dependency tree.
-// Exported for use by session package.
-type TaintLineageNode struct {
-	TaintID   string              `json:"taint_id"`
-	Trust     TrustLevel          `json:"trust"`
-	Source    string              `json:"source"`
-	EventSeq  uint64              `json:"event_seq,omitempty"`
-	Depth     int                 `json:"depth,omitempty"`
-	TaintedBy []*TaintLineageNode `json:"tainted_by,omitempty"`
-}
-
-// GetTaintLineage builds the full taint dependency tree for a taint.
-// Returns nil if the taint is not found.
-func (g *Guard) GetTaintLineage(blockID string) *TaintLineageNode {
-	g.taintsMu.RLock()
-	defer g.taintsMu.RUnlock()
-
-	taint := g.findBlockByID(blockID)
-	if taint == nil {
-		return nil
-	}
-
-	return g.buildLineageTree(taint, 0, make(map[string]bool))
-}
-
-// GetTaintLineageForBlocks builds lineage trees for multiple taints.
-func (g *Guard) GetTaintLineageForBlocks(taints []*Taint) []*TaintLineageNode {
-	g.taintsMu.RLock()
-	defer g.taintsMu.RUnlock()
-
-	var lineages []*TaintLineageNode
-	for _, taint := range taints {
-		lineage := g.buildLineageTree(taint, 0, make(map[string]bool))
-		if lineage != nil {
-			lineages = append(lineages, lineage)
-		}
-	}
-	return lineages
-}
-
-// buildLineageTree recursively builds the taint tree for a taint.
-// visited prevents infinite loops from circular taint references.
-func (g *Guard) buildLineageTree(taint *Taint, depth int, visited map[string]bool) *TaintLineageNode {
-	if taint == nil || visited[taint.ID] {
-		return nil
-	}
-	visited[taint.ID] = true
-
-	node := &TaintLineageNode{
-		TaintID:  taint.ID,
-		Trust:    taint.Trust,
-		Source:   taint.Source,
-		EventSeq: taint.CreatedAtSeq,
-		Depth:    depth,
-	}
-
-	// Recursively build parent lineage
-	for _, parentID := range taint.TaintedBy {
-		parent := g.findBlockByID(parentID)
-		if parent != nil {
-			parentNode := g.buildLineageTree(parent, depth+1, visited)
-			if parentNode != nil {
-				node.TaintedBy = append(node.TaintedBy, parentNode)
-			}
-		}
-	}
-
-	return node
-}
-
-// findBlockByID returns a taint by ID (caller must hold lock).
-func (g *Guard) findBlockByID(id string) *Taint {
-	for _, b := range g.taints {
-		if b.ID == id {
-			return b
-		}
-	}
-	return nil
-}
-
-// GetBlock returns a taint by ID (thread-safe).
-func (g *Guard) GetBlock(id string) *Taint {
-	g.taintsMu.RLock()
-	defer g.taintsMu.RUnlock()
-	return g.findBlockByID(id)
-}

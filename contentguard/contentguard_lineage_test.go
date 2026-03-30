@@ -12,9 +12,9 @@ func TestGetTaintLineage_Simple(t *testing.T) {
 	defer g.Close()
 
 	// Add a simple untrusted taint
-	taint := g.AddBlockWithTaint(Untrusted, Data, true, "malicious content", "tool:web_fetch", "", 42, nil)
+	taint := g.IngestWithLineage(Untrusted, Data, true, "malicious content", "tool:web_fetch", "", 42, nil)
 
-	lineage := g.GetTaintLineage(taint.ID)
+	lineage := g.TaintLineage(taint.ID)
 	if lineage == nil {
 		t.Fatal("expected non-nil lineage")
 	}
@@ -44,13 +44,13 @@ func TestGetTaintLineage_WithParents(t *testing.T) {
 	defer g.Close()
 
 	// Add parent taints (root sources)
-	parent1 := g.AddBlockWithTaint(Untrusted, Data, true, "content from web", "tool:web_fetch", "", 10, nil)
-	parent2 := g.AddBlockWithTaint(Untrusted, Data, true, "content from file", "tool:read", "", 15, nil)
+	parent1 := g.IngestWithLineage(Untrusted, Data, true, "content from web", "tool:web_fetch", "", 10, nil)
+	parent2 := g.IngestWithLineage(Untrusted, Data, true, "content from file", "tool:read", "", 15, nil)
 
 	// Add a child taint that was influenced by both parents
-	child := g.AddBlockWithTaint(Vetted, Instruction, false, "LLM response", "llm:response", "", 20, []string{parent1.ID, parent2.ID})
+	child := g.IngestWithLineage(Vetted, Instruction, false, "LLM response", "llm:response", "", 20, []string{parent1.ID, parent2.ID})
 
-	lineage := g.GetTaintLineage(child.ID)
+	lineage := g.TaintLineage(child.ID)
 	if lineage == nil {
 		t.Fatal("expected non-nil lineage")
 	}
@@ -94,11 +94,11 @@ func TestGetTaintLineage_DeepChain(t *testing.T) {
 	defer g.Close()
 
 	// Create a chain: grandparent -> parent -> child
-	grandparent := g.AddBlockWithTaint(Untrusted, Data, true, "external data", "tool:web_fetch", "", 10, nil)
-	parent := g.AddBlockWithTaint(Untrusted, Data, true, "processed data", "llm:response", "", 20, []string{grandparent.ID})
-	child := g.AddBlockWithTaint(Untrusted, Data, true, "final output", "llm:response", "", 30, []string{parent.ID})
+	grandparent := g.IngestWithLineage(Untrusted, Data, true, "external data", "tool:web_fetch", "", 10, nil)
+	parent := g.IngestWithLineage(Untrusted, Data, true, "processed data", "llm:response", "", 20, []string{grandparent.ID})
+	child := g.IngestWithLineage(Untrusted, Data, true, "final output", "llm:response", "", 30, []string{parent.ID})
 
-	lineage := g.GetTaintLineage(child.ID)
+	lineage := g.TaintLineage(child.ID)
 	if lineage == nil {
 		t.Fatal("expected non-nil lineage")
 	}
@@ -135,7 +135,7 @@ func TestGetTaintLineage_NotFound(t *testing.T) {
 	}
 	defer g.Close()
 
-	lineage := g.GetTaintLineage("nonexistent")
+	lineage := g.TaintLineage("nonexistent")
 	if lineage != nil {
 		t.Error("expected nil lineage for nonexistent taint")
 	}
@@ -149,12 +149,12 @@ func TestGetCurrentUntrustedBlockIDs(t *testing.T) {
 	defer g.Close()
 
 	// Add mixed taints
-	g.AddBlock(Trusted, Instruction, false, "system prompt", "system")
-	g.AddBlock(Untrusted, Data, true, "external 1", "tool:web")
-	g.AddBlock(Vetted, Instruction, false, "user prompt", "user")
-	g.AddBlock(Untrusted, Data, true, "external 2", "tool:read")
+	g.Ingest(Trusted, Instruction, false, "system prompt", "system")
+	g.Ingest(Untrusted, Data, true, "external 1", "tool:web")
+	g.Ingest(Vetted, Instruction, false, "user prompt", "user")
+	g.Ingest(Untrusted, Data, true, "external 2", "tool:read")
 
-	ids := g.GetCurrentUntrustedBlockIDs()
+	ids := g.UntrustedIDs()
 	if len(ids) != 2 {
 		t.Errorf("expected 2 untrusted taints, got %d", len(ids))
 	}

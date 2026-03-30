@@ -305,7 +305,3 @@ func ContainsSuspiciousContent(content string) (suspicious bool, reasons []strin
 	return len(reasons) > 0, reasons
 }
 
-// lowercaseContains checks if haystack contains needle (case-insensitive).
-func lowercaseContains(haystack, needle string) bool {
-	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
-}

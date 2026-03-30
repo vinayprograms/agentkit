@@ -74,7 +74,7 @@ func computeHash(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// NewBlock creates a new taint with the given properties.
+// newTaint creates a taint with the given properties.
 // It enforces security invariants:
 // - Untrusted content is always type=data
 // - Untrusted content is always mutable=true
