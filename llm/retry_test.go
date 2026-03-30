@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +159,46 @@ func TestIsRetryableError(t *testing.T) {
 				t.Errorf("isRetryableError(%q) = %v, want %v", tt.errMsg, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWithRetry_Success(t *testing.T) {
+	calls := 0
+	result, err := withRetry(t.Context(), RetryConfig{MaxRetries: 3, InitBackoff: time.Millisecond}, "test", func() (string, error) {
+		calls++
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ok" {
+		t.Errorf("expected 'ok', got %q", result)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 call, got %d", calls)
+	}
+}
+
+func TestWithRetry_NonRetryableError(t *testing.T) {
+	_, err := withRetry(t.Context(), RetryConfig{MaxRetries: 3, InitBackoff: time.Millisecond}, "test", func() (string, error) {
+		return "", fmt.Errorf("invalid request")
+	})
+	if err == nil {
+		t.Error("expected error")
+	}
+	if !strings.Contains(err.Error(), "test request failed") {
+		t.Errorf("expected provider name in error, got: %v", err)
+	}
+}
+
+func TestWithRetry_BillingError(t *testing.T) {
+	_, err := withRetry(t.Context(), RetryConfig{MaxRetries: 3, InitBackoff: time.Millisecond}, "test", func() (string, error) {
+		return "", fmt.Errorf("billing error: payment required")
+	})
+	if err == nil {
+		t.Error("expected error")
+	}
+	if !strings.Contains(err.Error(), "billing") {
+		t.Errorf("expected billing error, got: %v", err)
 	}
 }

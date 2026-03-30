@@ -2,7 +2,16 @@ package llm
 
 import (
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
+
+func anthropicMessageNewParamsForTest() anthropic.MessageNewParams {
+	return anthropic.MessageNewParams{
+		Model:     "claude-test",
+		MaxTokens: 4096,
+	}
+}
 
 // =============================================================================
 // Anthropic Provider Tests
@@ -149,5 +158,49 @@ func TestThinkingLevelToAnthropicBudget(t *testing.T) {
 	budget = thinkingLevelToAnthropicBudget(ThinkingOff, 0)
 	if budget != 0 {
 		t.Errorf("expected off budget 0, got %d", budget)
+	}
+}
+
+func TestAnthropicAuthOptions_APIKey(t *testing.T) {
+	cfg := anthropicConfig{APIKey: "sk-test"}
+	opts := anthropicAuthOptions(cfg)
+	if len(opts) != 1 {
+		t.Errorf("expected 1 option for API key auth, got %d", len(opts))
+	}
+}
+
+func TestAnthropicAuthOptions_OAuth(t *testing.T) {
+	cfg := anthropicConfig{APIKey: "oauth-token", IsOAuthToken: true}
+	opts := anthropicAuthOptions(cfg)
+	if len(opts) != 2 {
+		t.Errorf("expected 2 options for OAuth auth (bearer + beta header), got %d", len(opts))
+	}
+}
+
+func TestApplyAnthropicThinking_Off(t *testing.T) {
+	cfg := ThinkingConfig{Level: ThinkingOff}
+	req := ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}}
+	params := anthropicMessageNewParamsForTest()
+	maxTokens := int64(4096)
+
+	applyAnthropicThinking(cfg, req, &params, &maxTokens)
+
+	// MaxTokens should be unchanged
+	if maxTokens != 4096 {
+		t.Errorf("expected maxTokens unchanged at 4096, got %d", maxTokens)
+	}
+}
+
+func TestApplyAnthropicThinking_High(t *testing.T) {
+	cfg := ThinkingConfig{Level: ThinkingHigh}
+	req := ChatRequest{Messages: []Message{{Role: "user", Content: "prove P=NP"}}}
+	params := anthropicMessageNewParamsForTest()
+	maxTokens := int64(4096)
+
+	applyAnthropicThinking(cfg, req, &params, &maxTokens)
+
+	// MaxTokens should be bumped to accommodate thinking budget
+	if maxTokens <= 4096 {
+		t.Errorf("expected maxTokens increased for thinking, got %d", maxTokens)
 	}
 }
