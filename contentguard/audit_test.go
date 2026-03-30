@@ -1,4 +1,4 @@
-package security
+package contentguard
 
 import (
 	"testing"
@@ -9,13 +9,13 @@ func TestAuditTrail_SignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditTrail() error = %v", err)
 	}
-	defer trail.Destroy()
+	defer trail.Close()
 
-	// Create a block
-	block := NewBlock("b001", TrustUntrusted, TypeData, true, "test content", "test")
+	// Create a taint
+	taint := newTaint("b001", Untrusted, Data, true, "test content", "test")
 
 	// Record a decision
-	record := trail.RecordDecision(block, "escalate", "pass", "skipped")
+	record := trail.RecordDecision(taint, "escalate", "pass", "skipped")
 
 	if record.Signature == "" {
 		t.Error("Expected signature to be set")
@@ -37,10 +37,10 @@ func TestAuditTrail_TamperedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditTrail() error = %v", err)
 	}
-	defer trail.Destroy()
+	defer trail.Close()
 
-	block := NewBlock("b001", TrustUntrusted, TypeData, true, "original content", "test")
-	record := trail.RecordDecision(block, "escalate", "pass", "skipped")
+	taint := newTaint("b001", Untrusted, Data, true, "original content", "test")
+	record := trail.RecordDecision(taint, "escalate", "pass", "skipped")
 
 	// Tamper with the record
 	record.Tier1Result = "pass" // Changed from "escalate"
@@ -61,12 +61,12 @@ func TestAuditTrail_MultipleRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditTrail() error = %v", err)
 	}
-	defer trail.Destroy()
+	defer trail.Close()
 
 	// Record multiple decisions
 	for i := 0; i < 5; i++ {
-		block := NewBlock("b00"+string(rune('0'+i)), TrustUntrusted, TypeData, true, "content", "test")
-		trail.RecordDecision(block, "escalate", "escalate", "ALLOW")
+		taint := newTaint("b00"+string(rune('0'+i)), Untrusted, Data, true, "content", "test")
+		trail.RecordDecision(taint, "escalate", "escalate", "ALLOW")
 	}
 
 	records := trail.Records()
@@ -92,10 +92,10 @@ func TestAuditTrail_ExportLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditTrail() error = %v", err)
 	}
-	defer trail.Destroy()
+	defer trail.Close()
 
-	block := NewBlock("b001", TrustUntrusted, TypeData, true, "content", "test")
-	trail.RecordDecision(block, "pass", "skipped", "skipped")
+	taint := newTaint("b001", Untrusted, Data, true, "content", "test")
+	trail.RecordDecision(taint, "pass", "skipped", "skipped")
 
 	log := trail.ExportLog("default")
 
@@ -111,8 +111,8 @@ func TestAuditTrail_ExportLog(t *testing.T) {
 		t.Error("Expected PublicKey to be set")
 	}
 
-	if len(log.SecurityRecords) != 1 {
-		t.Errorf("Expected 1 record, got %d", len(log.SecurityRecords))
+	if len(log.Records) != 1 {
+		t.Errorf("Expected 1 record, got %d", len(log.Records))
 	}
 }
 
@@ -123,7 +123,7 @@ func TestAuditTrail_Destroy(t *testing.T) {
 	}
 
 	// Destroy should zero the private key
-	trail.Destroy()
+	trail.Close()
 
 	if trail.privateKey != nil {
 		t.Error("Expected privateKey to be nil after Destroy")

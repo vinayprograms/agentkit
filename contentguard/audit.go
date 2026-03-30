@@ -1,4 +1,4 @@
-package security
+package contentguard
 
 import (
 	"crypto/ed25519"
@@ -16,7 +16,7 @@ type AuditTrail struct {
 	sessionID  string
 	publicKey  ed25519.PublicKey
 	privateKey ed25519.PrivateKey
-	records    []*SecurityRecord
+	records    []*Record
 }
 
 // NewAuditTrail creates a new audit trail with a fresh Ed25519 keypair.
@@ -30,7 +30,7 @@ func NewAuditTrail(sessionID string) (*AuditTrail, error) {
 		sessionID:  sessionID,
 		publicKey:  pub,
 		privateKey: priv,
-		records:    make([]*SecurityRecord, 0),
+		records:    make([]*Record, 0),
 	}, nil
 }
 
@@ -44,9 +44,9 @@ func (a *AuditTrail) SessionID() string {
 	return a.sessionID
 }
 
-// SecurityRecord represents a signed security decision.
-type SecurityRecord struct {
-	BlockID     string    `json:"block_id"`
+// Record represents a signed security decision.
+type Record struct {
+	TaintID     string    `json:"taint_id"`
 	SessionID   string    `json:"session_id"`
 	Timestamp   time.Time `json:"timestamp"`
 	ContentHash string    `json:"content_hash"`
@@ -59,14 +59,14 @@ type SecurityRecord struct {
 }
 
 // RecordDecision creates and signs a security decision record.
-func (a *AuditTrail) RecordDecision(block *Block, tier1, tier2, tier3 string) *SecurityRecord {
-	record := &SecurityRecord{
-		BlockID:     block.ID,
+func (a *AuditTrail) RecordDecision(taint *Taint, tier1, tier2, tier3 string) *Record {
+	record := &Record{
+		TaintID:     taint.ID,
 		SessionID:   a.sessionID,
 		Timestamp:   time.Now().UTC(),
-		ContentHash: hashContent(block.Content),
-		Trust:       string(block.Trust),
-		Type:        string(block.Type),
+		ContentHash: hashContent(taint.Content),
+		Trust:       string(taint.Trust),
+		Type:        string(taint.Type),
 		Tier1Result: tier1,
 		Tier2Result: tier2,
 		Tier3Result: tier3,
@@ -80,7 +80,7 @@ func (a *AuditTrail) RecordDecision(block *Block, tier1, tier2, tier3 string) *S
 }
 
 // signRecord creates an Ed25519 signature for the record.
-func (a *AuditTrail) signRecord(record *SecurityRecord) string {
+func (a *AuditTrail) signRecord(record *Record) string {
 	// Create canonical JSON (without signature field)
 	canonical := a.canonicalJSON(record)
 
@@ -95,10 +95,10 @@ func (a *AuditTrail) signRecord(record *SecurityRecord) string {
 
 // canonicalJSON creates a deterministic JSON representation.
 // Fields are sorted alphabetically, no extra whitespace.
-func (a *AuditTrail) canonicalJSON(record *SecurityRecord) []byte {
+func (a *AuditTrail) canonicalJSON(record *Record) []byte {
 	// Create map for canonical ordering
 	m := map[string]interface{}{
-		"block_id":     record.BlockID,
+		"taint_id":     record.TaintID,
 		"content_hash": record.ContentHash,
 		"session_id":   record.SessionID,
 		"tier1_result": record.Tier1Result,
@@ -137,7 +137,7 @@ func hashContent(content string) string {
 }
 
 // VerifyRecord verifies a security record's signature.
-func VerifyRecord(record *SecurityRecord, publicKeyBase64 string) (bool, error) {
+func VerifyRecord(record *Record, publicKeyBase64 string) (bool, error) {
 	// Decode public key
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyBase64)
 	if err != nil {
@@ -168,7 +168,7 @@ func VerifyRecord(record *SecurityRecord, publicKeyBase64 string) (bool, error) 
 }
 
 // Records returns all recorded security decisions.
-func (a *AuditTrail) Records() []*SecurityRecord {
+func (a *AuditTrail) Records() []*Record {
 	return a.records
 }
 
@@ -178,7 +178,7 @@ type SessionLog struct {
 	StartedAt       time.Time         `json:"started_at"`
 	PublicKey       string            `json:"public_key"`
 	SecurityMode    string            `json:"security_mode"`
-	SecurityRecords []*SecurityRecord `json:"security_records"`
+	Records []*Record `json:"security_records"`
 }
 
 // ExportLog exports the audit trail as a session log.
@@ -188,13 +188,13 @@ func (a *AuditTrail) ExportLog(securityMode string) *SessionLog {
 		StartedAt:       time.Now().UTC(),
 		PublicKey:       a.PublicKey(),
 		SecurityMode:    securityMode,
-		SecurityRecords: a.records,
+		Records: a.records,
 	}
 }
 
 // Destroy zeros out the private key from memory.
 // Call this when the session ends.
-func (a *AuditTrail) Destroy() {
+func (a *AuditTrail) Close() {
 	for i := range a.privateKey {
 		a.privateKey[i] = 0
 	}

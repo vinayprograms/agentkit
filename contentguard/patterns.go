@@ -1,4 +1,4 @@
-package security
+package contentguard
 
 import (
 	"fmt"

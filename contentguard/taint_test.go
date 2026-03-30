@@ -1,4 +1,4 @@
-package security
+package contentguard
 
 import (
 	"testing"
@@ -8,70 +8,70 @@ func TestNewBlock_EnforcesInvariants(t *testing.T) {
 	tests := []struct {
 		name         string
 		trust        TrustLevel
-		typ          BlockType
+		typ          ContentKind
 		mutable      bool
-		wantType     BlockType
+		wantType     ContentKind
 		wantMutable  bool
 	}{
 		{
 			name:        "trusted instruction immutable - unchanged",
-			trust:       TrustTrusted,
-			typ:         TypeInstruction,
+			trust:       Trusted,
+			typ:         Instruction,
 			mutable:     false,
-			wantType:    TypeInstruction,
+			wantType:    Instruction,
 			wantMutable: false,
 		},
 		{
 			name:        "vetted instruction mutable - unchanged",
-			trust:       TrustVetted,
-			typ:         TypeInstruction,
+			trust:       Vetted,
+			typ:         Instruction,
 			mutable:     true,
-			wantType:    TypeInstruction,
+			wantType:    Instruction,
 			wantMutable: true,
 		},
 		{
 			name:        "untrusted instruction - forced to data",
-			trust:       TrustUntrusted,
-			typ:         TypeInstruction,
+			trust:       Untrusted,
+			typ:         Instruction,
 			mutable:     false,
-			wantType:    TypeData,
+			wantType:    Data,
 			wantMutable: true,
 		},
 		{
 			name:        "untrusted immutable - forced to mutable",
-			trust:       TrustUntrusted,
-			typ:         TypeData,
+			trust:       Untrusted,
+			typ:         Data,
 			mutable:     false,
-			wantType:    TypeData,
+			wantType:    Data,
 			wantMutable: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			block := NewBlock("test", tt.trust, tt.typ, tt.mutable, "content", "test")
+			taint := newTaint("test", tt.trust, tt.typ, tt.mutable, "content", "test")
 
-			if block.Type != tt.wantType {
-				t.Errorf("Type = %v, want %v", block.Type, tt.wantType)
+			if taint.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", taint.Type, tt.wantType)
 			}
 
-			if block.Mutable != tt.wantMutable {
-				t.Errorf("Mutable = %v, want %v", block.Mutable, tt.wantMutable)
+			if taint.Mutable != tt.wantMutable {
+				t.Errorf("Mutable = %v, want %v", taint.Mutable, tt.wantMutable)
 			}
 		})
 	}
 }
 
 func TestBlock_CanOverride(t *testing.T) {
-	immutable := NewBlock("sys", TrustTrusted, TypeInstruction, false, "system", "")
-	mutableTrusted := NewBlock("commit", TrustTrusted, TypeInstruction, true, "commit", "")
-	vetted := NewBlock("goal", TrustVetted, TypeInstruction, true, "goal", "")
-	untrusted := NewBlock("file", TrustUntrusted, TypeData, true, "file content", "")
+	immutable := newTaint("sys", Trusted, Instruction, false, "system", "")
+	mutableTrusted := newTaint("commit", Trusted, Instruction, true, "commit", "")
+	vetted := newTaint("goal", Vetted, Instruction, true, "goal", "")
+	untrusted := newTaint("file", Untrusted, Data, true, "file content", "")
 
 	tests := []struct {
 		name   string
-		a      *Block
-		b      *Block
+		a      *Taint
+		b      *Taint
 		canA   bool
 	}{
 		{"untrusted cannot override immutable", untrusted, immutable, false},
@@ -95,11 +95,11 @@ func TestPropagatedTrust(t *testing.T) {
 		a, b TrustLevel
 		want TrustLevel
 	}{
-		{TrustTrusted, TrustTrusted, TrustTrusted},
-		{TrustTrusted, TrustVetted, TrustVetted},
-		{TrustTrusted, TrustUntrusted, TrustUntrusted},
-		{TrustVetted, TrustUntrusted, TrustUntrusted},
-		{TrustVetted, TrustVetted, TrustVetted},
+		{Trusted, Trusted, Trusted},
+		{Trusted, Vetted, Vetted},
+		{Trusted, Untrusted, Untrusted},
+		{Vetted, Untrusted, Untrusted},
+		{Vetted, Vetted, Vetted},
 	}
 
 	for _, tt := range tests {
