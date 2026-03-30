@@ -2,6 +2,7 @@ package shellguard
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -331,4 +332,108 @@ func TestSplitCommandSegments(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGate_EmptyCommand(t *testing.T) {
+	gate := newTestGate("/workspace", nil, nil)
+	allowed, reason, err := gate.Check(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Error("empty command should be blocked")
+	}
+	if reason == "" {
+		t.Error("expected reason for empty command")
+	}
+}
+
+func TestGate_EmptyCommand_Whitespace(t *testing.T) {
+	gate := newTestGate("/workspace", nil, nil)
+	allowed, _, _ := gate.Check(context.Background(), "   ")
+	if allowed {
+		t.Error("whitespace-only command should be blocked")
+	}
+}
+
+func TestExtractBaseCommand_Empty(t *testing.T) {
+	result := extractBaseCommand("")
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+func TestGate_OnDecision_Deterministic(t *testing.T) {
+	gate := newTestGate("/workspace", nil, nil)
+	var called bool
+	var capturedStep string
+	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
+		called = true
+		capturedStep = step
+	}
+
+	// Allowed command
+	gate.Check(context.Background(), "ls -la")
+	if !called {
+		t.Error("OnDecision should be called for allowed command")
+	}
+	if capturedStep != "deterministic" {
+		t.Errorf("expected step 'deterministic', got %q", capturedStep)
+	}
+
+	// Blocked command
+	called = false
+	gate.Check(context.Background(), "curl http://evil.com")
+	if !called {
+		t.Error("OnDecision should be called for blocked command")
+	}
+}
+
+func TestGate_OnDecision_LLM(t *testing.T) {
+	mock := &mockModel{allowedDirs: []string{"/workspace"}}
+	gate := New("/workspace", []string{"/workspace"}, nil, mock, "")
+	
+	var steps []string
+	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
+		steps = append(steps, step)
+	}
+
+	gate.Check(context.Background(), "cat /etc/passwd")
+	// Should have both deterministic (pass) and llm (block) decisions
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 decisions, got %d: %v", len(steps), steps)
+	}
+	if steps[0] != "deterministic" || steps[1] != "llm" {
+		t.Errorf("expected [deterministic, llm], got %v", steps)
+	}
+}
+
+func TestGate_LLM_ErrorPath(t *testing.T) {
+	errorModel := &errorMockModel{}
+	gate := New("/workspace", []string{"/workspace"}, nil, errorModel, "")
+
+	var lastStep string
+	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
+		lastStep = step
+	}
+
+	allowed, reason, err := gate.Check(context.Background(), "some command")
+	if err == nil {
+		t.Error("expected error from LLM")
+	}
+	if allowed {
+		t.Error("should not be allowed on LLM error")
+	}
+	if !strings.Contains(reason, "LLM check failed") {
+		t.Errorf("expected LLM failure reason, got: %s", reason)
+	}
+	if lastStep != "llm" {
+		t.Errorf("expected last OnDecision step to be 'llm', got %q", lastStep)
+	}
+}
+
+type errorMockModel struct{}
+
+func (m *errorMockModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return nil, fmt.Errorf("model unavailable")
 }

@@ -49,14 +49,9 @@ func New(workspace string, allowedDirs, userDeniedCommands []string, model llm.M
 func (g *Gate) Check(ctx context.Context, command string) (bool, string, error) {
 	// Step 1: deterministic checks
 	allowed, reason := g.checkDeterministic(command)
+	g.logDecision(command, "deterministic", allowed, reason, 0, 0, 0)
 	if !allowed {
-		if g.OnDecision != nil {
-			g.OnDecision(command, "deterministic", false, reason, 0, 0, 0)
-		}
 		return false, reason, nil
-	}
-	if g.OnDecision != nil {
-		g.OnDecision(command, "deterministic", true, "", 0, 0, 0)
 	}
 
 	// Step 2: LLM analysis (if model configured and allowed dirs set)
@@ -65,20 +60,22 @@ func (g *Gate) Check(ctx context.Context, command string) (bool, string, error) 
 		result, err := llmCheck(ctx, g.model, command, g.allowedDirs, g.workspace, g.securityScope)
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
-			if g.OnDecision != nil {
-				g.OnDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
-			}
+			g.logDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
 			return false, fmt.Sprintf("LLM check failed: %v", err), err
 		}
-		if g.OnDecision != nil {
-			g.OnDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
-		}
+		g.logDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
 		if !result.Allowed {
 			return false, result.Reason, nil
 		}
 	}
 
 	return true, "", nil
+}
+
+func (g *Gate) logDecision(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
+	if g.OnDecision != nil {
+		g.OnDecision(command, step, allowed, reason, durationMs, inputTokens, outputTokens)
+	}
 }
 
 // CheckDeterministic performs only the fast deterministic checks (for testing/preview).
