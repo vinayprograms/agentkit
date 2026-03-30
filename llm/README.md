@@ -117,10 +117,3 @@ llm.RetryConfig{
 }
 ```
 
-## Tracing
-
-Wrap any model with OpenTelemetry tracing:
-
-```go
-model = llm.WithTracing(model, "anthropic")
-```
