@@ -284,6 +284,14 @@ func TestChecker_DeterministicDoesNotBlockPaths(t *testing.T) {
 	}
 }
 
+func TestCheckSubcommandPatterns_Empty(t *testing.T) {
+	gate := newTestGate("/workspace", nil, nil)
+	blocked, _ := gate.checkSubcommandPatterns("")
+	if blocked {
+		t.Error("empty input should not be blocked")
+	}
+}
+
 func TestExtractBaseCommand(t *testing.T) {
 	tests := []struct {
 		input    string
