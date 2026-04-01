@@ -19,25 +19,16 @@ const (
 	Research Mode = "research"
 )
 
-// Config holds security verifier configuration.
-// ScreenFunc performs quick triage on a flagged tool call (Tier 2).
-// Return true if suspicious (should escalate to review).
-type ScreenFunc func(ctx context.Context, req ScreenRequest) (*ScreenResult, error)
-
-// ReviewFunc performs full review on an escalated tool call (Tier 3).
-type ReviewFunc func(ctx context.Context, req ReviewRequest) (*ReviewResult, error)
-
 // Config configures the content guard.
 type Config struct {
 	Mode          Mode
 	ResearchScope string     // required when Mode is Research
 	UserTrust     TrustLevel
 
-	// Screener is the Tier 2 quick check. Nil disables Tier 2.
-	Screener ScreenFunc
-
-	// Reviewer is the Tier 3 full verdict. Nil means escalated calls are denied.
-	Reviewer ReviewFunc
+	// Tiers is the ordered verification pipeline after Tier 1 (deterministic).
+	// Each tier can allow, deny, or escalate to the next.
+	// If empty, flagged tool calls are denied (fail-safe).
+	Stages []Stage
 
 	Logger *logging.Logger
 }
@@ -47,8 +38,7 @@ type Guard struct {
 	mode          Mode
 	researchScope string
 	userTrust     TrustLevel
-	screener      ScreenFunc
-	reviewer      ReviewFunc
+	stages        []Stage
 	audit         *AuditTrail
 	logger        *logging.Logger
 
@@ -74,8 +64,7 @@ func New(cfg Config, sessionID string) (*Guard, error) {
 		mode:          cfg.Mode,
 		researchScope: cfg.ResearchScope,
 		userTrust:     cfg.UserTrust,
-		screener:      cfg.Screener,
-		reviewer:      cfg.Reviewer,
+		stages:        cfg.Stages,
 		audit:         audit,
 		logger:        logger,
 		taints:        make([]*Taint, 0),
@@ -108,72 +97,85 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]inte
 		ToolName: toolName,
 	}
 
-	// Tier 1: Deterministic checks
+	// Tier 1: Deterministic checks (always runs, built-in)
 	tier1Result := g.tier1Check(toolName, args, agentContext)
 	result.Tier1 = tier1Result
 
-	// Build taint lineage for all related taints
 	if len(tier1Result.RelatedBlocks) > 0 {
 		result.TaintLineage = g.TaintLineageFor(tier1Result.RelatedBlocks)
 	}
 
 	if tier1Result.Pass {
-		// No untrusted content or low-risk tool - allow
 		result.Allowed = true
 		g.recordDecision(tier1Result.Taint, "pass", "skipped", "skipped")
 		return result, nil
 	}
 
-	// Tier 2: Cheap model triage (skip in paranoid mode - go straight to T3)
-	if g.mode != Paranoid && g.screener != nil {
-		tier2Result, err := g.tier2Check(ctx, toolName, args, tier1Result.Taint)
-		if err == nil {
-			result.Tier2 = tier2Result
+	// Run configurable tiers in order
+	if len(g.stages) == 0 {
+		// No tiers configured — fail-safe deny
+		result.DenyReason = "no verification tiers configured, denying high-risk action"
+		g.recordDecision(tier1Result.Taint, "escalate", "denied:no_stages", "")
+		return result, nil
+	}
 
-			if !tier2Result.Suspicious {
-				// Triage cleared
-				result.Allowed = true
-				g.recordDecision(tier1Result.Taint, "escalate", "pass", "skipped")
+	req := Request{
+		ToolName:     toolName,
+		ToolArgs:     args,
+		Taints:       g.getUntrustedTaints(),
+		OriginalGoal: originalGoal,
+		PriorReasons: tier1Result.Reasons,
+	}
+
+	for i, stage := range g.stages {
+		stageResult, err := stage.Evaluate(ctx, req)
+		if err != nil {
+			result.DenyReason = fmt.Sprintf("stage %d error: %v", i+2, err)
+			g.recordDecision(tier1Result.Taint, "escalate", fmt.Sprintf("stage%d:error", i+2), "")
+			return result, nil
+		}
+
+		result.Responses = append(result.Responses, stageResult)
+
+		if g.mode == Paranoid {
+			// Paranoid: run ALL stages regardless. Deny if ANY stage denies.
+			if !stageResult.Allowed && !stageResult.Escalate {
+				result.DenyReason = stageResult.Reason
+				result.Modification = stageResult.Correction
+				g.recordDecision(tier1Result.Taint, "paranoid", fmt.Sprintf("stage%d:%s", i+2, stageResult.Verdict), "")
 				return result, nil
 			}
+			req.PriorReasons = append(req.PriorReasons, stageResult.Reason)
+			continue
 		}
-		// Continue to tier 3 on error
+
+		// Default: stop on allow or deny; continue only on escalate.
+		if stageResult.Allowed {
+			result.Allowed = true
+			g.recordDecision(tier1Result.Taint, "escalate", fmt.Sprintf("stage%d:allow", i+2), "")
+			return result, nil
+		}
+
+		if !stageResult.Escalate {
+			result.DenyReason = stageResult.Reason
+			result.Modification = stageResult.Correction
+			g.recordDecision(tier1Result.Taint, "escalate", fmt.Sprintf("stage%d:%s", i+2, stageResult.Verdict), "")
+			return result, nil
+		}
+
+		req.PriorReasons = append(req.PriorReasons, stageResult.Reason)
 	}
 
-	// Tier 3: Full supervisor
-	if g.reviewer == nil {
-		// No supervisor configured - fail-safe deny
-		result.Allowed = false
-		result.DenyReason = "no security supervisor configured, denying high-risk action"
-		g.recordDecision(tier1Result.Taint, "escalate", "escalate", "denied:no_supervisor")
-		return result, nil
-	}
-
-	tier3Result, err := g.tier3Check(ctx, toolName, args, originalGoal, tier1Result)
-	if err != nil {
-		result.Allowed = false
-		result.DenyReason = fmt.Sprintf("tier 3 error: %v", err)
-		g.recordDecision(tier1Result.Taint, "escalate", "escalate", "error")
-		return result, nil
-	}
-
-	result.Tier3 = tier3Result
-	tier3Log := string(tier3Result.Verdict)
-
-	switch tier3Result.Verdict {
-	case VerdictAllow:
+	if g.mode == Paranoid {
+		// All stages passed in paranoid mode — allow
 		result.Allowed = true
-	case VerdictDeny:
-		result.Allowed = false
-		result.DenyReason = tier3Result.Reason
-	case VerdictModify:
-		result.Allowed = false
-		result.DenyReason = tier3Result.Reason
-		result.Modification = tier3Result.Correction
+		g.recordDecision(tier1Result.Taint, "paranoid", "all_stages_passed", "")
+		return result, nil
 	}
 
-	g.recordDecision(tier1Result.Taint, "escalate", "escalate", tier3Log)
-
+	// Default mode: all stages escalated with no final decision — fail-safe deny
+	result.DenyReason = "all stages escalated without verdict, denying"
+	g.recordDecision(tier1Result.Taint, "escalate", "exhausted", "")
 	return result, nil
 }
 
@@ -332,29 +334,6 @@ func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
-func (g *Guard) tier2Check(ctx context.Context, toolName string, args map[string]interface{}, taint *Taint) (*ScreenResult, error) {
-	return g.screener(ctx, ScreenRequest{
-		ToolName:       toolName,
-		ToolArgs:       args,
-		UntrustedBlock: taint,
-	})
-}
-
-func (g *Guard) tier3Check(ctx context.Context, toolName string, args map[string]interface{}, originalGoal string, tier1 *Tier1Result) (*ReviewResult, error) {
-	tier2Reason := "skipped"
-	if g.mode == Paranoid {
-		tier2Reason = "paranoid mode"
-	}
-
-	return g.reviewer(ctx, ReviewRequest{
-		ToolName:        toolName,
-		ToolArgs:        args,
-		UntrustedTaints: g.getUntrustedTaints(),
-		OriginalGoal:    originalGoal,
-		Tier1Flags:      tier1.Reasons,
-		Tier2Reason:     tier2Reason,
-	})
-}
 
 func (g *Guard) recordDecision(taint *Taint, tier1, tier2, tier3 string) {
 	if taint == nil {
@@ -370,9 +349,8 @@ type Result struct {
 	DenyReason   string
 	Modification string
 	Tier1        *Tier1Result
-	Tier2        *ScreenResult
-	Tier3        *ReviewResult
-	TaintLineage []*TaintLineageNode // Taint dependency tree for related taints
+	Responses  []*Response       // results from configurable tiers (in order)
+	TaintLineage []*TaintLineageNode // taint dependency tree for related taints
 }
 
 // AuditTrail returns the audit trail for export.

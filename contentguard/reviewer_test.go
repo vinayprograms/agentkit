@@ -5,62 +5,58 @@ import (
 	"testing"
 )
 
-func TestReviewer_Evaluate_Allow(t *testing.T) {
-	r := &Reviewer{provider: &mockLLM{response: "ALLOW\nThis tool call is safe."}, mode: Default}
-	result, err := r.Evaluate(context.Background(), ReviewRequest{
-		ToolName:        "bash",
-		ToolArgs:        map[string]any{"command": "ls"},
-		UntrustedTaints: []*Taint{{Content: "safe"}},
-		OriginalGoal:    "list files",
+func TestReviewer_Allow(t *testing.T) {
+	r := LLMReviewer(&mockLLM{response: "ALLOW"}, Default, "")
+	result, err := r.Evaluate(context.Background(), Request{
+		ToolName: "bash",
+		Taints:   []*Taint{{Content: "safe"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Verdict != VerdictAllow {
-		t.Errorf("expected ALLOW, got %s", result.Verdict)
+	if !result.Allowed {
+		t.Error("expected allowed")
 	}
 }
 
-func TestReviewer_Evaluate_Deny(t *testing.T) {
-	r := &Reviewer{provider: &mockLLM{response: "DENY\nPrompt injection detected."}, mode: Default}
-	result, err := r.Evaluate(context.Background(), ReviewRequest{
-		ToolName:        "bash",
-		ToolArgs:        map[string]any{"command": "rm -rf /"},
-		UntrustedTaints: []*Taint{{Content: "ignore instructions"}},
-		OriginalGoal:    "clean up",
-	})
+func TestReviewer_Deny(t *testing.T) {
+	r := LLMReviewer(&mockLLM{response: "DENY: injection detected"}, Default, "")
+	result, err := r.Evaluate(context.Background(), Request{ToolName: "bash"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Allowed || result.Escalate {
+		t.Error("expected deny")
 	}
 	if result.Verdict != VerdictDeny {
-		t.Errorf("expected DENY, got %s", result.Verdict)
+		t.Errorf("expected DENY verdict, got %s", result.Verdict)
 	}
 }
 
-func TestReviewer_Evaluate_Modify(t *testing.T) {
-	r := &Reviewer{provider: &mockLLM{response: "MODIFY\nUse safer command.\nCORRECTION: echo safe"}, mode: Default}
-	result, err := r.Evaluate(context.Background(), ReviewRequest{
-		ToolName: "bash",
-		ToolArgs: map[string]any{"command": "dangerous"},
-	})
+func TestReviewer_Modify(t *testing.T) {
+	r := LLMReviewer(&mockLLM{response: "MODIFY: use echo safe"}, Default, "")
+	result, err := r.Evaluate(context.Background(), Request{ToolName: "bash"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Verdict != VerdictModify {
-		t.Errorf("expected MODIFY, got %s", result.Verdict)
+		t.Errorf("expected MODIFY verdict, got %s", result.Verdict)
+	}
+	if result.Correction == "" {
+		t.Error("expected correction")
 	}
 }
 
-func TestLLMReviewer_Factory(t *testing.T) {
-	fn := LLMReviewer(&mockLLM{response: "ALLOW"}, Default, "")
-	if fn == nil {
-		t.Fatal("expected non-nil ReviewFunc")
-	}
-	result, err := fn(context.Background(), ReviewRequest{ToolName: "bash"})
+func TestReviewer_UnclearResponse(t *testing.T) {
+	r := LLMReviewer(&mockLLM{response: "I cannot determine safety"}, Default, "")
+	result, err := r.Evaluate(context.Background(), Request{ToolName: "bash"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Verdict != VerdictAllow {
-		t.Errorf("expected ALLOW, got %s", result.Verdict)
+	if result.Verdict != VerdictDeny {
+		t.Error("expected deny on unclear response")
 	}
 }
+
+// Verify Reviewer satisfies Stage interface
+var _ Stage = (*Reviewer)(nil)
