@@ -5,7 +5,7 @@ import (
 )
 
 func TestGetTaintLineage_Simple(t *testing.T) {
-	g, err := New(Config{Mode: Default}, "test-session")
+	g, err := New(nil, Escalatory(), nil, "test-session")
 	if err != nil {
 		t.Fatalf("failed to create guard: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestGetTaintLineage_Simple(t *testing.T) {
 }
 
 func TestGetTaintLineage_WithParents(t *testing.T) {
-	g, err := New(Config{Mode: Default}, "test-session")
+	g, err := New(nil, Escalatory(), nil, "test-session")
 	if err != nil {
 		t.Fatalf("failed to create verifier: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestGetTaintLineage_WithParents(t *testing.T) {
 }
 
 func TestGetTaintLineage_DeepChain(t *testing.T) {
-	g, err := New(Config{Mode: Default}, "test-session")
+	g, err := New(nil, Escalatory(), nil, "test-session")
 	if err != nil {
 		t.Fatalf("failed to create verifier: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestGetTaintLineage_DeepChain(t *testing.T) {
 }
 
 func TestGetTaintLineage_NotFound(t *testing.T) {
-	g, err := New(Config{Mode: Default}, "test-session")
+	g, err := New(nil, Escalatory(), nil, "test-session")
 	if err != nil {
 		t.Fatalf("failed to create verifier: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestGetTaintLineage_NotFound(t *testing.T) {
 }
 
 func TestGetCurrentUntrustedBlockIDs(t *testing.T) {
-	g, err := New(Config{Mode: Default}, "test-session")
+	g, err := New(nil, Escalatory(), nil, "test-session")
 	if err != nil {
 		t.Fatalf("failed to create verifier: %v", err)
 	}

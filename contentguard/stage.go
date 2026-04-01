@@ -2,31 +2,43 @@ package contentguard
 
 import "context"
 
-// Tier is a stage in the content guard verification pipeline.
-// Each tier evaluates a tool call and decides to allow, deny, or escalate.
+// Verdict is the outcome of a stage evaluation or the guard's final decision.
+type Verdict string
+
+const (
+	Allow    Verdict = "allow"
+	Deny     Verdict = "deny"
+	Modify   Verdict = "modify"
+	Escalate Verdict = "escalate" // only in Finding, never in Result
+)
+
+// Stage is one step in the verification pipeline.
 type Stage interface {
-	Evaluate(ctx context.Context, req Request) (*Response, error)
+	Evaluate(ctx context.Context, req Request) (*Finding, error)
 }
 
-// Request carries all information a tier needs to make a decision.
+// Finding is what one stage concluded about a tool call.
+type Finding struct {
+	Verdict   Verdict
+	Rationale string // why (deny), what instead (modify), why unsure (escalate)
+	Source    string // which stage produced this
+}
+
+// Request carries all information stages need to make a decision.
 type Request struct {
-	ToolName     string
-	ToolArgs     map[string]any
-	Taints       []*Taint // all untrusted taints in context
-	OriginalGoal string
-	PriorReasons []string // accumulated reasons from tier1 + earlier tiers
+	ToolName      string
+	ToolArgs      map[string]any
+	Taints        []*Taint
+	OriginalGoal  string
+	PriorFindings []*Finding        // what earlier stages found
+	Exceptions    map[string]string // guard-level exceptions (e.g., research scope)
 }
 
-// Response is the outcome of a tier evaluation.
-type Response struct {
-	Allowed    bool    // tool call is safe — stop pipeline
-	Escalate   bool    // pass to next tier for deeper analysis
-	Reason     string  // explanation (for deny/escalate)
-	Verdict    Verdict // for audit trail
-	Correction string  // suggested safer alternative (for modify verdicts)
-
-	// Token usage (for LLM-backed tiers)
-	InputTokens  int
-	OutputTokens int
-	LatencyMs    int64
+// Result is the guard's final answer on a tool call.
+type Result struct {
+	Verdict      Verdict
+	Rationale    string
+	ToolName     string
+	Findings     []*Finding          // all findings, deterministic first
+	TaintLineage []*TaintLineageNode
 }

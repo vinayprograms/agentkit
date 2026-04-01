@@ -1,71 +1,87 @@
 # contentguard
 
-Content trust verification for agent tool calls. Protects against prompt injection by tracking untrusted content and verifying tool calls through a tiered security pipeline.
+Content trust verification for agent tool calls. Protects against prompt injection by tracking untrusted content and verifying tool calls through a staged pipeline.
 
 ## Usage
 
 ```go
-guard, err := contentguard.New(contentguard.Config{
-    Mode:     contentguard.Default,
-    Screener: contentguard.LLMScreener(cheapModel, ""),
-    Reviewer: contentguard.LLMReviewer(capableModel, contentguard.Default, ""),
-}, sessionID)
+guard, err := contentguard.New(
+    []contentguard.Stage{
+        contentguard.NewScreener(cheapModel),
+        contentguard.NewReviewer(capableModel),
+    },
+    contentguard.Escalatory(),
+    map[string]string{"scope": "authorized pentest of lab network"},
+    sessionID,
+)
 defer guard.Close()
 
 // Track content as it enters the system
 guard.Ingest(contentguard.Untrusted, contentguard.Data, true, html, "web_fetch")
 
-// Before executing a tool call, check if it's safe
+// Verify a tool call
 result, err := guard.Check(ctx, "bash", args, originalGoal)
-if !result.Allowed {
-    fmt.Println("Blocked:", result.DenyReason)
+switch result.Verdict {
+case contentguard.Allow:  // proceed
+case contentguard.Deny:   // blocked — result.Rationale explains why
+case contentguard.Modify: // blocked — result.Rationale has the suggested alternative
 }
 ```
 
 ## How It Works
 
-The guard runs a 3-tier pipeline on every high-risk tool call:
+1. **Deterministic check** (built-in, always runs) — detects untrusted content, pattern matches, keyword scanning
+2. **Configurable stages** — run through the pipeline per the chosen workflow
 
-1. **Tier 1 (deterministic)** — checks if untrusted content exists in context + pattern/keyword/encoding detection
-2. **Tier 2 (screener)** — quick LLM check: "is this tool call influenced by untrusted content?" Skipped in paranoid mode.
-3. **Tier 3 (reviewer)** — full LLM review with ALLOW/DENY/MODIFY verdict
+## Workflows
 
-Low-risk tools skip the pipeline. If no untrusted content is tracked, all tools pass.
-
-## Modes
-
-| Mode | Behavior |
+| Workflow | Behavior |
 |---|---|
-| `Default` | Full 3-tier pipeline |
-| `Paranoid` | Skips Tier 2, goes straight to Tier 3 |
-| `Research` | Adds security research scope context to LLM prompts |
+| `Escalatory()` | Stop on first allow/deny/modify. Only escalate passes to next stage. |
+| `Paranoid()` | ALL stages must run. Deny if ANY denies. Allow only if all pass. |
 
-## Pluggable Screener and Reviewer
+## Stages
 
-`ScreenFunc` and `ReviewFunc` are function types — swap in any implementation:
+Stages implement the `Stage` interface:
 
 ```go
-// LLM-backed (default)
-contentguard.LLMScreener(model, scope)
-contentguard.LLMReviewer(model, mode, scope)
-
-// Custom (rule engine, human approval, test stub)
-customScreener := func(ctx context.Context, req contentguard.ScreenRequest) (*contentguard.ScreenResult, error) {
-    return &contentguard.ScreenResult{Suspicious: false}, nil
+type Stage interface {
+    Evaluate(ctx context.Context, req Request) (*Finding, error)
 }
 ```
+
+Built-in stages:
+- `NewScreener(model)` — quick LLM triage (YES/NO)
+- `NewReviewer(model)` — full LLM review (ALLOW/DENY/MODIFY)
+
+Custom stages (rule engine, human approval, etc.) implement the same interface.
+
+## Exceptions
+
+Exceptions flow from the guard into every stage's `Request.Exceptions`:
+
+```go
+contentguard.New(stages, workflow,
+    map[string]string{"scope": "authorized pentest"},
+    sessionID,
+)
+```
+
+Stages read exceptions to adjust behavior (e.g., research scope modifies LLM prompts).
+
+## Verdicts
+
+| Verdict | Meaning |
+|---|---|
+| `Allow` | Tool call is safe |
+| `Deny` | Tool call is blocked |
+| `Modify` | Tool call needs changes (rationale has the suggestion) |
+| `Escalate` | Stage can't decide, pass to next (only in findings, never in final result) |
 
 ## Trust Levels
 
 | Level | Meaning |
 |---|---|
 | `Trusted` | Framework-generated (system prompts) |
-| `Vetted` | Human-authored (goals, signed packages) |
-| `Untrusted` | External content (tool results, web fetches) |
-
-## Content Kinds
-
-| Kind | Meaning |
-|---|---|
-| `Instruction` | Executable instructions |
-| `Data` | Data content (untrusted content is always Data) |
+| `Vetted` | Human-authored (goals) |
+| `Untrusted` | External content (web fetches, tool results) |
