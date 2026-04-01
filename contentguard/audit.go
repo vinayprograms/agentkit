@@ -46,77 +46,64 @@ func (a *AuditTrail) SessionID() string {
 
 // Record represents a signed security decision.
 type Record struct {
-	TaintID     string    `json:"taint_id"`
 	SessionID   string    `json:"session_id"`
 	Timestamp   time.Time `json:"timestamp"`
-	ContentHash string    `json:"content_hash"`
-	Trust       string    `json:"trust"`
-	Type        string    `json:"type"`
-	Tier1Result string    `json:"tier1_result"`
-	Tier2Result string    `json:"tier2_result"`
-	Tier3Result string    `json:"tier3_result"`
+	ToolName    string    `json:"tool_name"`
+	Verdict     string    `json:"verdict"`
+	Rationale   string    `json:"rationale"`
+	Findings    []string  `json:"findings"` // summary of each stage finding
+	ContentHash string    `json:"content_hash,omitempty"`
 	Signature   string    `json:"signature,omitempty"`
 }
 
-// RecordDecision creates and signs a security decision record.
-func (a *AuditTrail) RecordDecision(taint *Taint, tier1, tier2, tier3 string) *Record {
-	record := &Record{
-		TaintID:     taint.ID,
-		SessionID:   a.sessionID,
-		Timestamp:   time.Now().UTC(),
-		ContentHash: hashBase64(taint.Content),
-		Trust:       string(taint.Trust),
-		Type:        string(taint.Type),
-		Tier1Result: tier1,
-		Tier2Result: tier2,
-		Tier3Result: tier3,
+// RecordDecision creates and signs a decision record.
+func (a *AuditTrail) RecordDecision(result *Result) *Record {
+	var findings []string
+	for _, f := range result.Findings {
+		findings = append(findings, fmt.Sprintf("[%s] %s: %s", f.Verdict, f.Source, f.Rationale))
 	}
 
-	// Sign the record
-	record.Signature = a.signRecord(record)
+	record := &Record{
+		SessionID: a.sessionID,
+		Timestamp: time.Now().UTC(),
+		ToolName:  result.ToolName,
+		Verdict:   string(result.Verdict),
+		Rationale: result.Rationale,
+		Findings:  findings,
+	}
+
+	record.Signature = signRecord(a.privateKey, record)
 	a.records = append(a.records, record)
 
 	return record
 }
 
-// signRecord creates an Ed25519 signature for the record.
-func (a *AuditTrail) signRecord(record *Record) string {
-	// Create canonical JSON (without signature field)
-	canonical := a.canonicalJSON(record)
-
-	// Hash with SHA-256
+func signRecord(key ed25519.PrivateKey, record *Record) string {
+	canonical := canonicalJSON(record)
 	hash := sha256.Sum256(canonical)
-
-	// Sign
-	sig := ed25519.Sign(a.privateKey, hash[:])
-
+	sig := ed25519.Sign(key, hash[:])
 	return base64.StdEncoding.EncodeToString(sig)
 }
 
-// canonicalJSON creates a deterministic JSON representation.
-// Fields are sorted alphabetically, no extra whitespace.
-func (a *AuditTrail) canonicalJSON(record *Record) []byte {
-	// Create map for canonical ordering
-	m := map[string]interface{}{
-		"taint_id":     record.TaintID,
-		"content_hash": record.ContentHash,
-		"session_id":   record.SessionID,
-		"tier1_result": record.Tier1Result,
-		"tier2_result": record.Tier2Result,
-		"tier3_result": record.Tier3Result,
-		"timestamp":    record.Timestamp.Format(time.RFC3339Nano),
-		"trust":        record.Trust,
-		"type":         record.Type,
+func canonicalJSON(record *Record) []byte {
+	m := map[string]any{
+		"session_id": record.SessionID,
+		"timestamp":  record.Timestamp.Format(time.RFC3339Nano),
+		"tool_name":  record.ToolName,
+		"verdict":    record.Verdict,
+		"rationale":  record.Rationale,
+		"findings":   record.Findings,
+	}
+	if record.ContentHash != "" {
+		m["content_hash"] = record.ContentHash
 	}
 
-	// Sort keys
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// Build canonical JSON manually for consistency
 	result := "{"
 	for i, k := range keys {
 		if i > 0 {
@@ -130,15 +117,13 @@ func (a *AuditTrail) canonicalJSON(record *Record) []byte {
 	return []byte(result)
 }
 
-// hashBase64 creates a SHA-256 hash of content.
 func hashBase64(content string) string {
 	hash := sha256.Sum256([]byte(content))
 	return base64.StdEncoding.EncodeToString(hash[:])
 }
 
-// VerifyRecord verifies a security record's signature.
+// VerifyRecord verifies a record's signature against the given public key.
 func VerifyRecord(record *Record, publicKeyBase64 string) (bool, error) {
-	// Decode public key
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyBase64)
 	if err != nil {
 		return false, fmt.Errorf("invalid public key: %w", err)
@@ -148,52 +133,41 @@ func VerifyRecord(record *Record, publicKeyBase64 string) (bool, error) {
 		return false, fmt.Errorf("invalid public key size: %d", len(pubKeyBytes))
 	}
 
-	publicKey := ed25519.PublicKey(pubKeyBytes)
-
-	// Decode signature
 	sigBytes, err := base64.StdEncoding.DecodeString(record.Signature)
 	if err != nil {
 		return false, fmt.Errorf("invalid signature: %w", err)
 	}
 
-	// Recreate canonical JSON
-	trail := &AuditTrail{} // Just for the method
-	canonical := trail.canonicalJSON(record)
-
-	// Hash
+	canonical := canonicalJSON(record)
 	hash := sha256.Sum256(canonical)
 
-	// Verify
-	return ed25519.Verify(publicKey, hash[:], sigBytes), nil
+	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), hash[:], sigBytes), nil
 }
 
-// Records returns all recorded security decisions.
+// Records returns all recorded decisions.
 func (a *AuditTrail) Records() []*Record {
 	return a.records
 }
 
 // SessionLog represents a complete session security log.
 type SessionLog struct {
-	SessionID       string            `json:"session_id"`
-	StartedAt       time.Time         `json:"started_at"`
-	PublicKey       string            `json:"public_key"`
-	SecurityMode    string            `json:"security_mode"`
-	Records []*Record `json:"security_records"`
+	SessionID string    `json:"session_id"`
+	StartedAt time.Time `json:"started_at"`
+	PublicKey  string    `json:"public_key"`
+	Records   []*Record `json:"records"`
 }
 
 // ExportLog exports the audit trail as a session log.
-func (a *AuditTrail) ExportLog(securityMode string) *SessionLog {
+func (a *AuditTrail) ExportLog() *SessionLog {
 	return &SessionLog{
-		SessionID:       a.sessionID,
-		StartedAt:       time.Now().UTC(),
-		PublicKey:       a.PublicKey(),
-		SecurityMode:    securityMode,
-		Records: a.records,
+		SessionID: a.sessionID,
+		StartedAt: time.Now().UTC(),
+		PublicKey:  a.PublicKey(),
+		Records:   a.records,
 	}
 }
 
-// Destroy zeros out the private key from memory.
-// Call this when the session ends.
+// Close zeros out the private key from memory.
 func (a *AuditTrail) Close() {
 	for i := range a.privateKey {
 		a.privateKey[i] = 0

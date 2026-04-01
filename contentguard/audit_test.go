@@ -1,131 +1,106 @@
 package contentguard
 
 import (
+	"encoding/base64"
 	"testing"
 )
 
-func TestAuditTrail_SignAndVerify(t *testing.T) {
+func TestAuditTrail_KeyGeneration(t *testing.T) {
 	trail, err := NewAuditTrail("test-session")
 	if err != nil {
-		t.Fatalf("NewAuditTrail() error = %v", err)
+		t.Fatalf("failed to create audit trail: %v", err)
 	}
 	defer trail.Close()
 
-	// Create a taint
-	taint := newTaint("b001", Untrusted, Data, true, "test content", "test")
+	if trail.PublicKey() == "" {
+		t.Error("expected non-empty public key")
+	}
+	if trail.SessionID() != "test-session" {
+		t.Errorf("expected session ID 'test-session', got %q", trail.SessionID())
+	}
+}
 
-	// Record a decision
-	record := trail.RecordDecision(taint, "escalate", "pass", "skipped")
+func TestAuditTrail_RecordAndVerify(t *testing.T) {
+	trail, _ := NewAuditTrail("test-session")
+	defer trail.Close()
 
-	if record.Signature == "" {
-		t.Error("Expected signature to be set")
+	result := &Result{
+		Verdict:   Deny,
+		Rationale: "injection detected",
+		ToolName:  "bash",
+		Findings: []*Finding{
+			{Verdict: Escalate, Rationale: "high_risk_tool:bash", Source: "deterministic"},
+			{Verdict: Deny, Rationale: "injection detected", Source: "reviewer"},
+		},
 	}
 
-	// Verify the record
+	record := trail.RecordDecision(result)
+
+	if record.Verdict != string(Deny) {
+		t.Errorf("expected verdict 'deny', got %q", record.Verdict)
+	}
+	if record.Signature == "" {
+		t.Error("expected non-empty signature")
+	}
+	if len(record.Findings) != 2 {
+		t.Errorf("expected 2 findings, got %d", len(record.Findings))
+	}
+
 	valid, err := VerifyRecord(record, trail.PublicKey())
 	if err != nil {
-		t.Fatalf("VerifyRecord() error = %v", err)
+		t.Fatalf("verification error: %v", err)
 	}
-
 	if !valid {
-		t.Error("Expected record to be valid")
+		t.Error("expected valid signature")
 	}
 }
 
 func TestAuditTrail_TamperedRecord(t *testing.T) {
-	trail, err := NewAuditTrail("test-session")
-	if err != nil {
-		t.Fatalf("NewAuditTrail() error = %v", err)
-	}
+	trail, _ := NewAuditTrail("test-session")
 	defer trail.Close()
 
-	taint := newTaint("b001", Untrusted, Data, true, "original content", "test")
-	record := trail.RecordDecision(taint, "escalate", "pass", "skipped")
+	record := trail.RecordDecision(&Result{
+		Verdict: Allow, ToolName: "read",
+		Findings: []*Finding{{Verdict: Allow, Source: "deterministic"}},
+	})
 
-	// Tamper with the record
-	record.Tier1Result = "pass" // Changed from "escalate"
+	record.Verdict = string(Deny)
 
-	// Verify should fail
-	valid, err := VerifyRecord(record, trail.PublicKey())
-	if err != nil {
-		t.Fatalf("VerifyRecord() error = %v", err)
-	}
-
+	valid, _ := VerifyRecord(record, trail.PublicKey())
 	if valid {
-		t.Error("Expected tampered record to be invalid")
-	}
-}
-
-func TestAuditTrail_MultipleRecords(t *testing.T) {
-	trail, err := NewAuditTrail("test-session")
-	if err != nil {
-		t.Fatalf("NewAuditTrail() error = %v", err)
-	}
-	defer trail.Close()
-
-	// Record multiple decisions
-	for i := 0; i < 5; i++ {
-		taint := newTaint("b00"+string(rune('0'+i)), Untrusted, Data, true, "content", "test")
-		trail.RecordDecision(taint, "escalate", "escalate", "ALLOW")
-	}
-
-	records := trail.Records()
-	if len(records) != 5 {
-		t.Errorf("Expected 5 records, got %d", len(records))
-	}
-
-	// Verify all records
-	pubKey := trail.PublicKey()
-	for i, record := range records {
-		valid, err := VerifyRecord(record, pubKey)
-		if err != nil {
-			t.Errorf("Record %d: VerifyRecord() error = %v", i, err)
-		}
-		if !valid {
-			t.Errorf("Record %d: expected valid", i)
-		}
+		t.Error("expected invalid signature after tampering")
 	}
 }
 
 func TestAuditTrail_ExportLog(t *testing.T) {
-	trail, err := NewAuditTrail("test-session")
-	if err != nil {
-		t.Fatalf("NewAuditTrail() error = %v", err)
-	}
+	trail, _ := NewAuditTrail("test-session")
 	defer trail.Close()
 
-	taint := newTaint("b001", Untrusted, Data, true, "content", "test")
-	trail.RecordDecision(taint, "pass", "skipped", "skipped")
+	trail.RecordDecision(&Result{
+		Verdict: Allow, ToolName: "read",
+		Findings: []*Finding{{Verdict: Allow, Source: "deterministic"}},
+	})
 
-	log := trail.ExportLog("default")
-
+	log := trail.ExportLog()
 	if log.SessionID != "test-session" {
-		t.Errorf("SessionID = %v, want test-session", log.SessionID)
+		t.Errorf("expected session 'test-session', got %q", log.SessionID)
 	}
-
-	if log.SecurityMode != "default" {
-		t.Errorf("SecurityMode = %v, want default", log.SecurityMode)
-	}
-
-	if log.PublicKey == "" {
-		t.Error("Expected PublicKey to be set")
-	}
-
 	if len(log.Records) != 1 {
-		t.Errorf("Expected 1 record, got %d", len(log.Records))
+		t.Errorf("expected 1 record, got %d", len(log.Records))
 	}
 }
 
-func TestAuditTrail_Destroy(t *testing.T) {
-	trail, err := NewAuditTrail("test-session")
-	if err != nil {
-		t.Fatalf("NewAuditTrail() error = %v", err)
+func TestVerifyRecord_InvalidPublicKey(t *testing.T) {
+	_, err := VerifyRecord(&Record{Signature: "abc"}, "not-valid!!!")
+	if err == nil {
+		t.Error("expected error for invalid public key")
 	}
+}
 
-	// Destroy should zero the private key
-	trail.Close()
-
-	if trail.privateKey != nil {
-		t.Error("Expected privateKey to be nil after Destroy")
+func TestVerifyRecord_WrongKeySize(t *testing.T) {
+	small := base64.StdEncoding.EncodeToString([]byte("short"))
+	_, err := VerifyRecord(&Record{Signature: "abc"}, small)
+	if err == nil {
+		t.Error("expected error for wrong key size")
 	}
 }

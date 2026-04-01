@@ -100,6 +100,9 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 		result.TaintLineage = g.TaintLineageFor(untrusted)
 	}
 
+	// Record the decision in the audit trail
+	g.audit.RecordDecision(result)
+
 	return result, nil
 }
 
