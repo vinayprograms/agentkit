@@ -43,19 +43,19 @@ func (s *Screener) Evaluate(ctx context.Context, req Request) (*Finding, error) 
 func (s *Screener) buildPrompt(req Request) string {
 	var sb strings.Builder
 
-	if scope, ok := req.Exceptions["scope"]; ok && scope != "" {
+	if scope, ok := req.Context["scope"]; ok && scope != "" {
 		fmt.Fprintf(&sb, "SECURITY RESEARCH CONTEXT:\nScope: \"%s\"\n\n", scope)
 	}
 
 	fmt.Fprintf(&sb, "TOOL CALL:\nTool: %s\nArguments: %v\n\n", req.ToolName, req.ToolArgs)
 
 	sb.WriteString("UNTRUSTED CONTENT:\n")
-	for _, t := range req.Taints {
-		content := t.Content
-		if len(content) > 2000 {
-			content = content[:2000] + "\n... [truncated]"
+	for _, c := range req.Untrusted {
+		text := c.Text
+		if len(text) > 2000 {
+			text = text[:2000] + "\n... [truncated]"
 		}
-		sb.WriteString(content)
+		sb.WriteString(text)
 		sb.WriteString("\n")
 	}
 

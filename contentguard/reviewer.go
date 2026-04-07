@@ -24,7 +24,7 @@ func (r *Reviewer) Evaluate(ctx context.Context, req Request) (*Finding, error) 
 	prompt := r.buildPrompt(req)
 
 	systemPrompt := reviewerSystemPrompt
-	if scope, ok := req.Exceptions["scope"]; ok && scope != "" {
+	if scope, ok := req.Context["scope"]; ok && scope != "" {
 		systemPrompt = buildResearchSystemPrompt(scope)
 	}
 
@@ -72,12 +72,12 @@ func (r *Reviewer) buildPrompt(req Request) string {
 	}
 
 	sb.WriteString("UNTRUSTED CONTENT:\n")
-	for i, t := range req.Taints {
-		content := t.Content
-		if len(content) > 1000 {
-			content = content[:1000] + "\n... [truncated]"
+	for i, c := range req.Untrusted {
+		text := c.Text
+		if len(text) > 1000 {
+			text = text[:1000] + "\n... [truncated]"
 		}
-		fmt.Fprintf(&sb, "--- Taint %d (source: %s) ---\n%s\n", i+1, t.Source, content)
+		fmt.Fprintf(&sb, "--- Content %d (source: %s) ---\n%s\n", i+1, c.Source, text)
 	}
 	sb.WriteString("\nRespond: ALLOW, DENY: <reason>, or MODIFY: <safer alternative>\n")
 

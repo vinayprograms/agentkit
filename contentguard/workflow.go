@@ -7,7 +7,7 @@ import (
 
 // Workflow defines how stages are executed in the verification pipeline.
 type Workflow interface {
-	Execute(ctx context.Context, stages []Stage, req Request, exceptions map[string]string) *Result
+	Execute(ctx context.Context, stages []Stage, req Request) *Result
 }
 
 // Escalatory returns a Workflow that stops on the first allow/deny/modify verdict.
@@ -20,8 +20,7 @@ func Paranoid() Workflow { return paranoid{} }
 
 type escalatory struct{}
 
-func (escalatory) Execute(ctx context.Context, stages []Stage, req Request, exceptions map[string]string) *Result {
-	req.Exceptions = exceptions
+func (escalatory) Execute(ctx context.Context, stages []Stage, req Request) *Result {
 	result := &Result{Verdict: Deny, ToolName: req.ToolName}
 
 	for _, stage := range stages {
@@ -64,8 +63,7 @@ func (escalatory) Execute(ctx context.Context, stages []Stage, req Request, exce
 
 type paranoid struct{}
 
-func (paranoid) Execute(ctx context.Context, stages []Stage, req Request, exceptions map[string]string) *Result {
-	req.Exceptions = exceptions
+func (paranoid) Execute(ctx context.Context, stages []Stage, req Request) *Result {
 	result := &Result{Verdict: Allow, ToolName: req.ToolName}
 
 	for _, stage := range stages {

@@ -9,52 +9,67 @@ import (
 	"github.com/vinayprograms/agentkit/logging"
 )
 
+// Config holds optional configuration for the guard.
+// Use Defaults() for zero-value config.
+type Config struct {
+	Context  map[string]string // flows to stages (e.g., research scope)
+	Patterns []string          // custom "name:regex" injection patterns
+	Keywords []string          // custom sensitive keywords
+	Skip     []string          // tools that skip verification
+}
+
+// Defaults returns a zero-value Config.
+func Defaults() Config { return Config{} }
+
 // Guard verifies tool calls against ingested content through a staged pipeline.
 type Guard struct {
 	stages     []Stage
 	workflow   Workflow
-	exceptions map[string]string
-	audit      *AuditTrail
+	context map[string]string
 	logger     *logging.Logger
 
-	taints        []*Taint
-	taintsMu      sync.RWMutex
-	taintCounter  int
+	patterns []namedPattern
+	keywords []string
+	skip     map[string]bool
+
+	tracked       []*Content
+	contentByID   map[string]*Content
+	mu            sync.RWMutex
+	contentCount  int
 	contentHashes map[string]string
 }
 
 // New creates a content guard.
-func New(stages []Stage, workflow Workflow, exceptions map[string]string, sessionID string) (*Guard, error) {
-	audit, err := NewAuditTrail(sessionID)
+func New(stages []Stage, workflow Workflow, cfg Config) (*Guard, error) {
+	allPatterns, err := buildPatterns(cfg.Patterns)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create audit trail: %w", err)
+		return nil, fmt.Errorf("contentguard: %w", err)
+	}
+
+	skip := make(map[string]bool, len(cfg.Skip))
+	for _, t := range cfg.Skip {
+		skip[t] = true
 	}
 
 	logger := logging.New().WithComponent("contentguard")
 
 	logger.Info("content guard initialized", map[string]interface{}{
-		"stages":     len(stages),
-		"exceptions": len(exceptions),
-		"session_id": sessionID,
+		"stages":  len(stages),
+		"context": len(cfg.Context),
 	})
 
 	return &Guard{
 		stages:        stages,
 		workflow:      workflow,
-		exceptions:    exceptions,
-		audit:         audit,
+		context:       cfg.Context,
 		logger:        logger,
-		taints:        make([]*Taint, 0),
+		patterns:      allPatterns,
+		keywords:      buildKeywords(cfg.Keywords),
+		skip:          skip,
+		tracked:       make([]*Content, 0),
+		contentByID:   make(map[string]*Content),
 		contentHashes: make(map[string]string),
 	}, nil
-}
-
-// HighRiskTools is the set of tools that require verification.
-var HighRiskTools = map[string]bool{
-	"bash":        true,
-	"write":       true,
-	"web_fetch":   true,
-	"spawn_agent": true,
 }
 
 // Check runs the verification pipeline for a tool call.
@@ -83,59 +98,51 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 	req := Request{
 		ToolName:      toolName,
 		ToolArgs:      args,
-		Taints:        g.getUntrustedTaints(),
+		Untrusted:     g.getUntrusted(),
 		OriginalGoal:  originalGoal,
 		PriorFindings: []*Finding{deterministicFinding},
+		Context:       g.context,
 	}
 
-	result := g.workflow.Execute(ctx, g.stages, req, g.exceptions)
+	result := g.workflow.Execute(ctx, g.stages, req)
 
 	// Prepend deterministic finding
 	result.Findings = append([]*Finding{deterministicFinding}, result.Findings...)
 	result.ToolName = toolName
-
-	// Build taint lineage
-	untrusted := g.getUntrustedTaints()
-	if len(untrusted) > 0 {
-		result.TaintLineage = g.TaintLineageFor(untrusted)
-	}
-
-	// Record the decision in the audit trail
-	g.audit.RecordDecision(result)
 
 	return result, nil
 }
 
 // deterministicCheck performs fast pattern-based checks.
 func (g *Guard) deterministicCheck(toolName string, args map[string]any) *Finding {
-	untrusted := g.getUntrustedTaints()
+	untrusted := g.getUntrusted()
 	if len(untrusted) == 0 {
 		return &Finding{Verdict: Allow, Rationale: "no untrusted content", Source: "deterministic"}
 	}
 
-	if !HighRiskTools[toolName] {
-		return &Finding{Verdict: Allow, Rationale: fmt.Sprintf("low-risk tool: %s", toolName), Source: "deterministic"}
+	if g.skip[toolName] {
+		return &Finding{Verdict: Allow, Rationale: fmt.Sprintf("skipped tool: %s", toolName), Source: "deterministic"}
 	}
 
-	// High-risk tool + untrusted content → check patterns
+	// Untrusted content present → check patterns
 	var reasons []string
-	reasons = append(reasons, "high_risk_tool:"+toolName)
+	reasons = append(reasons, "tool:"+toolName)
 
 	argsStr := fmt.Sprintf("%v", args)
 
-	for _, taint := range untrusted {
-		for _, p := range DetectSuspiciousPatterns(taint.Content) {
-			reasons = append(reasons, "pattern:"+p.Name)
+	for _, c := range untrusted {
+		for _, name := range g.detectSuspiciousPatterns(c.Text) {
+			reasons = append(reasons, "pattern:"+name)
 		}
-		for _, kw := range DetectSensitiveKeywords(taint.Content) {
-			reasons = append(reasons, "keyword:"+kw.Keyword)
+		for _, kw := range g.detectSensitiveKeywords(c.Text) {
+			reasons = append(reasons, "keyword:"+kw)
 		}
-		if HasEncodedContent(taint.Content) {
+		if hasEncodedContent(c.Text) {
 			reasons = append(reasons, "encoded_content")
 		}
 	}
 
-	if HasSuspiciousPatterns(argsStr) {
+	if len(g.detectSuspiciousPatterns(argsStr)) > 0 {
 		reasons = append(reasons, "suspicious_args")
 	}
 
@@ -146,23 +153,16 @@ func (g *Guard) deterministicCheck(toolName string, args map[string]any) *Findin
 	}
 }
 
-// AuditTrail returns the audit trail for export.
-func (g *Guard) AuditTrail() *AuditTrail {
-	return g.audit
-}
-
 // Close cleans up resources.
 func (g *Guard) Close() {
-	if g.audit != nil {
-		g.audit.Close()
-	}
 }
 
-// ClearContext removes all taints.
+// ClearContext removes all tracked content.
 func (g *Guard) ClearContext() {
-	g.taintsMu.Lock()
-	defer g.taintsMu.Unlock()
-	g.taints = make([]*Taint, 0)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.tracked = make([]*Content, 0)
+	g.contentByID = make(map[string]*Content)
 	g.contentHashes = make(map[string]string)
 }
 

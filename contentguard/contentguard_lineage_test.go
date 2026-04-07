@@ -4,74 +4,39 @@ import (
 	"testing"
 )
 
-func TestGetTaintLineage_Simple(t *testing.T) {
-	g, err := New(nil, Escalatory(), nil, "test-session")
-	if err != nil {
-		t.Fatalf("failed to create guard: %v", err)
-	}
+func TestLineage_Simple(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
 	defer g.Close()
 
-	// Add a simple untrusted taint
-	taint := g.IngestWithLineage(Untrusted, Data, true, "malicious content", "tool:web_fetch", "", 42, nil)
+	c := g.IngestWithLineage(Untrusted, Data, true, "malicious content", "tool:web_fetch", nil)
 
-	lineage := g.TaintLineage(taint.ID)
-	if lineage == nil {
-		t.Fatal("expected non-nil lineage")
-	}
-
-	if lineage.TaintID != taint.ID {
-		t.Errorf("expected taint ID %s, got %s", taint.ID, lineage.TaintID)
-	}
-	if lineage.Trust != Untrusted {
-		t.Errorf("expected trust untrusted, got %s", lineage.Trust)
-	}
-	if lineage.Source != "tool:web_fetch" {
-		t.Errorf("expected source tool:web_fetch, got %s", lineage.Source)
-	}
-	if lineage.EventSeq != 42 {
-		t.Errorf("expected event seq 42, got %d", lineage.EventSeq)
-	}
-	if len(lineage.TaintedBy) != 0 {
-		t.Errorf("expected no parents, got %d", len(lineage.TaintedBy))
+	if len(c.Origins) != 0 {
+		t.Errorf("expected no parents, got %d", len(c.Origins))
 	}
 }
 
-func TestGetTaintLineage_WithParents(t *testing.T) {
-	g, err := New(nil, Escalatory(), nil, "test-session")
-	if err != nil {
-		t.Fatalf("failed to create verifier: %v", err)
-	}
+func TestLineage_WithParents(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
 	defer g.Close()
 
-	// Add parent taints (root sources)
-	parent1 := g.IngestWithLineage(Untrusted, Data, true, "content from web", "tool:web_fetch", "", 10, nil)
-	parent2 := g.IngestWithLineage(Untrusted, Data, true, "content from file", "tool:read", "", 15, nil)
+	parent1 := g.IngestWithLineage(Untrusted, Data, true, "content from web", "tool:web_fetch", nil)
+	parent2 := g.IngestWithLineage(Untrusted, Data, true, "content from file", "tool:read", nil)
 
-	// Add a child taint that was influenced by both parents
-	child := g.IngestWithLineage(Vetted, Instruction, false, "LLM response", "llm:response", "", 20, []string{parent1.ID, parent2.ID})
+	child := g.IngestWithLineage(Vetted, Instruction, false, "LLM response", "llm:response", []string{parent1.ID, parent2.ID})
 
-	lineage := g.TaintLineage(child.ID)
-	if lineage == nil {
-		t.Fatal("expected non-nil lineage")
+	if len(child.Origins) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(child.Origins))
 	}
 
-	if lineage.TaintID != child.ID {
-		t.Errorf("expected taint ID %s, got %s", child.ID, lineage.TaintID)
-	}
-	if len(lineage.TaintedBy) != 2 {
-		t.Fatalf("expected 2 parents, got %d", len(lineage.TaintedBy))
-	}
-
-	// Check parents
 	foundParent1, foundParent2 := false, false
-	for _, p := range lineage.TaintedBy {
-		if p.TaintID == parent1.ID {
+	for _, p := range child.Origins {
+		if p == parent1 {
 			foundParent1 = true
 			if p.Source != "tool:web_fetch" {
 				t.Errorf("parent1 source mismatch: %s", p.Source)
 			}
 		}
-		if p.TaintID == parent2.ID {
+		if p == parent2 {
 			foundParent2 = true
 			if p.Source != "tool:read" {
 				t.Errorf("parent2 source mismatch: %s", p.Source)
@@ -86,69 +51,81 @@ func TestGetTaintLineage_WithParents(t *testing.T) {
 	}
 }
 
-func TestGetTaintLineage_DeepChain(t *testing.T) {
-	g, err := New(nil, Escalatory(), nil, "test-session")
-	if err != nil {
-		t.Fatalf("failed to create verifier: %v", err)
-	}
+func TestLineage_DeepChain(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
 	defer g.Close()
 
-	// Create a chain: grandparent -> parent -> child
-	grandparent := g.IngestWithLineage(Untrusted, Data, true, "external data", "tool:web_fetch", "", 10, nil)
-	parent := g.IngestWithLineage(Untrusted, Data, true, "processed data", "llm:response", "", 20, []string{grandparent.ID})
-	child := g.IngestWithLineage(Untrusted, Data, true, "final output", "llm:response", "", 30, []string{parent.ID})
+	grandparent := g.IngestWithLineage(Untrusted, Data, true, "external data", "tool:web_fetch", nil)
+	parent := g.IngestWithLineage(Untrusted, Data, true, "processed data", "llm:response", []string{grandparent.ID})
+	child := g.IngestWithLineage(Untrusted, Data, true, "final output", "llm:response", []string{parent.ID})
 
-	lineage := g.TaintLineage(child.ID)
-	if lineage == nil {
-		t.Fatal("expected non-nil lineage")
+	// child → parent → grandparent
+	if len(child.Origins) != 1 {
+		t.Fatalf("expected 1 parent, got %d", len(child.Origins))
 	}
-
-	// Check depth
-	if lineage.Depth != 0 {
-		t.Errorf("expected depth 0 for child, got %d", lineage.Depth)
-	}
-	if len(lineage.TaintedBy) != 1 {
-		t.Fatalf("expected 1 parent for child, got %d", len(lineage.TaintedBy))
+	if child.Origins[0] != parent {
+		t.Error("expected child's parent to be parent")
 	}
 
-	parentNode := lineage.TaintedBy[0]
-	if parentNode.Depth != 1 {
-		t.Errorf("expected depth 1 for parent, got %d", parentNode.Depth)
+	if len(parent.Origins) != 1 {
+		t.Fatalf("expected 1 grandparent, got %d", len(parent.Origins))
 	}
-	if len(parentNode.TaintedBy) != 1 {
-		t.Fatalf("expected 1 grandparent, got %d", len(parentNode.TaintedBy))
+	if parent.Origins[0] != grandparent {
+		t.Error("expected parent's parent to be grandparent")
 	}
 
-	grandparentNode := parentNode.TaintedBy[0]
-	if grandparentNode.Depth != 2 {
-		t.Errorf("expected depth 2 for grandparent, got %d", grandparentNode.Depth)
-	}
-	if grandparentNode.TaintID != grandparent.ID {
-		t.Errorf("expected grandparent ID %s, got %s", grandparent.ID, grandparentNode.TaintID)
+	if len(grandparent.Origins) != 0 {
+		t.Errorf("expected no parents for grandparent, got %d", len(grandparent.Origins))
 	}
 }
 
-func TestGetTaintLineage_NotFound(t *testing.T) {
-	g, err := New(nil, Escalatory(), nil, "test-session")
-	if err != nil {
-		t.Fatalf("failed to create verifier: %v", err)
-	}
+func TestLineage_DAG(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
 	defer g.Close()
 
-	lineage := g.TaintLineage("nonexistent")
-	if lineage != nil {
-		t.Error("expected nil lineage for nonexistent taint")
+	// A is ancestor of both B and C; D is child of both B and C
+	// A appears via two paths but is the same pointer
+	a := g.Ingest(Untrusted, Data, true, "root content", "tool:web_fetch")
+	b := g.IngestWithLineage(Untrusted, Data, true, "derived B", "llm:response", []string{a.ID})
+	c := g.IngestWithLineage(Untrusted, Data, true, "derived C", "tool:read", []string{a.ID})
+	d := g.IngestWithLineage(Untrusted, Data, true, "final", "llm:response", []string{b.ID, c.ID})
+
+	if len(d.Origins) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(d.Origins))
+	}
+
+	// Both paths lead to the same pointer
+	if b.Origins[0] != a {
+		t.Error("expected B's parent to be A")
+	}
+	if c.Origins[0] != a {
+		t.Error("expected C's parent to be A")
+	}
+	if b.Origins[0] != c.Origins[0] {
+		t.Error("expected same pointer for shared ancestor A")
 	}
 }
 
-func TestGetCurrentUntrustedBlockIDs(t *testing.T) {
-	g, err := New(nil, Escalatory(), nil, "test-session")
-	if err != nil {
-		t.Fatalf("failed to create verifier: %v", err)
-	}
+func TestFind_AfterResolvedLineage(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
 	defer g.Close()
 
-	// Add mixed taints
+	parent := g.Ingest(Untrusted, Data, true, "content", "web_fetch")
+	child := g.IngestWithLineage(Untrusted, Data, true, "derived", "llm", []string{parent.ID})
+
+	found := g.Find(child.ID)
+	if found == nil {
+		t.Fatal("expected to find child")
+	}
+	if len(found.Origins) != 1 || found.Origins[0] != parent {
+		t.Error("expected resolved parent pointer on found content")
+	}
+}
+
+func TestUntrustedIDs(t *testing.T) {
+	g, _ := New(nil, Escalatory(), Defaults())
+	defer g.Close()
+
 	g.Ingest(Trusted, Instruction, false, "system prompt", "system")
 	g.Ingest(Untrusted, Data, true, "external 1", "tool:web")
 	g.Ingest(Vetted, Instruction, false, "user prompt", "user")
@@ -156,6 +133,6 @@ func TestGetCurrentUntrustedBlockIDs(t *testing.T) {
 
 	ids := g.UntrustedIDs()
 	if len(ids) != 2 {
-		t.Errorf("expected 2 untrusted taints, got %d", len(ids))
+		t.Errorf("expected 2 untrusted entries, got %d", len(ids))
 	}
 }

@@ -1,6 +1,6 @@
 # contentguard
 
-Content trust verification for agent tool calls. Protects against prompt injection by tracking untrusted content and verifying tool calls through a staged pipeline.
+Content trust verification for agent tool calls. Protects against prompt injection by tracking content with trust metadata and verifying tool calls through a staged pipeline.
 
 ## Usage
 
@@ -11,13 +11,20 @@ guard, err := contentguard.New(
         contentguard.NewReviewer(capableModel),
     },
     contentguard.Escalatory(),
-    map[string]string{"scope": "authorized pentest of lab network"},
-    sessionID,
+    contentguard.Config{
+        Context:  map[string]string{"scope": "authorized pentest of lab network"},
+        Patterns: []string{"exfil:send.*external"},
+        Keywords: []string{"custom_secret"},
+        Skip:     []string{"read", "list_files"},
+    },
 )
 defer guard.Close()
 
 // Track content as it enters the system
 guard.Ingest(contentguard.Untrusted, contentguard.Data, true, html, "web_fetch")
+
+// Track derived content with lineage
+guard.IngestWithLineage(contentguard.Untrusted, contentguard.Data, true, derived, "llm:response", []string{parentID})
 
 // Verify a tool call
 result, err := guard.Check(ctx, "bash", args, originalGoal)
@@ -56,18 +63,17 @@ Built-in stages:
 
 Custom stages (rule engine, human approval, etc.) implement the same interface.
 
-## Exceptions
+## Context
 
-Exceptions flow from the guard into every stage's `Request.Exceptions`:
+Context flows from the guard into every stage's `Request.Context`:
 
 ```go
-contentguard.New(stages, workflow,
-    map[string]string{"scope": "authorized pentest"},
-    sessionID,
-)
+contentguard.New(stages, workflow, contentguard.Config{
+    Context: map[string]string{"scope": "authorized pentest"},
+})
 ```
 
-Stages read exceptions to adjust behavior (e.g., research scope modifies LLM prompts).
+Stages read context to adjust behavior (e.g., research scope modifies LLM prompts).
 
 ## Verdicts
 
@@ -78,7 +84,7 @@ Stages read exceptions to adjust behavior (e.g., research scope modifies LLM pro
 | `Modify` | Tool call needs changes (rationale has the suggestion) |
 | `Escalate` | Stage can't decide, pass to next (only in findings, never in final result) |
 
-## Trust Levels
+## Trust
 
 | Level | Meaning |
 |---|---|

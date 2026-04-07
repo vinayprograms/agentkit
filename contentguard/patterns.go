@@ -6,170 +6,114 @@ import (
 	"strings"
 )
 
-// EncodingType represents a detected encoding format.
-type EncodingType string
-
-const (
-	EncodingNone      EncodingType = ""
-	EncodingBase64    EncodingType = "base64"
-	EncodingBase64URL EncodingType = "base64url"
-	EncodingHex       EncodingType = "hex"
-	EncodingURL       EncodingType = "url"
-)
-
-// EncodingDetection holds the result of encoding detection.
-type EncodingDetection struct {
-	Detected bool
-	Type     EncodingType
-	Segment  string
-	Entropy  float64
-}
-
 var (
-	// Base64 pattern: length multiple of 4, ends with 0-2 '=' padding
-	base64Pattern = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
-
-	// Base64URL pattern: URL-safe variant
-	base64URLPattern = regexp.MustCompile(`^[A-Za-z0-9\-_]+={0,2}$`)
-
-	// Hex pattern: even length, only hex chars
-	hexPattern = regexp.MustCompile(`^[0-9a-fA-F]+$`)
-
-	// URL encoding: multiple %XX sequences
+	base64Pattern      = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
+	base64URLPattern   = regexp.MustCompile(`^[A-Za-z0-9\-_]+={0,2}$`)
+	hexPattern         = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 	urlEncodingPattern = regexp.MustCompile(`(%[0-9A-Fa-f]{2}){3,}`)
 )
 
-// DetectEncoding analyzes content for potential encoded payloads.
-func DetectEncoding(content string) EncodingDetection {
-	// First check for URL encoding anywhere in the string
+// hasEncodedContent returns true if the content contains encoded payloads
+// (URL encoding, base64, base64url, or hex).
+func hasEncodedContent(content string) bool {
 	if urlEncodingPattern.MatchString(content) {
-		return EncodingDetection{
-			Detected: true,
-			Type:     EncodingURL,
-			Segment:  urlEncodingPattern.FindString(content),
-		}
+		return true
 	}
 
-	// Find long alphanumeric segments
-	segments := extractAlphanumericSegments(content, 50)
-
-	for _, seg := range segments {
-		// Check entropy first - encoded content has high entropy
-		entropy := ShannonEntropy([]byte(seg))
-		if entropy < EntropyThreshold {
+	for _, seg := range extractAlphanumericSegments(content, 50) {
+		if shannonEntropy([]byte(seg)) < entropyThreshold {
 			continue
 		}
-
-		// Check for Base64
-		if isValidBase64(seg) {
-			return EncodingDetection{
-				Detected: true,
-				Type:     EncodingBase64,
-				Segment:  seg,
-				Entropy:  entropy,
-			}
-		}
-
-		// Check for Base64URL
-		if isValidBase64URL(seg) {
-			return EncodingDetection{
-				Detected: true,
-				Type:     EncodingBase64URL,
-				Segment:  seg,
-				Entropy:  entropy,
-			}
-		}
-
-		// Check for hex
-		if isValidHex(seg) {
-			return EncodingDetection{
-				Detected: true,
-				Type:     EncodingHex,
-				Segment:  seg,
-				Entropy:  entropy,
-			}
+		if isValidBase64(seg) || isValidBase64URL(seg) || isValidHex(seg) {
+			return true
 		}
 	}
 
-	return EncodingDetection{Detected: false}
+	return false
 }
 
-// isValidBase64 checks if a string could be valid Base64.
 func isValidBase64(s string) bool {
-	// Must be at least 4 chars
-	if len(s) < 4 {
+	if len(s) < 4 || len(s)%4 != 0 {
 		return false
 	}
-
-	// Length must be multiple of 4
-	if len(s)%4 != 0 {
-		return false
-	}
-
 	return base64Pattern.MatchString(s)
 }
 
-// isValidBase64URL checks if a string could be valid Base64URL.
 func isValidBase64URL(s string) bool {
 	if len(s) < 4 {
 		return false
 	}
-
-	// Base64URL can have padding or not
 	return base64URLPattern.MatchString(s)
 }
 
-// isValidHex checks if a string could be valid hex encoding.
 func isValidHex(s string) bool {
-	// Must be even length
-	if len(s)%2 != 0 {
+	if len(s)%2 != 0 || len(s) < 16 {
 		return false
 	}
-
-	// Must be at least 16 chars (8 bytes) to be meaningful
-	if len(s) < 16 {
-		return false
-	}
-
 	return hexPattern.MatchString(s)
 }
 
-// HasEncodedContent returns true if the content appears to contain encoded payloads.
-func HasEncodedContent(content string) bool {
-	return DetectEncoding(content).Detected
+// extractAlphanumericSegments finds contiguous base64-compatible strings of at least minLen.
+func extractAlphanumericSegments(content string, minLen int) []string {
+	var segments []string
+	var current []byte
+
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		if isBase64Char(c) {
+			current = append(current, c)
+		} else {
+			if len(current) >= minLen {
+				segments = append(segments, string(current))
+			}
+			current = current[:0]
+		}
+	}
+
+	if len(current) >= minLen {
+		segments = append(segments, string(current))
+	}
+
+	return segments
 }
 
-// SuspiciousPattern represents a pattern that may indicate prompt injection.
-type SuspiciousPattern struct {
-	Name    string
-	Pattern *regexp.Regexp
+func isBase64Char(c byte) bool {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c == '+' || c == '/' || c == '=' ||
+		c == '-' || c == '_'
 }
 
-var suspiciousPatterns = []SuspiciousPattern{
+// namedPattern pairs a name with a compiled regex for injection detection.
+type namedPattern struct {
+	name    string
+	pattern *regexp.Regexp
+}
+
+var builtinPatterns = []namedPattern{
 	// Instruction override attempts
-	{Name: "ignore_previous", Pattern: regexp.MustCompile(`(?i)ignore\s+(previous|above|prior|all)\s+(instruction|directive|rule)`)},
-	{Name: "new_instruction", Pattern: regexp.MustCompile(`(?i)new\s+(instruction|directive|task|policy)`)},
-	{Name: "forget_previous", Pattern: regexp.MustCompile(`(?i)forget\s+(previous|everything|all)`)},
+	{"ignore_previous", regexp.MustCompile(`(?i)ignore\s+(previous|above|prior|all)\s+(instruction|directive|rule)`)},
+	{"new_instruction", regexp.MustCompile(`(?i)new\s+(instruction|directive|task|policy)`)},
+	{"forget_previous", regexp.MustCompile(`(?i)forget\s+(previous|everything|all)`)},
 
 	// Superseding attempts (immutability violation)
-	{Name: "update_policy", Pattern: regexp.MustCompile(`(?i)(update|change|modify)\s+(the\s+)?(policy|rule|instruction)`)},
-	{Name: "override", Pattern: regexp.MustCompile(`(?i)override`)},
-	{Name: "supersede", Pattern: regexp.MustCompile(`(?i)supersede`)},
-	{Name: "disregard_previous", Pattern: regexp.MustCompile(`(?i)disregard\s+(previous|above|prior)`)},
+	{"update_policy", regexp.MustCompile(`(?i)(update|change|modify)\s+(the\s+)?(policy|rule|instruction)`)},
+	{"override", regexp.MustCompile(`(?i)override`)},
+	{"supersede", regexp.MustCompile(`(?i)supersede`)},
+	{"disregard_previous", regexp.MustCompile(`(?i)disregard\s+(previous|above|prior)`)},
 
 	// System prompt extraction
-	{Name: "reveal_prompt", Pattern: regexp.MustCompile(`(?i)(reveal|show|print|display)\s+(your\s+)?(system\s+)?prompt`)},
-	{Name: "what_instructions", Pattern: regexp.MustCompile(`(?i)what\s+(are\s+)?(your\s+)?instructions`)},
+	{"reveal_prompt", regexp.MustCompile(`(?i)(reveal|show|print|display)\s+(your\s+)?(system\s+)?prompt`)},
+	{"what_instructions", regexp.MustCompile(`(?i)what\s+(are\s+)?(your\s+)?instructions`)},
 
 	// Code execution attempts
-	{Name: "execute_code", Pattern: regexp.MustCompile(`(?i)(execute|run|call|eval)\s*\(`)},
-	{Name: "curl_pipe_bash", Pattern: regexp.MustCompile(`(?i)curl\s+.+\|\s*(ba)?sh`)},
-	{Name: "wget_pipe_bash", Pattern: regexp.MustCompile(`(?i)wget\s+.+\|\s*(ba)?sh`)},
+	{"execute_code", regexp.MustCompile(`(?i)(execute|run|call|eval)\s*\(`)},
+	{"curl_pipe_bash", regexp.MustCompile(`(?i)curl\s+.+\|\s*(ba)?sh`)},
+	{"wget_pipe_bash", regexp.MustCompile(`(?i)wget\s+.+\|\s*(ba)?sh`)},
 }
 
-// Sensitive keywords - simple word matches (not injection patterns)
-// These indicate content that may contain or reference credentials
-var sensitiveKeywords = []string{
+var builtinKeywords = []string{
 	"api_key",
 	"api-key",
 	"apikey",
@@ -180,128 +124,51 @@ var sensitiveKeywords = []string{
 	"access_token",
 }
 
-// customPatterns holds user-defined patterns from policy.toml
-var customPatterns []SuspiciousPattern
+// buildPatterns merges builtins with custom "name:regex" strings.
+func buildPatterns(custom []string) ([]namedPattern, error) {
+	patterns := make([]namedPattern, len(builtinPatterns))
+	copy(patterns, builtinPatterns)
 
-// customKeywords holds user-defined keywords from policy.toml
-var customKeywords []string
-
-// RegisterCustomPatterns adds user-defined patterns (from policy.toml).
-// Format: "name:regex" e.g., "exfil_attempt:send.*to.*external"
-func RegisterCustomPatterns(patterns []string) error {
-	customPatterns = nil // Reset
-	for _, p := range patterns {
+	for _, p := range custom {
 		parts := strings.SplitN(p, ":", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid pattern format %q (expected name:regex)", p)
+			return nil, fmt.Errorf("invalid pattern format %q (expected name:regex)", p)
 		}
-		name, regex := parts[0], parts[1]
-		compiled, err := regexp.Compile(regex)
+		compiled, err := regexp.Compile(parts[1])
 		if err != nil {
-			return fmt.Errorf("invalid regex in pattern %q: %w", name, err)
+			return nil, fmt.Errorf("invalid regex in pattern %q: %w", parts[0], err)
 		}
-		customPatterns = append(customPatterns, SuspiciousPattern{
-			Name:    name,
-			Pattern: compiled,
-		})
+		patterns = append(patterns, namedPattern{name: parts[0], pattern: compiled})
 	}
-	return nil
+	return patterns, nil
 }
 
-// RegisterCustomKeywords adds user-defined keywords (from policy.toml).
-func RegisterCustomKeywords(keywords []string) {
-	customKeywords = keywords
+// buildKeywords merges builtins with custom keywords.
+func buildKeywords(custom []string) []string {
+	keywords := make([]string, len(builtinKeywords))
+	copy(keywords, builtinKeywords)
+	return append(keywords, custom...)
 }
 
-// KeywordMatch represents a matched sensitive keyword.
-type KeywordMatch struct {
-	Keyword string
-}
-
-// PatternMatch represents a matched suspicious pattern.
-type PatternMatch struct {
-	Name    string
-	Pattern string
-	Match   string
-}
-
-// DetectSuspiciousPatterns scans content for injection-related patterns.
-// Checks both built-in patterns and custom patterns from policy.toml.
-func DetectSuspiciousPatterns(content string) []PatternMatch {
-	var matches []PatternMatch
-
-	// Check built-in patterns
-	for _, sp := range suspiciousPatterns {
-		if match := sp.Pattern.FindString(content); match != "" {
-			matches = append(matches, PatternMatch{
-				Name:    sp.Name,
-				Pattern: sp.Pattern.String(),
-				Match:   match,
-			})
+// detectSuspiciousPatterns returns the names of matched injection patterns.
+func (g *Guard) detectSuspiciousPatterns(content string) []string {
+	var names []string
+	for _, p := range g.patterns {
+		if p.pattern.MatchString(content) {
+			names = append(names, p.name)
 		}
 	}
+	return names
+}
 
-	// Check custom patterns from policy.toml
-	for _, sp := range customPatterns {
-		if match := sp.Pattern.FindString(content); match != "" {
-			matches = append(matches, PatternMatch{
-				Name:    sp.Name,
-				Pattern: sp.Pattern.String(),
-				Match:   match,
-			})
+// detectSensitiveKeywords returns matched sensitive keywords.
+func (g *Guard) detectSensitiveKeywords(content string) []string {
+	var matched []string
+	lower := strings.ToLower(content)
+	for _, kw := range g.keywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			matched = append(matched, kw)
 		}
 	}
-
-	return matches
+	return matched
 }
-
-// DetectSensitiveKeywords scans content for sensitive keywords (not patterns).
-// Checks both built-in keywords and custom keywords from policy.toml.
-func DetectSensitiveKeywords(content string) []KeywordMatch {
-	var matches []KeywordMatch
-	lowerContent := strings.ToLower(content)
-
-	// Check built-in keywords
-	for _, kw := range sensitiveKeywords {
-		if strings.Contains(lowerContent, strings.ToLower(kw)) {
-			matches = append(matches, KeywordMatch{Keyword: kw})
-		}
-	}
-
-	// Check custom keywords from policy.toml
-	for _, kw := range customKeywords {
-		if strings.Contains(lowerContent, strings.ToLower(kw)) {
-			matches = append(matches, KeywordMatch{Keyword: kw})
-		}
-	}
-
-	return matches
-}
-
-// HasSensitiveKeywords returns true if any sensitive keywords are detected.
-func HasSensitiveKeywords(content string) bool {
-	return len(DetectSensitiveKeywords(content)) > 0
-}
-
-// HasSuspiciousPatterns returns true if any suspicious patterns are detected.
-func HasSuspiciousPatterns(content string) bool {
-	return len(DetectSuspiciousPatterns(content)) > 0
-}
-
-// ContainsSuspiciousContent checks both patterns and encoding.
-func ContainsSuspiciousContent(content string) (suspicious bool, reasons []string) {
-	// Check patterns
-	patterns := DetectSuspiciousPatterns(content)
-	for _, p := range patterns {
-		reasons = append(reasons, "pattern:"+p.Name)
-	}
-
-	// Check encoding
-	enc := DetectEncoding(content)
-	if enc.Detected {
-		reasons = append(reasons, "encoding:"+string(enc.Type))
-	}
-
-	return len(reasons) > 0, reasons
-}
-

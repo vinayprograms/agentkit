@@ -28,10 +28,10 @@ type Finding struct {
 type Request struct {
 	ToolName      string
 	ToolArgs      map[string]any
-	Taints        []*Taint
+	Untrusted     []*Content
 	OriginalGoal  string
 	PriorFindings []*Finding        // what earlier stages found
-	Exceptions    map[string]string // guard-level exceptions (e.g., research scope)
+	Context       map[string]string // guard-level context (e.g., research scope)
 }
 
 // Result is the guard's final answer on a tool call.
@@ -39,6 +39,5 @@ type Result struct {
 	Verdict      Verdict
 	Rationale    string
 	ToolName     string
-	Findings     []*Finding          // all findings, deterministic first
-	TaintLineage []*TaintLineageNode
+	Findings []*Finding // all findings, deterministic first
 }
