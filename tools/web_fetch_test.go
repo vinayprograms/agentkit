@@ -198,9 +198,9 @@ func TestExtractReadableText(t *testing.T) {
 			excludes: []string{"Menu", "Copyright"},
 		},
 		{
-			name:     "decodes HTML entities",
+			name:     "preserves HTML entities for safety",
 			input:    `<p>A &amp; B &lt; C &gt; D &quot;E&quot; &#39;F&#39;</p>`,
-			contains: []string{"A & B < C > D \"E\" 'F'"},
+			contains: []string{"A &amp; B &lt; C &gt; D &quot;E&quot; &#39;F&#39;"},
 		},
 		{
 			name:     "removes head block",

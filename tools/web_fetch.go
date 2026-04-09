@@ -127,14 +127,9 @@ func extractReadableText(html string) string {
 	reTags := regexp.MustCompile(`<[^>]+>`)
 	text := reTags.ReplaceAllString(html, "")
 
-	// Decode common HTML entities.
+	// Only decode non-printing entities. Keep &amp; &lt; &gt; etc. escaped
+	// to avoid reintroducing characters that could be injection payloads.
 	text = strings.ReplaceAll(text, "&nbsp;", " ")
-	text = strings.ReplaceAll(text, "&amp;", "&")
-	text = strings.ReplaceAll(text, "&lt;", "<")
-	text = strings.ReplaceAll(text, "&gt;", ">")
-	text = strings.ReplaceAll(text, "&quot;", "\"")
-	text = strings.ReplaceAll(text, "&#39;", "'")
-	text = strings.ReplaceAll(text, "&apos;", "'")
 
 	// Clean up whitespace.
 	reMultiSpace := regexp.MustCompile(`[ \t]+`)
