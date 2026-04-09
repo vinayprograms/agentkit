@@ -75,7 +75,7 @@ func (t *webFetchTool) Execute(ctx context.Context, args Args) (string, error) {
 	defer resp.Body.Close()
 
 	// Read body (1 MB limit).
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
