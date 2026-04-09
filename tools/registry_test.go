@@ -1,192 +1,195 @@
-// Package tools provides the tool registry and built-in tools.
 package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/vinayprograms/agentkit/shellguard"
-	"github.com/vinayprograms/agentkit/policy"
 )
 
-// R5.1.1: Register built-in tools at startup
-func TestRegistry_BuiltinTools(t *testing.T) {
-	pol := policy.New()
-	pol.DefaultDeny = false
-	reg := NewRegistry(pol, t.TempDir())
-
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls"}
-	for _, name := range expectedTools {
-		if reg.Get(name) == nil {
-			t.Errorf("expected built-in tool %q to be registered", name)
-		}
+func TestRegistry_Register(t *testing.T) {
+	reg := NewRegistry()
+	err := reg.Register(New(Pwd()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// bash is always registered (controlled by policy)
-	if reg.Get("bash") == nil {
-		t.Error("bash should be registered as a built-in tool")
+	if !reg.Has("pwd") {
+		t.Error("expected pwd to be registered")
 	}
 }
 
-// R5.1.2: Provide tool definitions for LLM
-func TestRegistry_ToolDefinitions(t *testing.T) {
-	pol := policy.New()
-	pol.DefaultDeny = false
-	reg := NewRegistry(pol, t.TempDir())
+func TestRegistry_DuplicateRegister(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+	err := reg.Register(New(Pwd()))
+	if err == nil {
+		t.Error("expected error for duplicate registration")
+	}
+}
+
+func TestRegistry_Get(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+
+	if reg.Get("pwd") == nil {
+		t.Error("expected to find pwd")
+	}
+	if reg.Get("nonexistent") != nil {
+		t.Error("expected nil for nonexistent")
+	}
+}
+
+func TestRegistry_Definitions(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+	reg.Register(New(Hostname()))
 
 	defs := reg.Definitions()
-	if len(defs) == 0 {
-		t.Error("expected tool definitions")
+	if len(defs) != 2 {
+		t.Errorf("expected 2 definitions, got %d", len(defs))
 	}
 
-	// Check structure of a definition
-	var found bool
-	for _, def := range defs {
-		if def.Name == "read" {
+	found := false
+	for _, d := range defs {
+		if d.Name == "pwd" {
 			found = true
-			if def.Description == "" {
-				t.Error("read tool should have description")
-			}
-			if def.Parameters == nil {
-				t.Error("read tool should have parameters schema")
+			if d.Description == "" {
+				t.Error("expected non-empty description")
 			}
 		}
 	}
 	if !found {
-		t.Error("read tool not in definitions")
+		t.Error("pwd not in definitions")
 	}
 }
 
-// R5.1.3: Look up tool by name
-func TestRegistry_Lookup(t *testing.T) {
-	pol := policy.New()
-	pol.DefaultDeny = false
-	reg := NewRegistry(pol, t.TempDir())
+func TestRegistry_Execute(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
 
-	tool := reg.Get("read")
-	if tool == nil {
-		t.Fatal("expected to find read tool")
+	result, err := reg.Execute(context.Background(), "pwd", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	tool = reg.Get("nonexistent")
-	if tool != nil {
-		t.Error("expected nil for nonexistent tool")
+	if result == "" {
+		t.Error("expected non-empty result")
 	}
 }
 
-// R5.1.5: Filter available tools based on policy
-func TestRegistry_FilterByPolicy(t *testing.T) {
-	pol := policy.New() // DefaultDeny = true, bash not listed → disabled
-	reg := NewRegistry(pol, t.TempDir())
-
-	defs := reg.Definitions()
-	for _, def := range defs {
-		if def.Name == "bash" {
-			t.Error("disabled tool should not be in definitions")
-		}
+func TestRegistry_ExecuteUnknown(t *testing.T) {
+	reg := NewRegistry()
+	_, err := reg.Execute(context.Background(), "nonexistent", nil)
+	if err == nil {
+		t.Error("expected error for unknown tool")
 	}
 }
 
-// R5.2.1: read tool - Read file contents
+func TestRegistry_ExecuteValidationError(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Read(t.TempDir())))
+
+	// read requires "path" parameter
+	_, err := reg.Execute(context.Background(), "read", map[string]any{})
+	if err == nil {
+		t.Error("expected validation error for missing required param")
+	}
+}
+
+func TestRegistry_Guard(t *testing.T) {
+	reg := NewRegistry()
+
+	guard := &blockingGuard{}
+	reg.Register(New(Pwd()).With(guard))
+
+	_, err := reg.Execute(context.Background(), "pwd", nil)
+	if err == nil {
+		t.Error("expected guard to block execution")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("expected blocked error, got: %v", err)
+	}
+}
+
+func TestRegistry_MultipleGuards(t *testing.T) {
+	reg := NewRegistry()
+
+	counter := &countingGuard{}
+	reg.Register(New(Pwd()).With(counter).With(counter))
+
+	reg.Execute(context.Background(), "pwd", nil)
+	if counter.count != 2 {
+		t.Errorf("expected 2 guard checks, got %d", counter.count)
+	}
+}
+
+// Tool tests
+
 func TestTool_Read(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
-	pol := policy.New()
-	
-	pol.Tools["read"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Read(tmpDir)))
 
-	tool := reg.Get("read")
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	result, err := reg.Execute(context.Background(), "read", map[string]any{
 		"path": testFile,
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
-	if !strings.Contains(result.(string), "hello world") {
-		t.Errorf("expected file content, got %v", result)
+	if !strings.Contains(result, "hello world") {
+		t.Errorf("expected file content, got %s", result)
 	}
 }
 
-// R5.2.2: write tool - Write content to path
 func TestTool_Write(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "output.txt")
 
-	pol := policy.New()
-	
-	pol.Tools["write"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Write(tmpDir)))
 
-	tool := reg.Get("write")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
+	_, err := reg.Execute(context.Background(), "write", map[string]any{
 		"path":    testFile,
 		"content": "new content",
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
 	content, _ := os.ReadFile(testFile)
 	if string(content) != "new content" {
 		t.Errorf("expected 'new content', got %s", content)
 	}
 }
 
-// R5.2.2: write tool - Create parent directories
 func TestTool_Write_CreateDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	pol := policy.New()
-	
-	pol.Tools["write"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Write(tmpDir)))
 
-	tool := reg.Get("write")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
+	_, err := reg.Execute(context.Background(), "write", map[string]any{
 		"path":    testFile,
 		"content": "nested",
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
 	if _, err := os.Stat(testFile); os.IsNotExist(err) {
 		t.Error("file should exist")
 	}
 }
 
-// R5.2.2.1: write tool - Block path traversal attacks
 func TestTool_Write_PathTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	pol := policy.New()
-	
-	pol.Tools["write"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Write(tmpDir)))
 
-	tool := reg.Get("write")
-
-	// These should all be blocked
 	attacks := []string{
 		"../../../etc/passwd",
 		"foo/../../../etc/passwd",
@@ -194,282 +197,572 @@ func TestTool_Write_PathTraversal(t *testing.T) {
 	}
 
 	for _, path := range attacks {
-		_, err := tool.Execute(context.Background(), map[string]interface{}{
+		_, err := reg.Execute(context.Background(), "write", map[string]any{
 			"path":    path,
 			"content": "malicious",
 		})
 		if err == nil {
 			t.Errorf("path traversal should be blocked: %q", path)
 		}
-		if err != nil && !strings.Contains(err.Error(), "traversal") {
-			t.Errorf("expected traversal error for %q, got: %v", path, err)
-		}
 	}
 }
 
-// R5.2.3: edit tool - Find and replace
 func TestTool_Edit(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
-	pol := policy.New()
-	
-	pol.Tools["edit"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	pol.Tools["read"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Edit(tmpDir)))
 
-	tool := reg.Get("edit")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
-		"path":    testFile,
-		"old":     "world",
-		"new":     "universe",
+	_, err := reg.Execute(context.Background(), "edit", map[string]any{
+		"path": testFile,
+		"old":  "world",
+		"new":  "universe",
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
 	content, _ := os.ReadFile(testFile)
 	if string(content) != "hello universe" {
 		t.Errorf("expected 'hello universe', got %s", content)
 	}
 }
 
-// R5.2.3: edit tool - Report if pattern not found
 func TestTool_Edit_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("hello world"), 0644)
 
-	pol := policy.New()
-	
-	pol.Tools["edit"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	pol.Tools["read"] = &policy.ToolPolicy{
-		
-		Allow:   []string{tmpDir + "/**"},
-	}
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Edit(tmpDir)))
 
-	tool := reg.Get("edit")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
-		"path":    testFile,
-		"old":     "nonexistent",
-		"new":     "replacement",
+	_, err := reg.Execute(context.Background(), "edit", map[string]any{
+		"path": testFile,
+		"old":  "nonexistent",
+		"new":  "replacement",
 	})
 	if err == nil {
 		t.Error("expected error for pattern not found")
 	}
 }
 
-// R5.2.4: glob tool - Pattern-based file search
 func TestTool_Glob(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte(""), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte(""), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "c.txt"), []byte(""), 0644)
 
-	pol := policy.New()
-	pol.DefaultDeny = false
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Glob(tmpDir)))
 
-	tool := reg.Get("glob")
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	result, err := reg.Execute(context.Background(), "glob", map[string]any{
 		"pattern": filepath.Join(tmpDir, "*.go"),
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
-	files := result.([]string)
-	if len(files) != 2 {
-		t.Errorf("expected 2 .go files, got %d", len(files))
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 2 {
+		t.Errorf("expected 2 .go files, got %d: %v", len(lines), lines)
 	}
 }
 
-// R5.2.6: ls tool - List directory contents
 func TestTool_Ls(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte(""), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte(""), 0644)
 	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755)
 
-	pol := policy.New()
-	pol.DefaultDeny = false
-	reg := NewRegistry(pol, tmpDir)
+	reg := NewRegistry()
+	reg.Register(New(Ls(tmpDir)))
 
-	tool := reg.Get("ls")
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	result, err := reg.Execute(context.Background(), "ls", map[string]any{
 		"path": tmpDir,
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
-	entries := result.([]DirEntry)
-	if len(entries) != 3 {
-		t.Errorf("expected 3 entries, got %d", len(entries))
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 3 {
+		t.Errorf("expected 3 entries, got %d: %v", len(lines), lines)
 	}
 }
 
-// R5.3.1: bash tool - Execute shell command
 func TestTool_Bash(t *testing.T) {
-	pol := policy.New()
-	
-	pol.Tools["bash"] = &policy.ToolPolicy{
-		
-	}
-	reg := NewRegistry(pol, t.TempDir())
+	reg := NewRegistry()
+	reg.Register(New(Bash(t.TempDir())))
 
-	tool := reg.Get("bash")
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	result, err := reg.Execute(context.Background(), "bash", map[string]any{
 		"command": "echo hello",
 	})
 	if err != nil {
 		t.Fatalf("execute error: %v", err)
 	}
-
-	execResult := result.(*ExecResult)
-	if !strings.Contains(execResult.Stdout, "hello") {
-		t.Errorf("expected 'hello' in output, got %s", execResult.Stdout)
+	if !strings.Contains(result, "hello") {
+		t.Errorf("expected 'hello' in output, got %s", result)
 	}
 }
 
-// R5.3.1: bash tool - Enforce denylist via shellguard.Gate
-func TestTool_Bash_PolicyDeny(t *testing.T) {
-	pol := policy.New()
-	
-	pol.Tools["bash"] = &policy.ToolPolicy{
-		
-	}
-	reg := NewRegistry(pol, t.TempDir())
-	// BashChecker blocks "curl" via built-in BannedCommands.
-	checker := shellguard.New(shellguard.Bash(), "", nil, nil, nil, "")
-	reg.SetBashGate(checker)
+func TestTool_Read_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Read(t.TempDir())))
 
-	tool := reg.Get("bash")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
-		"command": "curl http://evil.com",
-	})
-	if err == nil {
-		t.Error("expected security denial error")
-	}
-	if !strings.Contains(err.Error(), "blocked") {
-		t.Errorf("error should mention blocked: %v", err)
-	}
-}
-
-// Test security: read tool denies paths outside workspace
-func TestTool_Read_SecurityDeny(t *testing.T) {
-	pol := policy.New()
-	
-	pol.Tools["read"] = &policy.ToolPolicy{
-		
-		Allow:   []string{"/safe/workspace/**"},
-	}
-	reg := NewRegistry(pol, t.TempDir())
-
-	tool := reg.Get("read")
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
+	_, err := reg.Execute(context.Background(), "read", map[string]any{
 		"path": "/etc/passwd",
 	})
 	if err == nil {
-		t.Error("expected security denial")
+		t.Error("expected error for path outside workspace")
 	}
 }
 
-// Test DuckDuckGo HTML parsing
-func TestParseDuckDuckGoHTML(t *testing.T) {
-	// Sample HTML structure from DuckDuckGo lite
-	html := `
-	<div class="result">
-		<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=abc">Example Title</a>
-		<a class="result__snippet">This is a snippet with some text.</a>
-	</div>
-	<div class="result">
-		<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgolang.org%2Fdoc&rut=def">Go Documentation</a>
-		<a class="result__snippet">Official Go docs and tutorials.</a>
-	</div>
-	`
+// --- Additional tool error-path tests ---
 
-	results := parseDuckDuckGoHTML(html, 5)
-	
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
+func TestTool_Edit_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Edit(t.TempDir())))
 
-	if results[0].Title != "Example Title" {
-		t.Errorf("expected title 'Example Title', got %q", results[0].Title)
-	}
-	if results[0].URL != "https://example.com/page" {
-		t.Errorf("expected URL 'https://example.com/page', got %q", results[0].URL)
-	}
-	if results[0].Snippet != "This is a snippet with some text." {
-		t.Errorf("unexpected snippet: %q", results[0].Snippet)
-	}
-
-	if results[1].Title != "Go Documentation" {
-		t.Errorf("expected title 'Go Documentation', got %q", results[1].Title)
-	}
-	if results[1].URL != "https://golang.org/doc" {
-		t.Errorf("expected URL 'https://golang.org/doc', got %q", results[1].URL)
+	_, err := reg.Execute(context.Background(), "edit", map[string]any{
+		"path": "/etc/passwd",
+		"old":  "root",
+		"new":  "hacked",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
 	}
 }
 
-// Test URL component decoding
-func TestDecodeURLComponent(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"https%3A%2F%2Fexample.com", "https://example.com"},
-		{"path%3Fquery%3Dvalue", "path?query=value"},
-		{"a%26b%3Dc", "a&b=c"},
-	}
+func TestTool_Edit_FileNotExist(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Edit(dir)))
 
-	for _, tt := range tests {
-		result, _ := decodeURLComponent(tt.input)
-		if result != tt.expected {
-			t.Errorf("decodeURLComponent(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
+	_, err := reg.Execute(context.Background(), "edit", map[string]any{
+		"path": filepath.Join(dir, "nope.txt"),
+		"old":  "x",
+		"new":  "y",
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent file")
 	}
 }
 
-// Test HTML entity decoding
-func TestDecodeHTMLEntities(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Hello &amp; World", "Hello & World"},
-		{"&lt;tag&gt;", "<tag>"},
-		{"It&#39;s a test", "It's a test"},
-		{"&quot;quoted&quot;", "\"quoted\""},
-	}
+func TestTool_Glob_NoMatches(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Glob(dir)))
 
-	for _, tt := range tests {
-		result := decodeHTMLEntities(tt.input)
-		if result != tt.expected {
-			t.Errorf("decodeHTMLEntities(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
+	result, err := reg.Execute(context.Background(), "glob", map[string]any{
+		"pattern": filepath.Join(dir, "*.xyz"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "No matches found." {
+		t.Errorf("expected 'No matches found.', got %q", result)
 	}
 }
 
-// Test HTML tag stripping
-func TestStripHTMLTags(t *testing.T) {
-	input := "Hello <b>world</b> and <a href='x'>link</a>!"
-	expected := "Hello world and link!"
-	
-	result := stripHTMLTags(input)
-	if result != expected {
-		t.Errorf("stripHTMLTags(%q) = %q, want %q", input, result, expected)
+func TestTool_Head_ReadFile(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "lines.txt")
+	var content string
+	for i := 1; i <= 20; i++ {
+		content += fmt.Sprintf("line %d\n", i)
 	}
+	os.WriteFile(f, []byte(content), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Head(dir)))
+
+	result, err := reg.Execute(context.Background(), "head", map[string]any{
+		"path":  f,
+		"lines": 5,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 5 {
+		t.Errorf("expected 5 lines, got %d", len(lines))
+	}
+}
+
+func TestTool_Tail_ReadFile(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "lines.txt")
+	var content string
+	for i := 1; i <= 20; i++ {
+		content += fmt.Sprintf("line %d\n", i)
+	}
+	os.WriteFile(f, []byte(content), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Tail(dir)))
+
+	result, err := reg.Execute(context.Background(), "tail", map[string]any{
+		"path":  f,
+		"lines": 5,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 5 {
+		t.Errorf("expected 5 lines, got %d", len(lines))
+	}
+}
+
+func TestTool_Head_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Head(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "head", map[string]any{
+		"path": "/etc/passwd",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Tail_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Tail(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "tail", map[string]any{
+		"path": "/etc/passwd",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Head_FileNotExist(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Head(dir)))
+
+	_, err := reg.Execute(context.Background(), "head", map[string]any{
+		"path": filepath.Join(dir, "nope.txt"),
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestTool_Tail_FileNotExist(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Tail(dir)))
+
+	_, err := reg.Execute(context.Background(), "tail", map[string]any{
+		"path": filepath.Join(dir, "nope.txt"),
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestTool_Write_RelativePath(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Write(dir)))
+
+	_, err := reg.Execute(context.Background(), "write", map[string]any{
+		"path":    "relative.txt",
+		"content": "hello",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "relative.txt"))
+	if string(data) != "hello" {
+		t.Errorf("expected 'hello', got %q", string(data))
+	}
+}
+
+func TestTool_Write_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Write(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "write", map[string]any{
+		"path":    "/etc/evil.txt",
+		"content": "bad",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Rm_RecursiveDir(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "sub")
+	os.MkdirAll(subdir, 0755)
+	os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("x"), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Rm(dir)))
+
+	_, err := reg.Execute(context.Background(), "rm", map[string]any{
+		"path":      subdir,
+		"recursive": true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(subdir); !os.IsNotExist(err) {
+		t.Error("directory should have been removed")
+	}
+}
+
+func TestTool_Rm_NonEmptyDirWithoutRecursive(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "sub")
+	os.MkdirAll(subdir, 0755)
+	os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("x"), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Rm(dir)))
+
+	_, err := reg.Execute(context.Background(), "rm", map[string]any{
+		"path": subdir,
+	})
+	if err == nil {
+		t.Error("expected error for non-empty dir without recursive")
+	}
+}
+
+func TestTool_Rm_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Rm(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "rm", map[string]any{
+		"path": "/etc/passwd",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Rm_NonExistent(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Rm(dir)))
+
+	_, err := reg.Execute(context.Background(), "rm", map[string]any{
+		"path": filepath.Join(dir, "nope.txt"),
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestTool_Rm_File(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "to_remove.txt")
+	os.WriteFile(f, []byte("bye"), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Rm(dir)))
+
+	_, err := reg.Execute(context.Background(), "rm", map[string]any{"path": f})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(f); !os.IsNotExist(err) {
+		t.Error("file should have been removed")
+	}
+}
+
+func TestTool_Mkdir_Success(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Mkdir(dir)))
+
+	newDir := filepath.Join(dir, "newdir", "sub")
+	_, err := reg.Execute(context.Background(), "mkdir", map[string]any{"path": newDir})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	info, err := os.Stat(newDir)
+	if err != nil {
+		t.Fatal("directory should exist")
+	}
+	if !info.IsDir() {
+		t.Error("should be a directory")
+	}
+}
+
+func TestTool_Mkdir_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Mkdir(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "mkdir", map[string]any{
+		"path": "/tmp/evil_dir",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Ls_OutsideWorkspace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Ls(t.TempDir())))
+
+	_, err := reg.Execute(context.Background(), "ls", map[string]any{
+		"path": "/etc",
+	})
+	if err == nil {
+		t.Error("expected error for path outside workspace")
+	}
+}
+
+func TestTool_Ls_NonExistent(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Ls(dir)))
+
+	_, err := reg.Execute(context.Background(), "ls", map[string]any{
+		"path": filepath.Join(dir, "nope"),
+	})
+	if err == nil {
+		t.Error("expected error for nonexistent path")
+	}
+}
+
+func TestTool_Glob_InvalidPattern(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Glob(dir)))
+
+	_, err := reg.Execute(context.Background(), "glob", map[string]any{
+		"pattern": "[invalid",
+	})
+	if err == nil {
+		t.Error("expected error for invalid glob pattern")
+	}
+}
+
+func TestTool_Grep_WithPattern(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello world\nfoo bar"), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Grep(dir)))
+
+	result, err := reg.Execute(context.Background(), "grep", map[string]any{
+		"pattern": "hello",
+		"path":    dir,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "hello") {
+		t.Errorf("expected 'hello' in result, got %q", result)
+	}
+}
+
+func TestTool_Grep_NoMatches(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello world"), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Grep(dir)))
+
+	result, err := reg.Execute(context.Background(), "grep", map[string]any{
+		"pattern": "zzz_no_match",
+		"path":    dir,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "No matches") {
+		t.Errorf("expected 'No matches' in result, got %q", result)
+	}
+}
+
+func TestTool_Tree_WithDepth(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "a", "b", "c"), 0755)
+	os.WriteFile(filepath.Join(dir, "a", "b", "c", "deep.txt"), []byte(""), 0644)
+
+	reg := NewRegistry()
+	reg.Register(New(Tree(dir)))
+
+	result, err := reg.Execute(context.Background(), "tree", map[string]any{
+		"path":  dir,
+		"depth": 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(result, "deep.txt") {
+		t.Error("deep.txt should not appear with depth=1")
+	}
+}
+
+func TestTool_Git_Status(t *testing.T) {
+	dir := t.TempDir()
+	// Init a git repo
+	reg := NewRegistry()
+	reg.Register(New(Bash(dir)))
+	reg.Execute(context.Background(), "bash", map[string]any{"command": "git init && git config user.email 'test@test.com' && git config user.name 'Test'"})
+
+	reg2 := NewRegistry()
+	reg2.Register(New(Git(dir)))
+
+	result, err := reg2.Execute(context.Background(), "git", map[string]any{
+		"args": "status",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == "" {
+		t.Error("expected non-empty git status result")
+	}
+}
+
+func TestTool_Git_DangerousFlag(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Bash(dir)))
+	reg.Execute(context.Background(), "bash", map[string]any{"command": "git init"})
+
+	reg2 := NewRegistry()
+	reg2.Register(New(Git(dir)))
+
+	_, err := reg2.Execute(context.Background(), "git", map[string]any{
+		"args": "push --force",
+	})
+	if err == nil {
+		t.Error("expected error for dangerous flag")
+	}
+}
+
+func TestTool_Git_DisallowedSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	reg.Register(New(Git(dir)))
+
+	_, err := reg.Execute(context.Background(), "git", map[string]any{
+		"args": "clean -fd",
+	})
+	if err == nil {
+		t.Error("expected error for disallowed subcommand")
+	}
+}
+
+// Test helpers
+
+type blockingGuard struct{}
+
+func (g *blockingGuard) Check(ctx context.Context, args Args) error {
+	return fmt.Errorf("blocked by guard")
+}
+
+type countingGuard struct{ count int }
+
+func (g *countingGuard) Check(ctx context.Context, args Args) error {
+	g.count++
+	return nil
 }

@@ -1,4 +1,3 @@
-// Package tools provides the tool registry and built-in tools.
 package tools
 
 import (
@@ -6,13 +5,52 @@ import (
 	"fmt"
 )
 
-// Args wraps tool arguments with typed accessor methods.
-// Eliminates repetitive type assertions and improves error messages.
-type Args map[string]interface{}
+// Args provides typed access to validated tool arguments.
+type Args struct {
+	values map[string]any
+}
+
+// Validate checks raw args against param definitions and returns typed Args.
+func Validate(params map[string]Param, raw map[string]any) (Args, error) {
+	for name, p := range params {
+		v, exists := raw[name]
+		if !exists || v == nil {
+			if p.Required {
+				return Args{}, fmt.Errorf("%s is required", name)
+			}
+			continue
+		}
+
+		switch p.Type {
+		case StringParam:
+			if _, ok := v.(string); !ok {
+				return Args{}, fmt.Errorf("%s must be a string, got %T", name, v)
+			}
+		case IntParam:
+			switch v.(type) {
+			case int, float64, json.Number:
+			default:
+				return Args{}, fmt.Errorf("%s must be a number, got %T", name, v)
+			}
+		case BoolParam:
+			if _, ok := v.(bool); !ok {
+				return Args{}, fmt.Errorf("%s must be a boolean, got %T", name, v)
+			}
+		case ArrayParam:
+			switch v.(type) {
+			case []string, []any:
+			default:
+				return Args{}, fmt.Errorf("%s must be an array, got %T", name, v)
+			}
+		}
+	}
+
+	return Args{values: raw}, nil
+}
 
 // String gets a required string argument.
 func (a Args) String(key string) (string, error) {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return "", fmt.Errorf("%s is required", key)
 	}
@@ -25,7 +63,7 @@ func (a Args) String(key string) (string, error) {
 
 // StringOr gets an optional string argument with a default.
 func (a Args) StringOr(key, defaultVal string) string {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return defaultVal
 	}
@@ -39,7 +77,7 @@ func (a Args) StringOr(key, defaultVal string) string {
 // Int gets a required integer argument.
 // Handles both int and float64 (JSON numbers decode as float64).
 func (a Args) Int(key string) (int, error) {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return 0, fmt.Errorf("%s is required", key)
 	}
@@ -58,7 +96,7 @@ func (a Args) Int(key string) (int, error) {
 
 // IntOr gets an optional integer argument with a default.
 func (a Args) IntOr(key string, defaultVal int) int {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return defaultVal
 	}
@@ -77,7 +115,7 @@ func (a Args) IntOr(key string, defaultVal int) int {
 
 // Float gets a required float64 argument.
 func (a Args) Float(key string) (float64, error) {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return 0, fmt.Errorf("%s is required", key)
 	}
@@ -95,7 +133,7 @@ func (a Args) Float(key string) (float64, error) {
 
 // FloatOr gets an optional float64 argument with a default.
 func (a Args) FloatOr(key string, defaultVal float64) float64 {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return defaultVal
 	}
@@ -114,7 +152,7 @@ func (a Args) FloatOr(key string, defaultVal float64) float64 {
 
 // Bool gets a required boolean argument.
 func (a Args) Bool(key string) (bool, error) {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return false, fmt.Errorf("%s is required", key)
 	}
@@ -127,7 +165,7 @@ func (a Args) Bool(key string) (bool, error) {
 
 // BoolOr gets an optional boolean argument with a default.
 func (a Args) BoolOr(key string, defaultVal bool) bool {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return defaultVal
 	}
@@ -139,9 +177,9 @@ func (a Args) BoolOr(key string, defaultVal bool) bool {
 }
 
 // StringSlice gets a required string slice argument.
-// Handles []interface{} (JSON arrays decode as []interface{}).
+// Handles []any (JSON arrays decode as []any).
 func (a Args) StringSlice(key string) ([]string, error) {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return nil, fmt.Errorf("%s is required", key)
 	}
@@ -150,7 +188,7 @@ func (a Args) StringSlice(key string) ([]string, error) {
 
 // StringSliceOr gets an optional string slice argument with a default.
 func (a Args) StringSliceOr(key string, defaultVal []string) []string {
-	v, ok := a[key]
+	v, ok := a.values[key]
 	if !ok {
 		return defaultVal
 	}
@@ -161,12 +199,11 @@ func (a Args) StringSliceOr(key string, defaultVal []string) []string {
 	return result
 }
 
-// toStringSlice converts an interface{} to []string.
-func toStringSlice(v interface{}, key string) ([]string, error) {
+func toStringSlice(v any, key string) ([]string, error) {
 	switch arr := v.(type) {
 	case []string:
 		return arr, nil
-	case []interface{}:
+	case []any:
 		result := make([]string, 0, len(arr))
 		for i, item := range arr {
 			s, ok := item.(string)
@@ -183,25 +220,6 @@ func toStringSlice(v interface{}, key string) ([]string, error) {
 
 // Has returns true if the key exists in the arguments.
 func (a Args) Has(key string) bool {
-	_, ok := a[key]
+	_, ok := a.values[key]
 	return ok
-}
-
-// Raw returns the raw value for a key, or nil if not present.
-func (a Args) Raw(key string) interface{} {
-	return a[key]
-}
-
-// filterNonEmpty returns a slice with empty strings removed.
-func filterNonEmpty(slice []string) []string {
-	if slice == nil {
-		return nil
-	}
-	result := make([]string, 0, len(slice))
-	for _, s := range slice {
-		if s != "" {
-			result = append(result, s)
-		}
-	}
-	return result
 }

@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-
-	"github.com/vinayprograms/agentkit/policy"
 )
 
-// Safe git subcommands — read-only or standard workflow operations.
+// Safe git subcommands - read-only or standard workflow operations.
 var safeGitSubcommands = map[string]bool{
 	"status":    true,
 	"diff":      true,
@@ -53,7 +51,13 @@ var dangerousGitFlags = []string{
 }
 
 type gitTool struct {
-	policy *policy.Policy
+	workspace string
+}
+
+// Git creates a git tool that runs safe git commands.
+// If workspace is non-empty, it is used as the default working directory.
+func Git(workspace string) Tool {
+	return &gitTool{workspace: workspace}
 }
 
 func (t *gitTool) Name() string { return "git" }
@@ -62,50 +66,39 @@ func (t *gitTool) Description() string {
 	return "Run safe git commands. Allowed subcommands: status, diff, log, show, add, commit, push, pull, fetch, branch, checkout, switch, stash, tag, remote, rev-parse, shortlog, blame, ls-files, ls-tree. Dangerous flags like --force and --hard are blocked."
 }
 
-func (t *gitTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"args": map[string]interface{}{
-				"type":        "string",
-				"description": "Git arguments (e.g., 'status', 'diff --stat', 'commit -m \"message\"', 'log --oneline -10')",
-			},
-			"cwd": map[string]interface{}{
-				"type":        "string",
-				"description": "Working directory for the git command (optional, defaults to current directory)",
-			},
+func (t *gitTool) Parameters() map[string]Param {
+	return map[string]Param{
+		"args": {
+			Type:        StringParam,
+			Description: `Git arguments (e.g., 'status', 'diff --stat', 'commit -m "message"', 'log --oneline -10')`,
+			Required:    true,
 		},
-		"required": []string{"args"},
+		"cwd": {
+			Type:        StringParam,
+			Description: "Working directory for the git command (optional, defaults to workspace)",
+		},
 	}
 }
 
-func (t *gitTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (interface{}, error) {
-	args := Args(rawArgs)
+func (t *gitTool) Execute(ctx context.Context, args Args) (string, error) {
 	gitArgs, err := args.String("args")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	cwd, _ := args.String("cwd")
-
-	// Check working directory against policy
-	if cwd != "" {
-		if allowed, reason := t.policy.CheckPath(t.Name(), cwd); !allowed {
-			return nil, fmt.Errorf("policy denied: %s", reason)
-		}
-	}
+	cwd := args.StringOr("cwd", t.workspace)
 
 	// Parse and validate the git command
 	parts := parseGitArgs(gitArgs)
 	if len(parts) == 0 {
-		return nil, fmt.Errorf("empty git command")
+		return "", fmt.Errorf("empty git command")
 	}
 
 	subcommand := parts[0]
 
 	// Check subcommand allowlist
 	if !safeGitSubcommands[subcommand] {
-		return nil, fmt.Errorf("git subcommand %q is not allowed. Safe subcommands: %s",
+		return "", fmt.Errorf("git subcommand %q is not allowed. Safe subcommands: %s",
 			subcommand, safeSubcommandList())
 	}
 
@@ -113,7 +106,7 @@ func (t *gitTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (
 	for _, part := range parts {
 		for _, dangerous := range dangerousGitFlags {
 			if part == dangerous {
-				return nil, fmt.Errorf("git flag %q is blocked for safety", part)
+				return "", fmt.Errorf("git flag %q is blocked for safety", part)
 			}
 		}
 	}
@@ -126,7 +119,7 @@ func (t *gitTool) Execute(ctx context.Context, rawArgs map[string]interface{}) (
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("git %s failed: %s\n%s", subcommand, err, string(output))
+		return "", fmt.Errorf("git %s failed: %s\n%s", subcommand, err, string(output))
 	}
 
 	result := strings.TrimSpace(string(output))

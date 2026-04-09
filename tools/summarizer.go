@@ -7,18 +7,18 @@ import (
 	"github.com/vinayprograms/agentkit/llm"
 )
 
-// LLMSummarizer uses an LLM to summarize content and answer questions.
-type LLMSummarizer struct {
+// Summarizer uses an LLM to summarize content and answer questions.
+type Summarizer struct {
 	model llm.Model
 }
 
-// NewLLMSummarizer creates a new summarizer with the given LLM model.
-func NewLLMSummarizer(model llm.Model) *LLMSummarizer {
-	return &LLMSummarizer{model: model}
+// NewSummarizer creates a summarizer with the given LLM model.
+func NewSummarizer(model llm.Model) *Summarizer {
+	return &Summarizer{model: model}
 }
 
 // Summarize extracts information from content based on a question.
-func (s *LLMSummarizer) Summarize(ctx context.Context, content, question string) (string, error) {
+func (s *Summarizer) Summarize(ctx context.Context, content, question string) (string, error) {
 	if s.model == nil {
 		return "", fmt.Errorf("no LLM configured for summarization")
 	}

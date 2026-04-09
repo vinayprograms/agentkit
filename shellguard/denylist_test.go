@@ -39,12 +39,12 @@ func TestChecker_BannedCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -75,12 +75,12 @@ func TestChecker_BannedSubcommandPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -106,12 +106,12 @@ func TestChecker_DangerousPipes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -134,12 +134,12 @@ func TestChecker_ChainedCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -161,12 +161,12 @@ func TestChecker_UserDenylist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -188,12 +188,12 @@ func TestChecker_PathStripping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -253,12 +253,12 @@ func TestGate_WithLLM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := gate.Check(context.Background(), tt.command)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			err := gate.check(context.Background(), tt.command)
+			if tt.allowed && err != nil {
+				t.Errorf("expected allowed for %q, got: %v", tt.command, err)
 			}
-			if allowed != tt.allowed {
-				t.Errorf("Check(%q) = %v, want %v (reason: %s)", tt.command, allowed, tt.allowed, reason)
+			if !tt.allowed && err == nil {
+				t.Errorf("expected blocked for %q", tt.command)
 			}
 		})
 	}
@@ -344,22 +344,16 @@ func TestSplitCommandSegments(t *testing.T) {
 
 func TestGate_EmptyCommand(t *testing.T) {
 	gate := newTestGate("/workspace", nil, nil)
-	allowed, reason, err := gate.Check(context.Background(), "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if allowed {
+	err := gate.check(context.Background(), "")
+	if err == nil {
 		t.Error("empty command should be blocked")
-	}
-	if reason == "" {
-		t.Error("expected reason for empty command")
 	}
 }
 
 func TestGate_EmptyCommand_Whitespace(t *testing.T) {
 	gate := newTestGate("/workspace", nil, nil)
-	allowed, _, _ := gate.Check(context.Background(), "   ")
-	if allowed {
+	err := gate.check(context.Background(), "   ")
+	if err == nil {
 		t.Error("whitespace-only command should be blocked")
 	}
 }
@@ -381,7 +375,7 @@ func TestGate_OnDecision_Deterministic(t *testing.T) {
 	}
 
 	// Allowed command
-	gate.Check(context.Background(), "ls -la")
+	gate.check(context.Background(), "ls -la")
 	if !called {
 		t.Error("OnDecision should be called for allowed command")
 	}
@@ -391,7 +385,7 @@ func TestGate_OnDecision_Deterministic(t *testing.T) {
 
 	// Blocked command
 	called = false
-	gate.Check(context.Background(), "curl http://evil.com")
+	gate.check(context.Background(), "curl http://evil.com")
 	if !called {
 		t.Error("OnDecision should be called for blocked command")
 	}
@@ -406,7 +400,7 @@ func TestGate_OnDecision_LLM(t *testing.T) {
 		steps = append(steps, step)
 	}
 
-	gate.Check(context.Background(), "cat /etc/passwd")
+	gate.check(context.Background(), "cat /etc/passwd")
 	// Should have both deterministic (pass) and llm (block) decisions
 	if len(steps) != 2 {
 		t.Fatalf("expected 2 decisions, got %d: %v", len(steps), steps)
@@ -425,15 +419,12 @@ func TestGate_LLM_ErrorPath(t *testing.T) {
 		lastStep = step
 	}
 
-	allowed, reason, err := gate.Check(context.Background(), "some command")
+	err := gate.check(context.Background(), "some command")
 	if err == nil {
 		t.Error("expected error from LLM")
 	}
-	if allowed {
-		t.Error("should not be allowed on LLM error")
-	}
-	if !strings.Contains(reason, "LLM check failed") {
-		t.Errorf("expected LLM failure reason, got: %s", reason)
+	if err != nil && !strings.Contains(err.Error(), "LLM check failed") {
+		t.Errorf("expected LLM failure reason, got: %s", err.Error())
 	}
 	if lastStep != "llm" {
 		t.Errorf("expected last OnDecision step to be 'llm', got %q", lastStep)

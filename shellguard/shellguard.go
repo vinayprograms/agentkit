@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
+	"github.com/vinayprograms/agentkit/tools"
 )
 
 // Result contains the outcome of a command security check.
@@ -48,13 +49,22 @@ func New(shell Shell, workspace string, allowedDirs, userDeniedCommands []string
 	}
 }
 
-// Check runs the security pipeline: deterministic checks, then LLM analysis if configured.
-func (g *Gate) Check(ctx context.Context, command string) (bool, string, error) {
+// Check implements tools.Guard. It extracts "command" from args and runs the security pipeline.
+func (g *Gate) Check(ctx context.Context, args tools.Args) error {
+	command, err := args.String("command")
+	if err != nil {
+		return fmt.Errorf("shellguard: %w", err)
+	}
+	return g.check(ctx, command)
+}
+
+// check runs the security pipeline: deterministic checks, then LLM analysis if configured.
+func (g *Gate) check(ctx context.Context, command string) error {
 	// Step 1: deterministic checks
 	allowed, reason := g.checkDeterministic(command)
 	g.logDecision(command, "deterministic", allowed, reason, 0, 0, 0)
 	if !allowed {
-		return false, reason, nil
+		return fmt.Errorf("blocked: %s", reason)
 	}
 
 	// Step 2: LLM analysis (if model configured and allowed dirs set)
@@ -64,15 +74,15 @@ func (g *Gate) Check(ctx context.Context, command string) (bool, string, error) 
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {
 			g.logDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
-			return false, fmt.Sprintf("LLM check failed: %v", err), err
+			return fmt.Errorf("LLM check failed: %v", err)
 		}
 		g.logDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
 		if !result.Allowed {
-			return false, result.Reason, nil
+			return fmt.Errorf("blocked: %s", result.Reason)
 		}
 	}
 
-	return true, "", nil
+	return nil
 }
 
 func (g *Gate) logDecision(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {

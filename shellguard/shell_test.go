@@ -165,22 +165,22 @@ func TestPosixShell_HasChainedCommands(t *testing.T) {
 func TestGate_FishShell(t *testing.T) {
 	gate := New(Fish(), "/workspace", nil, nil, nil, "")
 	// curl is banned regardless of shell
-	allowed, _, _ := gate.Check(t.Context(), "curl http://evil.com")
-	if allowed {
+	err := gate.check(t.Context(), "curl http://evil.com")
+	if err == nil {
 		t.Error("curl should be blocked in fish shell")
 	}
 	// Safe command
-	allowed, _, _ = gate.Check(t.Context(), "ls -la")
-	if !allowed {
-		t.Error("ls should be allowed in fish shell")
+	err = gate.check(t.Context(), "ls -la")
+	if err != nil {
+		t.Errorf("ls should be allowed in fish shell, got: %v", err)
 	}
 }
 
 func TestGate_PosixShell(t *testing.T) {
 	gate := New(Posix(), "/workspace", nil, nil, nil, "")
 	// sudo in chain
-	allowed, _, _ := gate.Check(t.Context(), "make && sudo make install")
-	if allowed {
+	err := gate.check(t.Context(), "make && sudo make install")
+	if err == nil {
 		t.Error("sudo in chain should be blocked in posix shell")
 	}
 }
