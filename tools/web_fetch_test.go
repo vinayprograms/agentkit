@@ -261,8 +261,7 @@ func TestWebFetch_MissingQuestion(t *testing.T) {
 // Summarizer returns error — should propagate
 // ---------------------------------------------------------------------------
 
-func TestWebFetch_LargeContentTruncated(t *testing.T) {
-	// Generate a large HTML page > 15000 chars to trigger truncation without summarizer
+func TestWebFetch_LargeContentReturnsFullText(t *testing.T) {
 	bigContent := strings.Repeat("word ", 5000) // 25000 chars
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
@@ -280,8 +279,11 @@ func TestWebFetch_LargeContentTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "[Content truncated") {
-		t.Errorf("expected truncation notice, got length %d", len(result))
+	if strings.Contains(result, "truncated") {
+		t.Error("content should not be truncated")
+	}
+	if len(result) < 20000 {
+		t.Errorf("expected full content, got length %d", len(result))
 	}
 }
 

@@ -74,7 +74,7 @@ func (t *webFetchTool) Execute(ctx context.Context, args Args) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// Read body (1 MB limit).
+	// Read body.
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
@@ -88,18 +88,8 @@ func (t *webFetchTool) Execute(ctx context.Context, args Args) (string, error) {
 	// Extract readable text from HTML.
 	content := extractReadableText(string(body))
 
-	// Truncate to ~100KB for summarization.
-	const maxChars = 100000
-	if len(content) > maxChars {
-		content = content[:maxChars] + "\n\n[Content truncated]"
-	}
-
-	// Without a summarizer, return truncated text.
+	// Without a summarizer, return full text.
 	if t.summarizer == nil {
-		const fallbackMax = 15000
-		if len(content) > fallbackMax {
-			content = content[:fallbackMax] + "\n\n[Content truncated — configure small_llm for summarization]"
-		}
 		return content, nil
 	}
 
