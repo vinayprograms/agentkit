@@ -10,7 +10,7 @@ registry := tools.NewRegistry()
 registry.Register(tools.New(tools.Pwd()))
 registry.Register(tools.New(tools.Read(workspace)))
 registry.Register(tools.New(tools.Bash(workspace)).With(gate))
-registry.Register(tools.New(tools.WebFetch(summarizer, creds)))
+registry.Register(tools.New(tools.Fetch(summarizer, creds)))
 
 // Get definitions for LLM
 defs := registry.Definitions()
@@ -132,8 +132,8 @@ The registry validates raw args against parameters before calling `Execute`. Too
 | which | `Which()` | Command lookup |
 | sysinfo | `Sysinfo()` | System information |
 | datetime | `Datetime()` | Current date/time |
-| web_fetch | `WebFetch(summarizer, creds)` | Fetch web page |
-| web_search | `WebSearch(creds)` | Search the web |
+| web_fetch | `Fetch(summarizer, creds)` | Fetch web page content |
+| web_search | `Search(creds)` | Search the web |
 | scratchpad | `ScratchpadRead/Write/List/Search(store, persistent)` | Key-value memory |
 | remember | `Remember(mem)` | Store observations |
 | recall | `Recall(mem)` | Search observations |

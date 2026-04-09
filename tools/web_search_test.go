@@ -36,7 +36,7 @@ func TestWebSearch_TavilyBackendViaExecute(t *testing.T) {
 	searchMutex.Unlock()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"tavily": "test-tavily-key"}}
-	tool := WebSearch(creds)
+	tool := Search(creds)
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -70,7 +70,7 @@ func TestWebSearch_BraveBackendViaExecute(t *testing.T) {
 	searchMutex.Unlock()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"brave": "test-brave-key"}}
-	tool := WebSearch(creds)
+	tool := Search(creds)
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -104,7 +104,7 @@ func TestWebSearch_DuckDuckGoFallbackViaExecute(t *testing.T) {
 	ddgMutex.Unlock()
 
 	// No credentials -- should fall back to DuckDuckGo
-	tool := WebSearch(nil)
+	tool := Search(nil)
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -520,7 +520,7 @@ func TestParseDuckDuckGoHTML_SkipsNonHTTPURLs(t *testing.T) {
 // --- WebSearch constructor, parameters, description ---
 
 func TestWebSearch_NameAndDescription(t *testing.T) {
-	tool := WebSearch(nil)
+	tool := Search(nil)
 	if tool.Name() != "web_search" {
 		t.Errorf("expected name 'web_search', got %q", tool.Name())
 	}
@@ -530,7 +530,7 @@ func TestWebSearch_NameAndDescription(t *testing.T) {
 }
 
 func TestWebSearch_Parameters(t *testing.T) {
-	tool := WebSearch(nil)
+	tool := Search(nil)
 	params := tool.Parameters()
 
 	q, ok := params["query"]
@@ -578,7 +578,7 @@ func TestWebSearch_SearXNGBackend(t *testing.T) {
 	defer server.Close()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
-	tool := WebSearch(creds)
+	tool := Search(creds)
 
 	args, err := Validate(tool.Parameters(), map[string]any{"query": "test", "count": 3})
 	if err != nil {
@@ -604,7 +604,7 @@ func TestWebSearch_SearXNGBackendError(t *testing.T) {
 	defer server.Close()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
-	tool := WebSearch(creds)
+	tool := Search(creds)
 
 	args, err := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	if err != nil {
@@ -625,7 +625,7 @@ func TestWebSearch_CountClamping(t *testing.T) {
 	defer server.Close()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
-	tool := WebSearch(creds)
+	tool := Search(creds)
 
 	// Test count < 1 gets clamped to 1
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test", "count": 0})

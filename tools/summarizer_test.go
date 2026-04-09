@@ -17,9 +17,6 @@ func TestNewSummarizer(t *testing.T) {
 	if s == nil {
 		t.Fatal("expected non-nil summarizer")
 	}
-	if s.model == nil {
-		t.Fatal("expected model to be set")
-	}
 }
 
 func TestNewSummarizer_NilModel(t *testing.T) {

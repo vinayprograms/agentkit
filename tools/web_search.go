@@ -20,7 +20,7 @@ type webSearchTool struct {
 
 // WebSearch returns a tool that searches the web using available backends.
 // creds may be nil (falls back to environment variables and DuckDuckGo).
-func WebSearch(creds CredentialProvider) Tool {
+func Search(creds CredentialProvider) Tool {
 	return &webSearchTool{creds: creds}
 }
 

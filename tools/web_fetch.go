@@ -25,14 +25,14 @@ func SetHTTPTimeout(timeout time.Duration) {
 }
 
 type webFetchTool struct {
-	summarizer *Summarizer
+	summarizer Summarizer
 	creds      CredentialProvider
 }
 
 // WebFetch returns a tool that fetches and summarizes web page content.
 // summarizer may be nil (falls back to truncated text).
 // creds may be nil if no authentication is needed.
-func WebFetch(summarizer *Summarizer, creds CredentialProvider) Tool {
+func Fetch(summarizer Summarizer, creds CredentialProvider) Tool {
 	return &webFetchTool{
 		summarizer: summarizer,
 		creds:      creds,
