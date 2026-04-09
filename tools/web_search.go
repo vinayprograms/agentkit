@@ -15,13 +15,17 @@ import (
 )
 
 type webSearchTool struct {
-	creds CredentialProvider
+	creds  CredentialProvider
+	client *http.Client
 }
 
-// WebSearch returns a tool that searches the web using available backends.
+// Search returns a tool that searches the web using available backends.
 // creds may be nil (falls back to environment variables and DuckDuckGo).
 func Search(creds CredentialProvider) Tool {
-	return &webSearchTool{creds: creds}
+	return &webSearchTool{
+		creds:  creds,
+		client: &http.Client{Timeout: defaultHTTPTimeout},
+	}
 }
 
 func (t *webSearchTool) Name() string { return "web_search" }
@@ -103,13 +107,13 @@ func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) 
 	var results []searchResult
 	switch {
 	case searxngURL != "":
-		results, err = searchSearXNG(ctx, query, count, searxngURL)
+		results, err = t.searchSearXNG(ctx, query, count, searxngURL)
 	case braveKey != "":
-		results, err = searchBrave(ctx, query, count, braveKey)
+		results, err = t.searchBrave(ctx, query, count, braveKey)
 	case tavilyKey != "":
-		results, err = searchTavily(ctx, query, count, tavilyKey)
+		results, err = t.searchTavily(ctx, query, count, tavilyKey)
 	default:
-		results, err = searchDuckDuckGo(ctx, query, count)
+		results, err = t.searchDuckDuckGo(ctx, query, count)
 	}
 	if err != nil {
 		return "", err
@@ -145,7 +149,7 @@ func formatSearchResults(results []searchResult) string {
 
 // --- Search backends ---
 
-func searchSearXNG(ctx context.Context, query string, count int, baseURL string) ([]searchResult, error) {
+func (t *webSearchTool) searchSearXNG(ctx context.Context, query string, count int, baseURL string) ([]searchResult, error) {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
 		baseURL, strings.ReplaceAll(query, " ", "+"))
@@ -157,7 +161,7 @@ func searchSearXNG(ctx context.Context, query string, count int, baseURL string)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
 
-	resp, err := httpClient.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("searxng search failed: %w", err)
 	}
@@ -189,7 +193,7 @@ func searchSearXNG(ctx context.Context, query string, count int, baseURL string)
 	return results, nil
 }
 
-func searchBrave(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
+func (t *webSearchTool) searchBrave(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
 	url := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		strings.ReplaceAll(query, " ", "+"), count)
 
@@ -200,7 +204,7 @@ func searchBrave(ctx context.Context, query string, count int, apiKey string) ([
 	req.Header.Set("X-Subscription-Token", apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("brave search failed: %w", err)
 	}
@@ -231,7 +235,7 @@ func searchBrave(ctx context.Context, query string, count int, apiKey string) ([
 	return results, nil
 }
 
-func searchTavily(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
+func (t *webSearchTool) searchTavily(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
 	reqBody := map[string]interface{}{
 		"api_key":     apiKey,
 		"query":       query,
@@ -245,7 +249,7 @@ func searchTavily(ctx context.Context, query string, count int, apiKey string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("tavily search failed: %w", err)
 	}
@@ -284,7 +288,7 @@ var (
 	ddgMaxRetries = 3
 )
 
-func searchDuckDuckGo(ctx context.Context, query string, count int) ([]searchResult, error) {
+func (t *webSearchTool) searchDuckDuckGo(ctx context.Context, query string, count int) ([]searchResult, error) {
 	ddgMutex.Lock()
 	elapsed := time.Since(ddgLastSearch)
 	if elapsed < ddgCooldown {
@@ -327,7 +331,7 @@ func searchDuckDuckGo(ctx context.Context, query string, count int) ([]searchRes
 		req.Header.Set("Accept", "text/html")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-		resp, err := httpClient.Do(req)
+		resp, err := t.client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("duckduckgo search failed: %w", err)
 			continue

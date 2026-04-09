@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// testSearchTool builds a webSearchTool with a custom HTTP client transport.
+func testSearchTool(transport http.RoundTripper) *webSearchTool {
+	return &webSearchTool{
+		client: &http.Client{Transport: transport},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // parseDuckDuckGoHTML — additional cases (base tests in registry_test.go)
 // ---------------------------------------------------------------------------
@@ -26,10 +33,6 @@ func TestWebSearch_TavilyBackendViaExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
-
 	// Reset rate limiter
 	searchMutex.Lock()
 	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
@@ -37,6 +40,7 @@ func TestWebSearch_TavilyBackendViaExecute(t *testing.T) {
 
 	creds := &mockCredentialProvider{keys: map[string]string{"tavily": "test-tavily-key"}}
 	tool := Search(creds)
+	tool.(*webSearchTool).client = &http.Client{Transport: rewriteTransport{url: server.URL}}
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -61,16 +65,13 @@ func TestWebSearch_BraveBackendViaExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
-
 	searchMutex.Lock()
 	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
 	searchMutex.Unlock()
 
 	creds := &mockCredentialProvider{keys: map[string]string{"brave": "test-brave-key"}}
 	tool := Search(creds)
+	tool.(*webSearchTool).client = &http.Client{Transport: rewriteTransport{url: server.URL}}
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -91,10 +92,6 @@ func TestWebSearch_DuckDuckGoFallbackViaExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
-
 	// Reset both rate limiters
 	searchMutex.Lock()
 	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
@@ -105,6 +102,7 @@ func TestWebSearch_DuckDuckGoFallbackViaExecute(t *testing.T) {
 
 	// No credentials -- should fall back to DuckDuckGo
 	tool := Search(nil)
+	tool.(*webSearchTool).client = &http.Client{Transport: rewriteTransport{url: server.URL}}
 
 	args, _ := Validate(tool.Parameters(), map[string]any{"query": "test"})
 	result, err := tool.Execute(context.Background(), args)
@@ -131,12 +129,9 @@ func TestSearchTavily_ViaHTTPTest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Temporarily replace httpClient transport to redirect to our test server
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	results, err := searchTavily(context.Background(), "test", 3, "test-key")
+	results, err := tool.searchTavily(context.Background(), "test", 3, "test-key")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,11 +153,9 @@ func TestSearchBrave_ViaHTTPTest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	results, err := searchBrave(context.Background(), "test", 3, "test-key")
+	results, err := tool.searchBrave(context.Background(), "test", 3, "test-key")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -184,16 +177,14 @@ func TestSearchDuckDuckGo_ViaHTTPTest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
 	// Reset DDG rate limiter to avoid delays
 	ddgMutex.Lock()
 	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
 	ddgMutex.Unlock()
 
-	results, err := searchDuckDuckGo(context.Background(), "test", 5)
+	results, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -219,9 +210,7 @@ func TestSearchDuckDuckGo_RateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
 	// Speed up backoff for test
 	origBackoff := ddgBackoff
@@ -237,7 +226,7 @@ func TestSearchDuckDuckGo_RateLimit(t *testing.T) {
 	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
 	ddgMutex.Unlock()
 
-	results, err := searchDuckDuckGo(context.Background(), "test", 5)
+	results, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,15 +241,13 @@ func TestSearchDuckDuckGo_NonRetryableError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
 	ddgMutex.Lock()
 	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
 	ddgMutex.Unlock()
 
-	_, err := searchDuckDuckGo(context.Background(), "test", 5)
+	_, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err == nil {
 		t.Error("expected error for 500 status")
 	}
@@ -279,7 +266,9 @@ func TestSearchSearXNG_ViaHTTPTest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	results, err := searchSearXNG(context.Background(), "test", 2, server.URL)
+	tool := testSearchTool(http.DefaultTransport)
+
+	results, err := tool.searchSearXNG(context.Background(), "test", 2, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -294,11 +283,9 @@ func TestSearchTavily_Error(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	_, err := searchTavily(context.Background(), "test", 3, "test-key")
+	_, err := tool.searchTavily(context.Background(), "test", 3, "test-key")
 	if err == nil {
 		t.Error("expected error for bad request")
 	}
@@ -310,11 +297,9 @@ func TestSearchBrave_Error(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	_, err := searchBrave(context.Background(), "test", 3, "bad-key")
+	_, err := tool.searchBrave(context.Background(), "test", 3, "bad-key")
 	if err == nil {
 		t.Error("expected error for unauthorized")
 	}
@@ -326,7 +311,9 @@ func TestSearchSearXNG_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := searchSearXNG(context.Background(), "test", 3, server.URL)
+	tool := testSearchTool(http.DefaultTransport)
+
+	_, err := tool.searchSearXNG(context.Background(), "test", 3, server.URL)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -338,11 +325,9 @@ func TestSearchBrave_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	_, err := searchBrave(context.Background(), "test", 3, "test-key")
+	_, err := tool.searchBrave(context.Background(), "test", 3, "test-key")
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -354,11 +339,9 @@ func TestSearchTavily_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	_, err := searchTavily(context.Background(), "test", 3, "test-key")
+	_, err := tool.searchTavily(context.Background(), "test", 3, "test-key")
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -370,9 +353,7 @@ func TestSearchDuckDuckGo_AllRetriesFail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origTransport := httpClient.Transport
-	httpClient.Transport = rewriteTransport{url: server.URL}
-	defer func() { httpClient.Transport = origTransport }()
+	tool := testSearchTool(rewriteTransport{url: server.URL})
 
 	origBackoff := ddgBackoff
 	origMaxBackoff := ddgMaxBackoff
@@ -387,7 +368,7 @@ func TestSearchDuckDuckGo_AllRetriesFail(t *testing.T) {
 	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
 	ddgMutex.Unlock()
 
-	_, err := searchDuckDuckGo(context.Background(), "test", 5)
+	_, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err == nil {
 		t.Error("expected error after all retries exhausted")
 	}

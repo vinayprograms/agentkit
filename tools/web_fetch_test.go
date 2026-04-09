@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
@@ -261,16 +260,6 @@ func TestWebFetch_MissingQuestion(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Summarizer returns error — should propagate
 // ---------------------------------------------------------------------------
-
-func TestSetHTTPTimeout(t *testing.T) {
-	origTimeout := httpClient.Timeout
-	defer func() { httpClient.Timeout = origTimeout }()
-
-	SetHTTPTimeout(5 * time.Second)
-	if httpClient.Timeout != 5*time.Second {
-		t.Errorf("expected timeout 5s, got %v", httpClient.Timeout)
-	}
-}
 
 func TestWebFetch_LargeContentTruncated(t *testing.T) {
 	// Generate a large HTML page > 15000 chars to trigger truncation without summarizer

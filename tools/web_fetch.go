@@ -10,32 +10,22 @@ import (
 	"time"
 )
 
-// defaultHTTPTimeout is used when no timeout is configured.
 const defaultHTTPTimeout = 2 * time.Minute
-
-// httpClient is a shared HTTP client with timeout for web tools.
-// Context deadlines take precedence over this timeout.
-var httpClient = &http.Client{
-	Timeout: defaultHTTPTimeout,
-}
-
-// SetHTTPTimeout configures the shared HTTP client timeout.
-func SetHTTPTimeout(timeout time.Duration) {
-	httpClient.Timeout = timeout
-}
 
 type webFetchTool struct {
 	summarizer Summarizer
 	creds      CredentialProvider
+	client     *http.Client
 }
 
-// WebFetch returns a tool that fetches and summarizes web page content.
+// Fetch returns a tool that fetches and summarizes web page content.
 // summarizer may be nil (falls back to truncated text).
 // creds may be nil if no authentication is needed.
 func Fetch(summarizer Summarizer, creds CredentialProvider) Tool {
 	return &webFetchTool{
 		summarizer: summarizer,
 		creds:      creds,
+		client:     &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -76,9 +66,9 @@ func (t *webFetchTool) Execute(ctx context.Context, args Args) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GridAgent/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; AIAgent/1.0)")
 
-	resp, err := httpClient.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch failed: %w", err)
 	}
@@ -164,4 +154,3 @@ func extractReadableText(html string) string {
 
 	return strings.TrimSpace(text)
 }
-
