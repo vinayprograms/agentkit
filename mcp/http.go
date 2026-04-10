@@ -22,16 +22,26 @@ type httpClient struct {
 	mu       sync.Mutex
 }
 
-// HTTP creates a Client that connects to a remote MCP server via HTTP.
-// The endpoint should be the base URL of the MCP server (e.g., "https://mcp.example.com").
-func HTTP(endpoint string) (Client, error) {
-	return &httpClient{
+// HTTP creates a ready-to-use Client that connects to a remote MCP server via HTTP.
+// It performs the MCP handshake and discovers available tools.
+func HTTP(ctx context.Context, endpoint string) (Client, error) {
+	c := &httpClient{
 		endpoint: endpoint,
 		client:   &http.Client{},
-	}, nil
+	}
+
+	if err := c.initialize(ctx); err != nil {
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+
+	if _, err := c.ListTools(ctx); err != nil {
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+
+	return c, nil
 }
 
-func (c *httpClient) Initialize(ctx context.Context) error {
+func (c *httpClient) initialize(ctx context.Context) error {
 	result, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
@@ -55,12 +65,6 @@ func (c *httpClient) Initialize(ctx context.Context) error {
 }
 
 func (c *httpClient) ListTools(ctx context.Context) ([]Tool, error) {
-	c.mu.Lock()
-	ready := c.ready
-	c.mu.Unlock()
-	if !ready {
-		return nil, fmt.Errorf("client not initialized")
-	}
 
 	result, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
@@ -79,12 +83,6 @@ func (c *httpClient) ListTools(ctx context.Context) ([]Tool, error) {
 }
 
 func (c *httpClient) CallTool(ctx context.Context, name string, args map[string]any) (*Result, error) {
-	c.mu.Lock()
-	ready := c.ready
-	c.mu.Unlock()
-	if !ready {
-		return nil, fmt.Errorf("client not initialized")
-	}
 
 	result, err := c.call(ctx, "tools/call", toolCallParams{
 		Name:      name,

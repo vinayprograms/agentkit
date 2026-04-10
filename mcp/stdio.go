@@ -26,8 +26,9 @@ type stdioClient struct {
 	ready   bool
 }
 
-// Stdio creates a Client that connects to a local MCP server process via stdio.
-func Stdio(config ServerConfig) (Client, error) {
+// Stdio creates a ready-to-use Client that connects to a local MCP server via stdio.
+// It spawns the process, performs the MCP handshake, and discovers available tools.
+func Stdio(ctx context.Context, config ServerConfig) (Client, error) {
 	cmd := exec.Command(config.Command, config.Args...)
 
 	cmd.Env = os.Environ()
@@ -65,10 +66,20 @@ func Stdio(config ServerConfig) (Client, error) {
 
 	go c.readResponses()
 
+	if err := c.initialize(ctx); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+
+	if _, err := c.ListTools(ctx); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+
 	return c, nil
 }
 
-func (c *stdioClient) Initialize(ctx context.Context) error {
+func (c *stdioClient) initialize(ctx context.Context) error {
 	result, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
@@ -88,9 +99,6 @@ func (c *stdioClient) Initialize(ctx context.Context) error {
 }
 
 func (c *stdioClient) ListTools(ctx context.Context) ([]Tool, error) {
-	if !c.ready {
-		return nil, fmt.Errorf("client not initialized")
-	}
 
 	result, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
@@ -107,9 +115,6 @@ func (c *stdioClient) ListTools(ctx context.Context) ([]Tool, error) {
 }
 
 func (c *stdioClient) CallTool(ctx context.Context, name string, args map[string]any) (*Result, error) {
-	if !c.ready {
-		return nil, fmt.Errorf("client not initialized")
-	}
 
 	result, err := c.call(ctx, "tools/call", toolCallParams{
 		Name:      name,

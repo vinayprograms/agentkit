@@ -23,37 +23,9 @@ func NewManager() *Manager {
 	}
 }
 
-// Connect connects to a local MCP server via stdio.
-func (m *Manager) Connect(ctx context.Context, name string, config ServerConfig) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.clients[name]; exists {
-		return fmt.Errorf("server %q already connected", name)
-	}
-
-	client, err := Stdio(config)
-	if err != nil {
-		return fmt.Errorf("failed to create client: %w", err)
-	}
-
-	if err := client.Initialize(ctx); err != nil {
-		client.Close()
-		return fmt.Errorf("failed to initialize: %w", err)
-	}
-
-	if _, err := client.ListTools(ctx); err != nil {
-		client.Close()
-		return fmt.Errorf("failed to list tools: %w", err)
-	}
-
-	m.clients[name] = client
-	return nil
-}
-
-// Add registers a pre-created Client under the given name.
-// Use this for remote MCP servers or custom client implementations.
-func (m *Manager) Add(name string, client Client) error {
+// Register adds a ready-to-use Client under the given name.
+// Clients are created via Stdio() or HTTP() which handle initialization.
+func (m *Manager) Register(name string, client Client) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -65,8 +37,8 @@ func (m *Manager) Add(name string, client Client) error {
 	return nil
 }
 
-// SetDeniedTools sets tools to exclude from a server's tool list.
-func (m *Manager) SetDeniedTools(server string, tools []string) {
+// Deny excludes tools from a server's tool list.
+func (m *Manager) Deny(server string, tools []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

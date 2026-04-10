@@ -9,11 +9,9 @@ import (
 )
 
 // Client is the interface for communicating with an MCP server.
+// Clients are ready to use after creation — Stdio() and HTTP() handle initialization.
 type Client interface {
-	// Initialize performs the MCP initialization handshake.
-	Initialize(ctx context.Context) error
-
-	// ListTools fetches available tools from the server.
+	// ListTools refreshes and returns available tools from the server.
 	ListTools(ctx context.Context) ([]Tool, error)
 
 	// CallTool invokes a tool on the server.

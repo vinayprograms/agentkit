@@ -75,7 +75,7 @@ func TestManager_Add(t *testing.T) {
 		},
 	}
 
-	err := m.Add("test-server", mock)
+	err := m.Register("test-server", mock)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,8 +94,8 @@ func TestManager_Add_Duplicate(t *testing.T) {
 	m := NewManager()
 	mock := &mockClient{}
 
-	m.Add("srv", mock)
-	err := m.Add("srv", mock)
+	m.Register("srv", mock)
+	err := m.Register("srv", mock)
 	if err == nil {
 		t.Error("expected error for duplicate server")
 	}
@@ -112,8 +112,8 @@ func TestManager_DeniedTools(t *testing.T) {
 		},
 	}
 
-	m.Add("srv", mock)
-	m.SetDeniedTools("srv", []string{"delete"})
+	m.Register("srv", mock)
+	m.Deny("srv", []string{"delete"})
 
 	tools := m.AllTools()
 	if len(tools) != 2 {
@@ -132,7 +132,7 @@ func TestManager_FindTool(t *testing.T) {
 	mock := &mockClient{
 		tools: []Tool{{Name: "search", Description: "Search"}},
 	}
-	m.Add("srv", mock)
+	m.Register("srv", mock)
 
 	server, found := m.FindTool("search")
 	if !found {
@@ -148,8 +148,8 @@ func TestManager_FindTool_Denied(t *testing.T) {
 	mock := &mockClient{
 		tools: []Tool{{Name: "search", Description: "Search"}},
 	}
-	m.Add("srv", mock)
-	m.SetDeniedTools("srv", []string{"search"})
+	m.Register("srv", mock)
+	m.Deny("srv", []string{"search"})
 
 	_, found := m.FindTool("search")
 	if found {
@@ -163,7 +163,7 @@ func TestManager_CallTool(t *testing.T) {
 		tools:      []Tool{{Name: "read", Description: "Read"}},
 		callResult: &Result{Content: []Content{{Type: "text", Text: "file contents"}}},
 	}
-	m.Add("srv", mock)
+	m.Register("srv", mock)
 
 	result, err := m.CallTool(context.Background(), "srv", "read", map[string]any{"path": "/test"})
 	if err != nil {
@@ -186,7 +186,7 @@ func TestManager_CallTool_NotConnected(t *testing.T) {
 func TestManager_Disconnect(t *testing.T) {
 	m := NewManager()
 	mock := &mockClient{}
-	m.Add("srv", mock)
+	m.Register("srv", mock)
 
 	err := m.Disconnect("srv")
 	if err != nil {
@@ -210,8 +210,8 @@ func TestManager_Disconnect_NotFound(t *testing.T) {
 
 func TestManager_Servers(t *testing.T) {
 	m := NewManager()
-	m.Add("a", &mockClient{})
-	m.Add("b", &mockClient{})
+	m.Register("a", &mockClient{})
+	m.Register("b", &mockClient{})
 
 	servers := m.Servers()
 	if len(servers) != 2 {
@@ -223,8 +223,8 @@ func TestManager_Close(t *testing.T) {
 	m := NewManager()
 	mock1 := &mockClient{}
 	mock2 := &mockClient{}
-	m.Add("a", mock1)
-	m.Add("b", mock2)
+	m.Register("a", mock1)
+	m.Register("b", mock2)
 
 	m.Close()
 
@@ -268,7 +268,8 @@ func TestRPCError(t *testing.T) {
 func TestStdioClient_Integration(t *testing.T) {
 	t.Skip("requires actual MCP server")
 
-	client, err := Stdio(ServerConfig{
+	ctx := context.Background()
+	client, err := Stdio(ctx, ServerConfig{
 		Command: "npx",
 		Args:    []string{"-y", "@modelcontextprotocol/server-memory"},
 	})
@@ -277,12 +278,7 @@ func TestStdioClient_Integration(t *testing.T) {
 	}
 	defer client.Close()
 
-	ctx := context.Background()
-	if err := client.Initialize(ctx); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-
-	tools, err := client.ListTools(ctx)
+	tools := client.Tools()
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
@@ -301,8 +297,6 @@ type mockClient struct {
 	callErr    error
 	closed     bool
 }
-
-func (m *mockClient) Initialize(ctx context.Context) error { return nil }
 
 func (m *mockClient) ListTools(ctx context.Context) ([]Tool, error) {
 	return m.tools, nil
