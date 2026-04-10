@@ -4,8 +4,6 @@ package memory
 import (
 	"context"
 	"time"
-
-	"github.com/vinayprograms/agentkit/types"
 )
 
 // Memory represents a stored memory with metadata.
@@ -70,14 +68,16 @@ type Store interface {
 	Close() error
 }
 
-// ObservationItem is an alias for types.ObservationItem (backward compatible).
-type ObservationItem = types.ObservationItem
+// ObservationItem represents a stored observation with its metadata.
+type ObservationItem struct {
+	ID       string `json:"id"`
+	Content  string `json:"content"`
+	Category string `json:"category"` // "finding" | "insight" | "lesson"
+}
 
-// FILResult is an alias for types.FILResult (backward compatible).
-type FILResult = types.FILResult
-
-// Consolidator extracts insights from session transcripts.
-type Consolidator interface {
-	// Extract extracts key insights from a transcript.
-	Extract(ctx context.Context, transcript []Message) ([]string, error)
+// FILResult holds categorized observation results.
+type FILResult struct {
+	Findings []string `json:"findings"`
+	Insights []string `json:"insights"`
+	Lessons  []string `json:"lessons"`
 }

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vinayprograms/agentkit/types"
+	"github.com/vinayprograms/agentkit/memory"
 )
 
 // mockMemory implements Memory for testing.
 type mockMemory struct {
-	items []types.ObservationItem
+	items []memory.ObservationItem
 	idSeq int
 }
 
@@ -24,26 +24,26 @@ func (m *mockMemory) RememberFIL(ctx context.Context, findings, insights, lesson
 	for _, f := range findings {
 		m.idSeq++
 		id := fmt.Sprintf("f-%d", m.idSeq)
-		m.items = append(m.items, types.ObservationItem{ID: id, Content: f, Category: "finding"})
+		m.items = append(m.items, memory.ObservationItem{ID: id, Content: f, Category: "finding"})
 		ids = append(ids, id)
 	}
 	for _, i := range insights {
 		m.idSeq++
 		id := fmt.Sprintf("i-%d", m.idSeq)
-		m.items = append(m.items, types.ObservationItem{ID: id, Content: i, Category: "insight"})
+		m.items = append(m.items, memory.ObservationItem{ID: id, Content: i, Category: "insight"})
 		ids = append(ids, id)
 	}
 	for _, l := range lessons {
 		m.idSeq++
 		id := fmt.Sprintf("l-%d", m.idSeq)
-		m.items = append(m.items, types.ObservationItem{ID: id, Content: l, Category: "lesson"})
+		m.items = append(m.items, memory.ObservationItem{ID: id, Content: l, Category: "lesson"})
 		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
-func (m *mockMemory) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error) {
-	result := &types.FILResult{}
+func (m *mockMemory) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*memory.FILResult, error) {
+	result := &memory.FILResult{}
 	q := strings.ToLower(query)
 	for _, item := range m.items {
 		if !strings.Contains(strings.ToLower(item.Content), q) {

@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vinayprograms/agentkit/types"
+	"github.com/vinayprograms/agentkit/memory"
 )
 
 // Memory is the interface for observation-based memory used by remember/recall tools.
 // memory.InMemoryStore and memory.BleveStore both satisfy this interface.
 type Memory interface {
 	RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error)
-	RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error)
+	RecallFIL(ctx context.Context, query string, limitPerCategory int) (*memory.FILResult, error)
 }
 
 // --- Remember Tool ---
