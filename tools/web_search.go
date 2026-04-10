@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -100,17 +101,17 @@ func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) 
 	}
 
 	// Try engines in order. If one fails, fall back to the next.
-	var lastErr error
+	var errs []error
 	for _, engine := range t.engines {
 		results, err := engine.Search(ctx, query, count)
 		if err != nil {
-			lastErr = err
+			errs = append(errs, err)
 			continue
 		}
 		return formatSearchResults(results), nil
 	}
 
-	return "", fmt.Errorf("all search engines failed: %w", lastErr)
+	return "", fmt.Errorf("all search engines failed: %w", errors.Join(errs...))
 }
 
 // formatSearchResults turns results into human-readable text.
