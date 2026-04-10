@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -251,6 +252,19 @@ func TestManager_Close(t *testing.T) {
 	}
 }
 
+func TestManager_CloseReturnsError(t *testing.T) {
+	m := NewManager()
+	m.Register("failing", &mockClient{
+		tools:    []Tool{{Name: "t1"}},
+		closeErr: fmt.Errorf("close failed"),
+	})
+
+	err := m.Close()
+	if err == nil {
+		t.Error("expected error from Close")
+	}
+}
+
 func TestResult(t *testing.T) {
 	result := Result{
 		Content: []Content{
@@ -310,6 +324,7 @@ type mockClient struct {
 	tools      []Tool
 	callResult *Result
 	callErr    error
+	closeErr   error
 	closed     bool
 }
 
@@ -325,5 +340,5 @@ func (m *mockClient) Tools() []Tool { return m.tools }
 
 func (m *mockClient) Close() error {
 	m.closed = true
-	return nil
+	return m.closeErr
 }

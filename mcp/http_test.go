@@ -135,6 +135,190 @@ func TestHTTPClient_ConnectionError(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_ConstructorFailsOnListToolsError(t *testing.T) {
+	// Server returns valid initialize but invalid (non-JSON) tools/list result
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		switch req.Method {
+		case "initialize", "notifications/initialized":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(map[string]any{"protocolVersion": "2024-11-05"}),
+			})
+		case "tools/list":
+			// Return a valid JSON-RPC response but with a result that is not
+			// a valid toolsListResult (raw string instead of object).
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  json.RawMessage(`"not a tools list"`),
+			})
+		}
+	}))
+	defer server.Close()
+
+	_, err := HTTP(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("expected error when tools/list returns unparseable result")
+	}
+	if !contains(err.Error(), "list tools") {
+		t.Errorf("expected error to mention 'list tools', got: %v", err)
+	}
+}
+
+func TestHTTPClient_ListToolsJSONParseError(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		switch req.Method {
+		case "initialize", "notifications/initialized":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(map[string]any{"protocolVersion": "2024-11-05"}),
+			})
+		case "tools/list":
+			calls++
+			if calls == 1 {
+				// First call succeeds (during construction)
+				json.NewEncoder(w).Encode(rpcResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Result:  mustMarshal(toolsListResult{Tools: []Tool{{Name: "t1"}}}),
+				})
+			} else {
+				// Second call returns garbage result
+				json.NewEncoder(w).Encode(rpcResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Result:  json.RawMessage(`"bad json for tools list"`),
+				})
+			}
+		}
+	}))
+	defer server.Close()
+
+	client, err := HTTP(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("HTTP: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.ListTools(context.Background())
+	if err == nil {
+		t.Fatal("expected JSON parse error from ListTools")
+	}
+	if !contains(err.Error(), "failed to parse tools list") {
+		t.Errorf("expected 'failed to parse tools list', got: %v", err)
+	}
+}
+
+func TestHTTPClient_CallToolJSONParseError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		switch req.Method {
+		case "initialize", "notifications/initialized":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(map[string]any{"protocolVersion": "2024-11-05"}),
+			})
+		case "tools/list":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(toolsListResult{Tools: []Tool{{Name: "t1"}}}),
+			})
+		case "tools/call":
+			// Return valid JSON-RPC but unparseable tool result
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  json.RawMessage(`"not a Result object"`),
+			})
+		}
+	}))
+	defer server.Close()
+
+	client, err := HTTP(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("HTTP: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.CallTool(context.Background(), "t1", nil)
+	if err == nil {
+		t.Fatal("expected JSON parse error from CallTool")
+	}
+	if !contains(err.Error(), "failed to parse tool result") {
+		t.Errorf("expected 'failed to parse tool result', got: %v", err)
+	}
+}
+
+func TestHTTPClient_CallToolRPCError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		switch req.Method {
+		case "initialize", "notifications/initialized":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(map[string]any{"protocolVersion": "2024-11-05"}),
+			})
+		case "tools/list":
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  mustMarshal(toolsListResult{Tools: []Tool{{Name: "t1"}}}),
+			})
+		case "tools/call":
+			// Return an RPC error (simulating server-side tool execution failure)
+			json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &rpcError{Code: -32000, Message: "tool execution failed"},
+			})
+		}
+	}))
+	defer server.Close()
+
+	client, err := HTTP(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("HTTP: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.CallTool(context.Background(), "t1", nil)
+	if err == nil {
+		t.Fatal("expected error from CallTool when server returns RPC error")
+	}
+	if !contains(err.Error(), "tool execution failed") {
+		t.Errorf("expected 'tool execution failed', got: %v", err)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchSubstring(s, substr)
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func mustMarshal(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
