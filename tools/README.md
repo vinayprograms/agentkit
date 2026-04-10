@@ -11,6 +11,7 @@ registry.Register(tools.New(tools.Pwd()))
 registry.Register(tools.New(tools.Read(workspace)))
 registry.Register(tools.New(tools.Bash(workspace)).With(gate))
 registry.Register(tools.New(tools.Fetch(summarizer)))
+registry.Register(tools.New(tools.Search(creds)))
 
 // Get definitions for LLM
 defs := registry.Definitions()
@@ -81,6 +82,65 @@ registry.Register(tools.New(tools.Bash(workspace)).With(gate1).With(gate2))
 ```
 
 Guards run in order. If any returns an error, execution stops.
+
+## Summarizer
+
+`Fetch` accepts a `Summarizer` interface for content extraction:
+
+```go
+type Summarizer interface {
+    Summarize(ctx context.Context, content, question string) (string, error)
+}
+```
+
+Use the built-in LLM summarizer or implement your own:
+
+```go
+summarizer := tools.NewSummarizer(llmModel)
+registry.Register(tools.New(tools.Fetch(summarizer)))
+```
+
+Pass `nil` to return full extracted text without summarization.
+
+## Search Engines
+
+`Search` resolves available engines from `credentials.Lookup` and tries them in order with automatic fallback. DuckDuckGo is always the final fallback.
+
+```go
+type SearchEngine interface {
+    Search(ctx context.Context, query string, count int) ([]searchResult, error)
+}
+```
+
+Supported engines (resolved from credentials):
+- **SearXNG** — credential key `"searxng"` (base URL)
+- **Brave** — credential key `"brave"` (API key)
+- **Tavily** — credential key `"tavily"` (API key)
+- **DuckDuckGo** — always available, no credentials needed
+
+```go
+creds := credentials.Merge(
+    credentials.FromFile(path),
+    credentials.FromEnv(),
+)
+registry.Register(tools.New(tools.Search(creds)))
+```
+
+If the first engine fails, the next is tried automatically. All errors are collected if every engine fails.
+
+## LLM Integration
+
+Use `Definition.JSONSchema()` to bridge tool definitions to LLM APIs:
+
+```go
+for _, def := range registry.Definitions() {
+    llmTools = append(llmTools, llm.ToolDef{
+        Name:        def.Name,
+        Description: def.Description,
+        Parameters:  def.JSONSchema(),
+    })
+}
+```
 
 ## Parameters
 
