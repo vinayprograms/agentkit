@@ -27,8 +27,7 @@ type spawnTool struct {
 }
 
 // Spawn creates a tool that spawns sub-agents.
-// Handles both single agent (role + task) and multiple agents (agents array).
-// When multiple agents are specified, they run in parallel.
+// Accepts an array of agent specs. One spec = single agent. Multiple = parallel execution.
 func Spawn(spawner SpawnFunc) Tool {
 	return &spawnTool{spawner: spawner}
 }
@@ -36,76 +35,38 @@ func Spawn(spawner SpawnFunc) Tool {
 func (t *spawnTool) Name() string { return "spawn_agent" }
 
 func (t *spawnTool) Description() string {
-	return `Spawn one or more sub-agents to handle tasks.
+	return `Spawn sub-agents to handle tasks. Pass one or more agent specs.
 
-For a single agent:
-  spawn_agent(role: "researcher", task: "Find key events", outputs: ["events", "dates"])
+Parameters:
+  - agents (required): Array of agent specs, each with:
+    - role (required): Name/role for the sub-agent (e.g., "researcher", "critic")
+    - task (required): Task description
+    - outputs (optional): List of field names for structured JSON response
 
-For multiple agents in parallel:
+Single agent:
+  spawn_agent(agents: [{role: "researcher", task: "Find key events"}])
+
+Multiple agents (run in parallel):
   spawn_agent(agents: [
     {role: "researcher", task: "Find historical context"},
     {role: "analyst", task: "Analyze current trends"}
-  ])
-
-Parameters:
-  Single agent mode:
-  - role (required): Name/role for the sub-agent
-  - task (required): Task description
-  - outputs (optional): List of field names for structured JSON response
-
-  Multi-agent mode:
-  - agents (required): Array of agent specs, each with role, task, and optional outputs
-
-Returns text response (single) or numbered results (multiple).`
+  ])`
 }
 
 func (t *spawnTool) Parameters() map[string]Param {
 	return map[string]Param{
-		"role": {
-			Type:        StringParam,
-			Description: "Role for a single sub-agent (e.g., 'researcher', 'critic')",
-		},
-		"task": {
-			Type:        StringParam,
-			Description: "Task for a single sub-agent",
-		},
-		"outputs": {
-			Type:        ArrayParam,
-			Description: "Optional output field names for structured JSON response",
-		},
 		"agents": {
 			Type:        ArrayParam,
-			Description: "Array of agent specs for parallel execution (each has role, task, optional outputs)",
+			Description: "Array of agent specs (each has role, task, optional outputs)",
+			Required:    true,
 		},
 	}
 }
 
-func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
-	if t.spawner == nil {
-		return "", fmt.Errorf("spawn_agent not available (no spawner configured)")
-	}
-
-	// Multi-agent mode: agents array takes precedence
-	if args.Has("agents") {
-		return t.spawnMultiple(ctx, args)
-	}
-
-	// Single-agent mode
-	return t.spawnSingle(ctx, args)
-}
-
-func (t *spawnTool) spawnSingle(ctx context.Context, args Args) (string, error) {
-	role, err := args.String("role")
-	if err != nil {
-		return "", fmt.Errorf("single agent requires 'role': %w", err)
-	}
-	task, err := args.String("task")
-	if err != nil {
-		return "", fmt.Errorf("single agent requires 'task': %w", err)
-	}
-	outputs := args.StringSliceOr("outputs", nil)
-
-	return t.spawner(ctx, role, task, outputs)
+type agentSpec struct {
+	role    string
+	task    string
+	outputs []string
 }
 
 type agentResult struct {
@@ -114,7 +75,11 @@ type agentResult struct {
 	err    error
 }
 
-func (t *spawnTool) spawnMultiple(ctx context.Context, args Args) (string, error) {
+func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
+	if t.spawner == nil {
+		return "", fmt.Errorf("spawn_agent not available (no spawner configured)")
+	}
+
 	agentsRaw, ok := args.values["agents"].([]any)
 	if !ok {
 		return "", fmt.Errorf("agents must be an array")
@@ -123,12 +88,7 @@ func (t *spawnTool) spawnMultiple(ctx context.Context, args Args) (string, error
 		return "No agents specified.", nil
 	}
 
-	type agentSpec struct {
-		role    string
-		task    string
-		outputs []string
-	}
-
+	// Parse specs
 	specs := make([]agentSpec, 0, len(agentsRaw))
 	for i, a := range agentsRaw {
 		agentMap, ok := a.(map[string]any)
@@ -173,6 +133,15 @@ func (t *spawnTool) spawnMultiple(ctx context.Context, args Args) (string, error
 		collected[r.index] = r
 	}
 
+	// Single agent — return result directly
+	if len(collected) == 1 {
+		if collected[0].err != nil {
+			return "", collected[0].err
+		}
+		return collected[0].result, nil
+	}
+
+	// Multiple agents — format with headers
 	var sb strings.Builder
 	for i, r := range collected {
 		if i > 0 {
