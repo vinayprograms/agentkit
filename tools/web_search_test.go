@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/vinayprograms/agentkit/credentials"
 )
@@ -35,10 +34,6 @@ func TestWebSearch_TavilyBackendViaExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Reset rate limiter
-	searchMutex.Lock()
-	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
-	searchMutex.Unlock()
 
 	creds := &mockCreds{keys: map[string]string{"tavily": "test-tavily-key"}}
 	tool := Search(creds)
@@ -67,9 +62,6 @@ func TestWebSearch_BraveBackendViaExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	searchMutex.Lock()
-	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
-	searchMutex.Unlock()
 
 	creds := &mockCreds{keys: map[string]string{"brave": "test-brave-key"}}
 	tool := Search(creds)
@@ -95,12 +87,6 @@ func TestWebSearch_DuckDuckGoFallbackViaExecute(t *testing.T) {
 	defer server.Close()
 
 	// Reset both rate limiters
-	searchMutex.Lock()
-	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
-	searchMutex.Unlock()
-	ddgMutex.Lock()
-	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
-	ddgMutex.Unlock()
 
 	// No credentials -- should fall back to DuckDuckGo
 	tool := Search(nil)
@@ -181,10 +167,6 @@ func TestSearchDuckDuckGo_ViaHTTPTest(t *testing.T) {
 
 	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	// Reset DDG rate limiter to avoid delays
-	ddgMutex.Lock()
-	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
-	ddgMutex.Unlock()
 
 	results, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err != nil {
@@ -214,20 +196,6 @@ func TestSearchDuckDuckGo_RateLimit(t *testing.T) {
 
 	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	// Speed up backoff for test
-	origBackoff := ddgBackoff
-	origMaxBackoff := ddgMaxBackoff
-	ddgBackoff = 1 * time.Millisecond
-	ddgMaxBackoff = 5 * time.Millisecond
-	defer func() {
-		ddgBackoff = origBackoff
-		ddgMaxBackoff = origMaxBackoff
-	}()
-
-	ddgMutex.Lock()
-	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
-	ddgMutex.Unlock()
-
 	results, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -245,9 +213,6 @@ func TestSearchDuckDuckGo_NonRetryableError(t *testing.T) {
 
 	tool := testSearchTool(rewriteTransport{url: server.URL})
 
-	ddgMutex.Lock()
-	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
-	ddgMutex.Unlock()
 
 	_, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err == nil {
@@ -356,19 +321,6 @@ func TestSearchDuckDuckGo_AllRetriesFail(t *testing.T) {
 	defer server.Close()
 
 	tool := testSearchTool(rewriteTransport{url: server.URL})
-
-	origBackoff := ddgBackoff
-	origMaxBackoff := ddgMaxBackoff
-	ddgBackoff = 1 * time.Millisecond
-	ddgMaxBackoff = 5 * time.Millisecond
-	defer func() {
-		ddgBackoff = origBackoff
-		ddgMaxBackoff = origMaxBackoff
-	}()
-
-	ddgMutex.Lock()
-	ddgLastSearch = ddgLastSearch.Add(-10 * ddgCooldown)
-	ddgMutex.Unlock()
 
 	_, err := tool.searchDuckDuckGo(context.Background(), "test", 5)
 	if err == nil {

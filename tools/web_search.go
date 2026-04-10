@@ -17,8 +17,11 @@ import (
 )
 
 type webSearchTool struct {
-	creds  credentials.Lookup
-	client *http.Client
+	creds         credentials.Lookup
+	client        *http.Client
+	mu            sync.Mutex
+	lastSearch    time.Time
+	ddgLastSearch time.Time
 }
 
 // Search returns a tool that searches the web using available backends.
@@ -53,12 +56,7 @@ func (t *webSearchTool) Parameters() map[string]Param {
 	}
 }
 
-// Global rate limiter for web search.
-var (
-	searchMutex    sync.Mutex
-	lastSearchTime time.Time
-	searchCooldown = 500 * time.Millisecond
-)
+const searchCooldown = 500 * time.Millisecond
 
 func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) {
 	query, err := args.String("query")
@@ -74,20 +72,20 @@ func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) 
 	}
 
 	// Rate limiting.
-	searchMutex.Lock()
-	elapsed := time.Since(lastSearchTime)
+	t.mu.Lock()
+	elapsed := time.Since(t.lastSearch)
 	if elapsed < searchCooldown {
 		wait := searchCooldown - elapsed
-		searchMutex.Unlock()
+		t.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-time.After(wait):
 		}
-		searchMutex.Lock()
+		t.mu.Lock()
 	}
-	lastSearchTime = time.Now()
-	searchMutex.Unlock()
+	t.lastSearch = time.Now()
+	t.mu.Unlock()
 
 	// Resolve API keys: credentials first, then env vars.
 	var searxngURL, braveKey, tavilyKey string
@@ -280,10 +278,7 @@ func (t *webSearchTool) searchTavily(ctx context.Context, query string, count in
 	return results, nil
 }
 
-// DDG-specific rate limiting.
-var (
-	ddgMutex      sync.Mutex
-	ddgLastSearch time.Time
+const (
 	ddgCooldown   = 2 * time.Second
 	ddgBackoff    = 2 * time.Second
 	ddgMaxBackoff = 5 * time.Second
@@ -291,20 +286,20 @@ var (
 )
 
 func (t *webSearchTool) searchDuckDuckGo(ctx context.Context, query string, count int) ([]searchResult, error) {
-	ddgMutex.Lock()
-	elapsed := time.Since(ddgLastSearch)
+	t.mu.Lock()
+	elapsed := time.Since(t.ddgLastSearch)
 	if elapsed < ddgCooldown {
 		wait := ddgCooldown - elapsed
-		ddgMutex.Unlock()
+		t.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(wait):
 		}
-		ddgMutex.Lock()
+		t.mu.Lock()
 	}
-	ddgLastSearch = time.Now()
-	ddgMutex.Unlock()
+	t.ddgLastSearch = time.Now()
+	t.mu.Unlock()
 
 	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s",
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
