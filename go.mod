@@ -10,7 +10,6 @@ require (
 	github.com/blevesearch/bleve/v2 v2.5.7
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
 	github.com/nats-io/nats.go v1.49.0
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
