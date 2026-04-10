@@ -1,4 +1,3 @@
-// Package mcp provides MCP (Model Context Protocol) client support.
 package mcp
 
 import (
@@ -11,7 +10,7 @@ import (
 
 // Manager manages multiple MCP server connections.
 type Manager struct {
-	clients     map[string]*Client
+	clients     map[string]Client
 	deniedTools map[string]map[string]bool // server -> tool -> denied
 	mu          sync.RWMutex
 }
@@ -19,12 +18,12 @@ type Manager struct {
 // NewManager creates a new MCP manager.
 func NewManager() *Manager {
 	return &Manager{
-		clients:     make(map[string]*Client),
+		clients:     make(map[string]Client),
 		deniedTools: make(map[string]map[string]bool),
 	}
 }
 
-// Connect connects to an MCP server.
+// Connect connects to a local MCP server via stdio.
 func (m *Manager) Connect(ctx context.Context, name string, config ServerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -33,7 +32,7 @@ func (m *Manager) Connect(ctx context.Context, name string, config ServerConfig)
 		return fmt.Errorf("server %q already connected", name)
 	}
 
-	client, err := NewClient(config)
+	client, err := Stdio(config)
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
@@ -43,7 +42,6 @@ func (m *Manager) Connect(ctx context.Context, name string, config ServerConfig)
 		return fmt.Errorf("failed to initialize: %w", err)
 	}
 
-	// Fetch tools
 	if _, err := client.ListTools(ctx); err != nil {
 		client.Close()
 		return fmt.Errorf("failed to list tools: %w", err)
@@ -53,8 +51,21 @@ func (m *Manager) Connect(ctx context.Context, name string, config ServerConfig)
 	return nil
 }
 
+// Add registers a pre-created Client under the given name.
+// Use this for remote MCP servers or custom client implementations.
+func (m *Manager) Add(name string, client Client) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.clients[name]; exists {
+		return fmt.Errorf("server %q already connected", name)
+	}
+
+	m.clients[name] = client
+	return nil
+}
+
 // SetDeniedTools sets tools to exclude from a server's tool list.
-// These tools will not be returned by AllTools() and won't be exposed to the LLM.
 func (m *Manager) SetDeniedTools(server string, tools []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -80,6 +91,12 @@ func (m *Manager) Disconnect(name string) error {
 	return client.Close()
 }
 
+// ToolWithServer pairs a tool with its server name.
+type ToolWithServer struct {
+	Server string
+	Tool   Tool
+}
+
 // AllTools returns all tools from all connected servers, excluding denied tools.
 func (m *Manager) AllTools() []ToolWithServer {
 	m.mu.RLock()
@@ -89,7 +106,6 @@ func (m *Manager) AllTools() []ToolWithServer {
 	for server, client := range m.clients {
 		denied := m.deniedTools[server]
 		for _, tool := range client.Tools() {
-			// Skip denied tools
 			if denied != nil && denied[tool.Name] {
 				continue
 			}
@@ -102,14 +118,8 @@ func (m *Manager) AllTools() []ToolWithServer {
 	return tools
 }
 
-// ToolWithServer pairs a tool with its server name.
-type ToolWithServer struct {
-	Server string
-	Tool   Tool
-}
-
 // CallTool calls a tool on a specific server.
-func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[string]interface{}) (*ToolCallResult, error) {
+func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[string]any) (*Result, error) {
 	m.mu.RLock()
 	client, ok := m.clients[server]
 	m.mu.RUnlock()
@@ -118,13 +128,11 @@ func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[st
 		return nil, fmt.Errorf("server %q not connected", server)
 	}
 
-	// Add tracing
 	tracer := telemetry.GetTracer()
 	ctx, span := tracer.StartMCPSpan(ctx, server, tool)
 
 	result, err := client.CallTool(ctx, tool, args)
 
-	// Build result string for tracing
 	var resultStr string
 	if result != nil && len(result.Content) > 0 {
 		resultStr = result.Content[0].Text
@@ -149,7 +157,6 @@ func (m *Manager) FindTool(name string) (server string, found bool) {
 		denied := m.deniedTools[srv]
 		for _, tool := range client.Tools() {
 			if tool.Name == name {
-				// Check if denied
 				if denied != nil && denied[name] {
 					continue
 				}
