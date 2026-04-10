@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,21 +15,52 @@ import (
 	"github.com/vinayprograms/agentkit/credentials"
 )
 
+// SearchEngine performs web searches.
+type SearchEngine interface {
+	Search(ctx context.Context, query string, count int) ([]searchResult, error)
+}
+
+// searchResult represents a single search result.
+type searchResult struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
 type webSearchTool struct {
-	creds         credentials.Lookup
-	client        *http.Client
-	mu            sync.Mutex
-	lastSearch    time.Time
-	ddgLastSearch time.Time
+	engines []SearchEngine
 }
 
 // Search returns a tool that searches the web using available backends.
-// creds may be nil (falls back to environment variables and DuckDuckGo).
+// Engines are resolved from credentials and environment variables.
+// DuckDuckGo is always included as the final fallback.
+// On execution, engines are tried in order — if one fails, the next is tried.
 func Search(creds credentials.Lookup) Tool {
 	return &webSearchTool{
-		creds:  creds,
-		client: &http.Client{Timeout: defaultHTTPTimeout},
+		engines: resolveEngines(creds),
 	}
+}
+
+func resolveEngines(creds credentials.Lookup) []SearchEngine {
+	var engines []SearchEngine
+	client := &http.Client{Timeout: defaultHTTPTimeout}
+
+	if creds != nil {
+		if url := string(creds.Get("searxng")); url != "" {
+			engines = append(engines, &searxngEngine{baseURL: url, client: client})
+		}
+		if key := string(creds.Get("brave")); key != "" {
+			engines = append(engines, &braveEngine{apiKey: key, client: client})
+		}
+		if key := string(creds.Get("tavily")); key != "" {
+			engines = append(engines, &tavilyEngine{apiKey: key, client: client})
+		}
+	}
+
+	// DuckDuckGo is always the final fallback.
+	engines = append(engines, &duckDuckGoEngine{client: client})
+
+	return engines
 }
 
 func (t *webSearchTool) Name() string { return "web_search" }
@@ -56,8 +86,6 @@ func (t *webSearchTool) Parameters() map[string]Param {
 	}
 }
 
-const searchCooldown = 500 * time.Millisecond
-
 func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) {
 	query, err := args.String("query")
 	if err != nil {
@@ -71,62 +99,18 @@ func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) 
 		count = 10
 	}
 
-	// Rate limiting.
-	t.mu.Lock()
-	elapsed := time.Since(t.lastSearch)
-	if elapsed < searchCooldown {
-		wait := searchCooldown - elapsed
-		t.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(wait):
+	// Try engines in order. If one fails, fall back to the next.
+	var lastErr error
+	for _, engine := range t.engines {
+		results, err := engine.Search(ctx, query, count)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		t.mu.Lock()
-	}
-	t.lastSearch = time.Now()
-	t.mu.Unlock()
-
-	// Resolve API keys: credentials first, then env vars.
-	var searxngURL, braveKey, tavilyKey string
-	if t.creds != nil {
-		searxngURL = string(t.creds.Get("searxng"))
-		braveKey = string(t.creds.Get("brave"))
-		tavilyKey = string(t.creds.Get("tavily"))
-	}
-	if searxngURL == "" {
-		searxngURL = os.Getenv("SEARXNG_URL")
-	}
-	if braveKey == "" {
-		braveKey = os.Getenv("BRAVE_API_KEY")
-	}
-	if tavilyKey == "" {
-		tavilyKey = os.Getenv("TAVILY_API_KEY")
+		return formatSearchResults(results), nil
 	}
 
-	var results []searchResult
-	switch {
-	case searxngURL != "":
-		results, err = t.searchSearXNG(ctx, query, count, searxngURL)
-	case braveKey != "":
-		results, err = t.searchBrave(ctx, query, count, braveKey)
-	case tavilyKey != "":
-		results, err = t.searchTavily(ctx, query, count, tavilyKey)
-	default:
-		results, err = t.searchDuckDuckGo(ctx, query, count)
-	}
-	if err != nil {
-		return "", err
-	}
-
-	return formatSearchResults(results), nil
-}
-
-// searchResult represents a single search result (unexported).
-type searchResult struct {
-	Title   string
-	URL     string
-	Snippet string
+	return "", fmt.Errorf("all search engines failed: %w", lastErr)
 }
 
 // formatSearchResults turns results into human-readable text.
@@ -147,44 +131,48 @@ func formatSearchResults(results []searchResult) string {
 	return b.String()
 }
 
-// --- Search backends ---
+// --- SearXNG ---
 
-func (t *webSearchTool) searchSearXNG(ctx context.Context, query string, count int, baseURL string) ([]searchResult, error) {
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
-		baseURL, strings.ReplaceAll(query, " ", "+"))
+type searxngEngine struct {
+	baseURL string
+	client  *http.Client
+}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+func (e *searxngEngine) Search(ctx context.Context, query string, count int) ([]searchResult, error) {
+	url := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
+		strings.TrimSuffix(e.baseURL, "/"), strings.ReplaceAll(query, " ", "+"))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
+	req.Header.Set("User-Agent", "HeadlessAgent/1.0")
 
-	resp, err := t.client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("searxng search failed: %w", err)
+		return nil, fmt.Errorf("searxng: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("searxng search error (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("searxng error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var searxResp struct {
+	var parsed struct {
 		Results []struct {
 			Title   string `json:"title"`
 			URL     string `json:"url"`
 			Content string `json:"content"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&searxResp); err != nil {
-		return nil, fmt.Errorf("failed to parse searxng response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("searxng: invalid response: %w", err)
 	}
 
 	results := make([]searchResult, 0, count)
-	for i, r := range searxResp.Results {
+	for i, r := range parsed.Results {
 		if i >= count {
 			break
 		}
@@ -193,7 +181,14 @@ func (t *webSearchTool) searchSearXNG(ctx context.Context, query string, count i
 	return results, nil
 }
 
-func (t *webSearchTool) searchBrave(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
+// --- Brave ---
+
+type braveEngine struct {
+	apiKey string
+	client *http.Client
+}
+
+func (e *braveEngine) Search(ctx context.Context, query string, count int) ([]searchResult, error) {
 	url := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		strings.ReplaceAll(query, " ", "+"), count)
 
@@ -201,21 +196,21 @@ func (t *webSearchTool) searchBrave(ctx context.Context, query string, count int
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Subscription-Token", apiKey)
+	req.Header.Set("X-Subscription-Token", e.apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := t.client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("brave search failed: %w", err)
+		return nil, fmt.Errorf("brave: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("brave search error (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("brave error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var braveResp struct {
+	var parsed struct {
 		Web struct {
 			Results []struct {
 				Title       string `json:"title"`
@@ -224,20 +219,27 @@ func (t *webSearchTool) searchBrave(ctx context.Context, query string, count int
 			} `json:"results"`
 		} `json:"web"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&braveResp); err != nil {
-		return nil, fmt.Errorf("failed to parse brave response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("brave: invalid response: %w", err)
 	}
 
-	results := make([]searchResult, 0, len(braveResp.Web.Results))
-	for _, r := range braveResp.Web.Results {
+	results := make([]searchResult, 0, len(parsed.Web.Results))
+	for _, r := range parsed.Web.Results {
 		results = append(results, searchResult{Title: r.Title, URL: r.URL, Snippet: r.Description})
 	}
 	return results, nil
 }
 
-func (t *webSearchTool) searchTavily(ctx context.Context, query string, count int, apiKey string) ([]searchResult, error) {
-	reqBody := map[string]interface{}{
-		"api_key":     apiKey,
+// --- Tavily ---
+
+type tavilyEngine struct {
+	apiKey string
+	client *http.Client
+}
+
+func (e *tavilyEngine) Search(ctx context.Context, query string, count int) ([]searchResult, error) {
+	reqBody := map[string]any{
+		"api_key":     e.apiKey,
 		"query":       query,
 		"max_results": count,
 	}
@@ -249,33 +251,41 @@ func (t *webSearchTool) searchTavily(ctx context.Context, query string, count in
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := t.client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tavily search failed: %w", err)
+		return nil, fmt.Errorf("tavily: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("tavily search error (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("tavily error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var tavilyResp struct {
+	var parsed struct {
 		Results []struct {
 			Title   string `json:"title"`
 			URL     string `json:"url"`
 			Content string `json:"content"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tavilyResp); err != nil {
-		return nil, fmt.Errorf("failed to parse tavily response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("tavily: invalid response: %w", err)
 	}
 
-	results := make([]searchResult, 0, len(tavilyResp.Results))
-	for _, r := range tavilyResp.Results {
+	results := make([]searchResult, 0, len(parsed.Results))
+	for _, r := range parsed.Results {
 		results = append(results, searchResult{Title: r.Title, URL: r.URL, Snippet: r.Content})
 	}
 	return results, nil
+}
+
+// --- DuckDuckGo (fallback) ---
+
+type duckDuckGoEngine struct {
+	client     *http.Client
+	mu         sync.Mutex
+	lastSearch time.Time
 }
 
 const (
@@ -285,21 +295,21 @@ const (
 	ddgMaxRetries = 3
 )
 
-func (t *webSearchTool) searchDuckDuckGo(ctx context.Context, query string, count int) ([]searchResult, error) {
-	t.mu.Lock()
-	elapsed := time.Since(t.ddgLastSearch)
+func (e *duckDuckGoEngine) Search(ctx context.Context, query string, count int) ([]searchResult, error) {
+	e.mu.Lock()
+	elapsed := time.Since(e.lastSearch)
 	if elapsed < ddgCooldown {
 		wait := ddgCooldown - elapsed
-		t.mu.Unlock()
+		e.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(wait):
 		}
-		t.mu.Lock()
+		e.mu.Lock()
 	}
-	t.ddgLastSearch = time.Now()
-	t.mu.Unlock()
+	e.lastSearch = time.Now()
+	e.mu.Unlock()
 
 	searchURL := fmt.Sprintf("https://duckduckgo.com/html/?q=%s",
 		strings.ReplaceAll(strings.ReplaceAll(query, " ", "+"), "&", "%26"))
@@ -324,38 +334,40 @@ func (t *webSearchTool) searchDuckDuckGo(ctx context.Context, query string, coun
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("User-Agent", "HeadlessAgent/1.0 (+https://github.com/vinayprograms/agent)")
+		req.Header.Set("User-Agent", "HeadlessAgent/1.0")
 		req.Header.Set("Accept", "text/html")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-		resp, err := t.client.Do(req)
+		resp, err := e.client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("duckduckgo search failed: %w", err)
+			lastErr = fmt.Errorf("duckduckgo: %w", err)
 			continue
 		}
 
 		if resp.StatusCode == 202 || resp.StatusCode == 403 || resp.StatusCode == 429 {
 			resp.Body.Close()
-			lastErr = fmt.Errorf("duckduckgo rate limited (status %d), retrying", resp.StatusCode)
+			lastErr = fmt.Errorf("duckduckgo: rate limited (status %d)", resp.StatusCode)
 			continue
 		}
 
 		if resp.StatusCode != 200 {
 			resp.Body.Close()
-			return nil, fmt.Errorf("duckduckgo search error: status %d", resp.StatusCode)
+			return nil, fmt.Errorf("duckduckgo error: status %d", resp.StatusCode)
 		}
 
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("failed to read duckduckgo response: %w", err)
+			return nil, fmt.Errorf("duckduckgo: failed to read response: %w", err)
 		}
 
 		return parseDuckDuckGoHTML(string(body), count), nil
 	}
 
-	return nil, fmt.Errorf("duckduckgo search failed after %d retries: %w", ddgMaxRetries, lastErr)
+	return nil, fmt.Errorf("duckduckgo: failed after %d retries: %w", ddgMaxRetries, lastErr)
 }
+
+// --- HTML parsing helpers ---
 
 func parseDuckDuckGoHTML(html string, count int) []searchResult {
 	var results []searchResult
@@ -370,7 +382,6 @@ func parseDuckDuckGoHTML(html string, count int) []searchResult {
 		url := links[i][1]
 		title := strings.TrimSpace(links[i][2])
 
-		// DuckDuckGo wraps URLs in a redirect — extract the actual URL.
 		if strings.Contains(url, "uddg=") {
 			if parts := strings.Split(url, "uddg="); len(parts) > 1 {
 				decoded, err := decodeURLComponent(parts[1])
