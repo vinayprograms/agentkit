@@ -32,7 +32,7 @@ func Spawn(spawner SpawnFunc) Tool {
 	return &spawnTool{spawner: spawner}
 }
 
-func (t *spawnTool) Name() string { return "spawn_agent" }
+func (t *spawnTool) Name() string { return "spawn_agents" }
 
 func (t *spawnTool) Description() string {
 	return `Spawn sub-agents to handle tasks. Pass one or more agent specs.
@@ -44,10 +44,10 @@ Parameters:
     - outputs (optional): List of field names for structured JSON response
 
 Single agent:
-  spawn_agent(agents: [{role: "researcher", task: "Find key events"}])
+  spawn_agents(agents: [{role: "researcher", task: "Find key events"}])
 
 Multiple agents (run in parallel):
-  spawn_agent(agents: [
+  spawn_agents(agents: [
     {role: "researcher", task: "Find historical context"},
     {role: "analyst", task: "Analyze current trends"}
   ])`
@@ -77,7 +77,7 @@ type agentResult struct {
 
 func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
 	if t.spawner == nil {
-		return "", fmt.Errorf("spawn_agent not available (no spawner configured)")
+		return "", fmt.Errorf("spawn_agents not available (no spawner configured)")
 	}
 
 	agentsRaw, ok := args.values["agents"].([]any)

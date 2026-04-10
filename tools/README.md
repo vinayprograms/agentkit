@@ -197,4 +197,4 @@ The registry validates raw args against parameters before calling `Execute`. Too
 | scratchpad | `ScratchpadRead/Write/List/Search(store, persistent)` | Key-value memory |
 | remember | `Remember(mem)` | Store observations |
 | recall | `Recall(mem)` | Search observations |
-| spawn_agent | `Spawn(spawner)` | Spawn one or more sub-agents |
+| spawn_agents | `Spawn(spawner)` | Spawn one or more sub-agents |

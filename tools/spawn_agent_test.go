@@ -154,8 +154,8 @@ func TestSpawn_NoSpawner(t *testing.T) {
 
 func TestSpawn_NameAndDescription(t *testing.T) {
 	tool := Spawn(nil)
-	if tool.Name() != "spawn_agent" {
-		t.Errorf("expected 'spawn_agent', got %q", tool.Name())
+	if tool.Name() != "spawn_agents" {
+		t.Errorf("expected 'spawn_agents', got %q", tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
