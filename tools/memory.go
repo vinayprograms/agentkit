@@ -8,26 +8,21 @@ import (
 	"github.com/vinayprograms/agentkit/types"
 )
 
-// SemanticMemory provides semantic memory operations.
-type SemanticMemory interface {
-	// RememberFIL stores multiple observations at once and returns their IDs.
+// Memory is the interface for observation-based memory used by remember/recall tools.
+// memory.InMemoryStore and memory.BleveStore both satisfy this interface.
+type Memory interface {
 	RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error)
-	// RetrieveByID gets a single observation by ID.
-	RetrieveByID(ctx context.Context, id string) (*types.ObservationItem, error)
-	// RecallFIL searches and returns categorized results.
 	RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error)
-	// Recall searches and returns flat results with scores.
-	Recall(ctx context.Context, query string, limit int) ([]types.SemanticMemoryResult, error)
 }
 
 // --- Remember Tool ---
 
 type rememberTool struct {
-	memory SemanticMemory
+	memory Memory
 }
 
-// Remember creates a tool that stores observations in semantic memory.
-func Remember(mem SemanticMemory) Tool {
+// Remember creates a tool that stores observations in persistent memory.
+func Remember(mem Memory) Tool {
 	return &rememberTool{memory: mem}
 }
 
@@ -40,13 +35,6 @@ Categories:
 - findings: Facts discovered (e.g., "API rate limit is 100/min")
 - insights: Conclusions/decisions (e.g., "Chose PostgreSQL for JSON support")
 - lessons: Rules for future (e.g., "Always check rate limits first")
-
-Example:
-  remember({
-    "findings": ["Database uses PostgreSQL", "API has 100 req/min limit"],
-    "insights": ["PostgreSQL chosen for JSON support"],
-    "lessons": ["Always check rate limits before integration"]
-  })
 
 Returns the count and IDs of stored observations.`
 }
@@ -73,7 +61,6 @@ func (t *rememberTool) Execute(ctx context.Context, args Args) (string, error) {
 	insights := args.StringSliceOr("insights", nil)
 	lessons := args.StringSliceOr("lessons", nil)
 
-	// Filter out empty strings
 	findings = filterNonEmpty(findings)
 	insights = filterNonEmpty(insights)
 	lessons = filterNonEmpty(lessons)
@@ -90,44 +77,31 @@ func (t *rememberTool) Execute(ctx context.Context, args Args) (string, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Stored %d observations.\n", len(ids))
 	fmt.Fprintf(&sb, "IDs: %s\n", strings.Join(ids, ", "))
-	sb.WriteString("Stored in persistent memory. Use recall() with relevant keywords to find later.")
+	sb.WriteString("Use recall() with relevant keywords to find later.")
 	return sb.String(), nil
 }
 
 // --- Recall Tool ---
 
 type recallTool struct {
-	memory SemanticMemory
+	memory Memory
 }
 
-// Recall creates a tool that searches semantic memory for relevant observations.
-func Recall(mem SemanticMemory) Tool {
+// Recall creates a tool that searches memory for relevant observations.
+func Recall(mem Memory) Tool {
 	return &recallTool{memory: mem}
 }
 
 func (t *recallTool) Name() string { return "recall" }
 
 func (t *recallTool) Description() string {
-	return `Search your persistent knowledge base -- use BEFORE external searches!
+	return `Search your persistent knowledge base — use BEFORE external searches!
 
-This searches your accumulated knowledge from ALL past sessions.
-Check here FIRST before web search, file reading, or MCP calls.
-
-Uses keyword-based search (BM25). Use DISTINCTIVE KEYWORDS, not sentences:
+Uses keyword-based search. Use distinctive keywords, not sentences:
 - "PostgreSQL JSON" finds "Chose PostgreSQL for JSON support"
 - "OAuth refresh tokens" finds auth-related decisions
-- "What database did we choose?" is too vague, may miss results
 
-Tips for better results:
-- Use 2-4 key terms that appear in the original content
-- Include specific names: tools, libraries, formats, concepts
-- Try multiple searches with different keyword combinations
-
-Returns categorized results: findings, insights, and lessons.
-
-Parameters:
-  - query (required): Keywords to search for
-  - limit (optional): Results per category (default 5)`
+Returns categorized results: findings, insights, and lessons.`
 }
 
 func (t *recallTool) Parameters() map[string]Param {

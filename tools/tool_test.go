@@ -325,7 +325,7 @@ func TestGuardedTool_ChainedSecondGuardBlocks(t *testing.T) {
 // every one has a non-empty Name() and Description().
 func TestAllTools_NameAndDescription(t *testing.T) {
 	dir := t.TempDir()
-	store := NewInMemoryStore()
+	store := newMockScratchpad()
 	spawner := func(ctx context.Context, role, task string, outputs []string) (string, error) {
 		return "ok", nil
 	}
@@ -356,18 +356,14 @@ func TestAllTools_NameAndDescription(t *testing.T) {
 		Git(dir),
 		Patch(),
 		Spawn(spawner),
-		ScratchpadRead(store, false),
-		ScratchpadWrite(store, false),
-		ScratchpadList(store, false),
-		ScratchpadSearch(store, false),
-		ScratchpadRead(store, true),
-		ScratchpadWrite(store, true),
-		ScratchpadList(store, true),
-		ScratchpadSearch(store, true),
+		ScratchpadRead(store),
+		ScratchpadWrite(store),
+		ScratchpadList(store),
+		ScratchpadSearch(store),
 		Search(nil),
 		Fetch(nil),
-		Remember(newMockSemanticMemory()),
-		Recall(newMockSemanticMemory()),
+		Remember(newMockMemory()),
+		Recall(newMockMemory()),
 	}
 
 	reg := NewRegistry()

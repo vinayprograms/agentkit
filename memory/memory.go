@@ -42,12 +42,6 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// SearchResult is for key-based search.
-type SearchResult struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
 // Store is the interface for memory storage.
 type Store interface {
 	// Observation storage (primary API)
@@ -64,7 +58,7 @@ type Store interface {
 	Get(key string) (string, error)
 	Set(key, value string) error
 	List(prefix string) ([]string, error)
-	Search(query string) ([]SearchResult, error)
+	Search(query string) (map[string]string, error)
 
 	// Session consolidation
 	ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error

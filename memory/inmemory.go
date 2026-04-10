@@ -281,16 +281,16 @@ func (s *InMemoryStore) List(prefix string) ([]string, error) {
 }
 
 // Search performs a simple substring search on KV values.
-func (s *InMemoryStore) Search(query string) ([]SearchResult, error) {
+func (s *InMemoryStore) Search(query string) (map[string]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	query = strings.ToLower(query)
-	var results []SearchResult
+	results := make(map[string]string)
 	for k, v := range s.kv {
 		if strings.Contains(strings.ToLower(k), query) ||
 			strings.Contains(strings.ToLower(v), query) {
-			results = append(results, SearchResult{Key: k, Value: v})
+			results[k] = v
 		}
 	}
 	return results, nil

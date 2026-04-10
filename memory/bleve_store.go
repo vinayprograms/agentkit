@@ -391,16 +391,16 @@ func (s *BleveStore) List(prefix string) ([]string, error) {
 }
 
 // Search performs substring search on KV store.
-func (s *BleveStore) Search(queryStr string) ([]SearchResult, error) {
+func (s *BleveStore) Search(queryStr string) (map[string]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	queryLower := strings.ToLower(queryStr)
-	var results []SearchResult
+	results := make(map[string]string)
 	for k, v := range s.kv {
 		if strings.Contains(strings.ToLower(k), queryLower) ||
 			strings.Contains(strings.ToLower(v), queryLower) {
-			results = append(results, SearchResult{Key: k, Value: v})
+			results[k] = v
 		}
 	}
 	return results, nil

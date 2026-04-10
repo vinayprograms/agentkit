@@ -9,17 +9,17 @@ import (
 	"github.com/vinayprograms/agentkit/types"
 )
 
-// mockSemanticMemory implements SemanticMemory for testing.
-type mockSemanticMemory struct {
+// mockMemory implements Memory for testing.
+type mockMemory struct {
 	items []types.ObservationItem
 	idSeq int
 }
 
-func newMockSemanticMemory() *mockSemanticMemory {
-	return &mockSemanticMemory{}
+func newMockMemory() *mockMemory {
+	return &mockMemory{}
 }
 
-func (m *mockSemanticMemory) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error) {
+func (m *mockMemory) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error) {
 	var ids []string
 	for _, f := range findings {
 		m.idSeq++
@@ -42,16 +42,7 @@ func (m *mockSemanticMemory) RememberFIL(ctx context.Context, findings, insights
 	return ids, nil
 }
 
-func (m *mockSemanticMemory) RetrieveByID(ctx context.Context, id string) (*types.ObservationItem, error) {
-	for _, item := range m.items {
-		if item.ID == id {
-			return &item, nil
-		}
-	}
-	return nil, fmt.Errorf("not found: %s", id)
-}
-
-func (m *mockSemanticMemory) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error) {
+func (m *mockMemory) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*types.FILResult, error) {
 	result := &types.FILResult{}
 	q := strings.ToLower(query)
 	for _, item := range m.items {
@@ -76,27 +67,8 @@ func (m *mockSemanticMemory) RecallFIL(ctx context.Context, query string, limitP
 	return result, nil
 }
 
-func (m *mockSemanticMemory) Recall(ctx context.Context, query string, limit int) ([]types.SemanticMemoryResult, error) {
-	var results []types.SemanticMemoryResult
-	q := strings.ToLower(query)
-	for _, item := range m.items {
-		if strings.Contains(strings.ToLower(item.Content), q) {
-			results = append(results, types.SemanticMemoryResult{
-				ID:       item.ID,
-				Content:  item.Content,
-				Category: item.Category,
-				Score:    1.0,
-			})
-			if len(results) >= limit {
-				break
-			}
-		}
-	}
-	return results, nil
-}
-
 func TestRemember_StoreFIL(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	tool := Remember(mem)
 
 	args, err := Validate(tool.Parameters(), map[string]any{
@@ -125,7 +97,7 @@ func TestRemember_StoreFIL(t *testing.T) {
 }
 
 func TestRemember_EmptyLists(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	tool := Remember(mem)
 
 	// All empty -- should error
@@ -145,7 +117,7 @@ func TestRemember_EmptyLists(t *testing.T) {
 }
 
 func TestRemember_PartialLists(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	tool := Remember(mem)
 
 	// Only findings provided
@@ -167,7 +139,7 @@ func TestRemember_PartialLists(t *testing.T) {
 }
 
 func TestRecall_ReturnsCategories(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	// Pre-populate memory
 	mem.RememberFIL(context.Background(),
 		[]string{"PostgreSQL has great JSON support"},
@@ -199,7 +171,7 @@ func TestRecall_ReturnsCategories(t *testing.T) {
 }
 
 func TestRecall_NoResults(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	tool := Recall(mem)
 
 	args, err := Validate(tool.Parameters(), map[string]any{"query": "nonexistent"})
@@ -218,7 +190,7 @@ func TestRecall_NoResults(t *testing.T) {
 }
 
 func TestRecall_WithLimit(t *testing.T) {
-	mem := newMockSemanticMemory()
+	mem := newMockMemory()
 	// Store many findings with "api" in them
 	mem.RememberFIL(context.Background(),
 		[]string{"api fact 1", "api fact 2", "api fact 3"},
