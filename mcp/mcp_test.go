@@ -174,6 +174,21 @@ func TestManager_CallTool(t *testing.T) {
 	}
 }
 
+func TestManager_CallTool_Denied(t *testing.T) {
+	m := NewManager()
+	mock := &mockClient{
+		tools:      []Tool{{Name: "delete", Description: "Delete"}},
+		callResult: &Result{Content: []Content{{Type: "text", Text: "deleted"}}},
+	}
+	m.Register("srv", mock)
+	m.Deny("srv", []string{"delete"})
+
+	_, err := m.CallTool(context.Background(), "srv", "delete", nil)
+	if err == nil {
+		t.Error("expected error for denied tool")
+	}
+}
+
 func TestManager_CallTool_NotConnected(t *testing.T) {
 	m := NewManager()
 

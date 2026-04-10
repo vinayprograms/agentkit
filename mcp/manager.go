@@ -94,10 +94,15 @@ func (m *Manager) AllTools() []ToolWithServer {
 func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[string]any) (*Result, error) {
 	m.mu.RLock()
 	client, ok := m.clients[server]
+	denied := m.deniedTools[server]
 	m.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("server %q not connected", server)
+	}
+
+	if denied != nil && denied[tool] {
+		return nil, fmt.Errorf("tool %q is denied on server %q", tool, server)
 	}
 
 	tracer := telemetry.GetTracer()
