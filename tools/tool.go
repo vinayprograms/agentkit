@@ -33,11 +33,6 @@ type Guard interface {
 	Check(ctx context.Context, args Args) error
 }
 
-// CredentialProvider provides API keys for tools.
-type CredentialProvider interface {
-	GetAPIKey(provider string) string
-}
-
 // Definition is the LLM-facing tool description.
 type Definition struct {
 	Name        string

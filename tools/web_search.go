@@ -12,16 +12,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vinayprograms/agentkit/credentials"
 )
 
 type webSearchTool struct {
-	creds  CredentialProvider
+	creds  credentials.Lookup
 	client *http.Client
 }
 
 // Search returns a tool that searches the web using available backends.
 // creds may be nil (falls back to environment variables and DuckDuckGo).
-func Search(creds CredentialProvider) Tool {
+func Search(creds credentials.Lookup) Tool {
 	return &webSearchTool{
 		creds:  creds,
 		client: &http.Client{Timeout: defaultHTTPTimeout},
@@ -90,9 +92,9 @@ func (t *webSearchTool) Execute(ctx context.Context, args Args) (string, error) 
 	// Resolve API keys: credentials first, then env vars.
 	var searxngURL, braveKey, tavilyKey string
 	if t.creds != nil {
-		searxngURL = t.creds.GetAPIKey("searxng")
-		braveKey = t.creds.GetAPIKey("brave")
-		tavilyKey = t.creds.GetAPIKey("tavily")
+		searxngURL = string(t.creds.Get("searxng"))
+		braveKey = string(t.creds.Get("brave"))
+		tavilyKey = string(t.creds.Get("tavily"))
 	}
 	if searxngURL == "" {
 		searxngURL = os.Getenv("SEARXNG_URL")

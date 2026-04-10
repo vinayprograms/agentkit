@@ -14,17 +14,14 @@ const defaultHTTPTimeout = 2 * time.Minute
 
 type webFetchTool struct {
 	summarizer Summarizer
-	creds      CredentialProvider
 	client     *http.Client
 }
 
-// Fetch returns a tool that fetches and summarizes web page content.
-// summarizer may be nil (falls back to truncated text).
-// creds may be nil if no authentication is needed.
-func Fetch(summarizer Summarizer, creds CredentialProvider) Tool {
+// Fetch returns a tool that fetches web page content.
+// summarizer may be nil (returns full extracted text).
+func Fetch(summarizer Summarizer) Tool {
 	return &webFetchTool{
 		summarizer: summarizer,
-		creds:      creds,
 		client:     &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }

@@ -366,7 +366,7 @@ func TestAllTools_NameAndDescription(t *testing.T) {
 		ScratchpadList(store, true),
 		ScratchpadSearch(store, true),
 		Search(nil),
-		Fetch(nil, nil),
+		Fetch(nil),
 		Remember(newMockSemanticMemory()),
 		Recall(newMockSemanticMemory()),
 	}

@@ -35,7 +35,7 @@ func TestWebFetch_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	args, err := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "What does the page say?",
@@ -68,7 +68,7 @@ func TestWebFetch_WithSummarizer(t *testing.T) {
 	mock := &mockLLM{response: "Go is an open-source language."}
 	summarizer := NewSummarizer(mock)
 
-	tool := Fetch(summarizer, nil)
+	tool := Fetch(summarizer)
 	args, err := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "What is Go?",
@@ -98,7 +98,7 @@ func TestWebFetch_HTTP404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "anything",
@@ -127,7 +127,7 @@ func TestWebFetch_HTTP500(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "anything",
@@ -150,7 +150,7 @@ func TestWebFetch_HTTP500(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWebFetch_InvalidURL(t *testing.T) {
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      "://not-a-url",
 		"question": "anything",
@@ -238,7 +238,7 @@ func TestExtractReadableText(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWebFetch_MissingURL(t *testing.T) {
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	_, err := Validate(tool.Parameters(), map[string]any{
 		"question": "what?",
 	})
@@ -248,7 +248,7 @@ func TestWebFetch_MissingURL(t *testing.T) {
 }
 
 func TestWebFetch_MissingQuestion(t *testing.T) {
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	_, err := Validate(tool.Parameters(), map[string]any{
 		"url": "http://example.com",
 	})
@@ -269,7 +269,7 @@ func TestWebFetch_LargeContentReturnsFullText(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := Fetch(nil, nil) // no summarizer
+	tool := Fetch(nil) // no summarizer
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "anything",
@@ -288,7 +288,7 @@ func TestWebFetch_LargeContentReturnsFullText(t *testing.T) {
 }
 
 func TestWebFetch_ConnectionError(t *testing.T) {
-	tool := Fetch(nil, nil)
+	tool := Fetch(nil)
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      "http://localhost:1", // port 1 should refuse connection
 		"question": "anything",
@@ -310,7 +310,7 @@ func TestWebFetch_SummarizerError(t *testing.T) {
 	mock := &mockLLM{err: fmt.Errorf("LLM unavailable")}
 	summarizer := NewSummarizer(mock)
 
-	tool := Fetch(summarizer, nil)
+	tool := Fetch(summarizer)
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"url":      srv.URL,
 		"question": "anything",

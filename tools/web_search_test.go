@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vinayprograms/agentkit/credentials"
 )
 
 // testSearchTool builds a webSearchTool with a custom HTTP client transport.
@@ -38,7 +40,7 @@ func TestWebSearch_TavilyBackendViaExecute(t *testing.T) {
 	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
 	searchMutex.Unlock()
 
-	creds := &mockCredentialProvider{keys: map[string]string{"tavily": "test-tavily-key"}}
+	creds := &mockCreds{keys: map[string]string{"tavily": "test-tavily-key"}}
 	tool := Search(creds)
 	tool.(*webSearchTool).client = &http.Client{Transport: rewriteTransport{url: server.URL}}
 
@@ -69,7 +71,7 @@ func TestWebSearch_BraveBackendViaExecute(t *testing.T) {
 	lastSearchTime = lastSearchTime.Add(-10 * searchCooldown)
 	searchMutex.Unlock()
 
-	creds := &mockCredentialProvider{keys: map[string]string{"brave": "test-brave-key"}}
+	creds := &mockCreds{keys: map[string]string{"brave": "test-brave-key"}}
 	tool := Search(creds)
 	tool.(*webSearchTool).client = &http.Client{Transport: rewriteTransport{url: server.URL}}
 
@@ -537,13 +539,21 @@ func TestWebSearch_Parameters(t *testing.T) {
 	}
 }
 
-// mockCredentialProvider implements CredentialProvider for testing.
-type mockCredentialProvider struct {
+// mockCreds implements credentials.Lookup for testing.
+type mockCreds struct {
 	keys map[string]string
 }
 
-func (m *mockCredentialProvider) GetAPIKey(provider string) string {
-	return m.keys[provider]
+func (m *mockCreds) Get(provider string) credentials.Credential {
+	return credentials.Credential(m.keys[provider])
+}
+
+func (m *mockCreds) Providers() []string {
+	var p []string
+	for k := range m.keys {
+		p = append(p, k)
+	}
+	return p
 }
 
 func TestWebSearch_SearXNGBackend(t *testing.T) {
@@ -558,7 +568,7 @@ func TestWebSearch_SearXNGBackend(t *testing.T) {
 	}))
 	defer server.Close()
 
-	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
+	creds := &mockCreds{keys: map[string]string{"searxng": server.URL}}
 	tool := Search(creds)
 
 	args, err := Validate(tool.Parameters(), map[string]any{"query": "test", "count": 3})
@@ -584,7 +594,7 @@ func TestWebSearch_SearXNGBackendError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
+	creds := &mockCreds{keys: map[string]string{"searxng": server.URL}}
 	tool := Search(creds)
 
 	args, err := Validate(tool.Parameters(), map[string]any{"query": "test"})
@@ -605,7 +615,7 @@ func TestWebSearch_CountClamping(t *testing.T) {
 	}))
 	defer server.Close()
 
-	creds := &mockCredentialProvider{keys: map[string]string{"searxng": server.URL}}
+	creds := &mockCreds{keys: map[string]string{"searxng": server.URL}}
 	tool := Search(creds)
 
 	// Test count < 1 gets clamped to 1
