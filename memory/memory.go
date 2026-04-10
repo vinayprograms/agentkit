@@ -60,6 +60,9 @@ type Store interface {
 	List(prefix string) ([]string, error)
 	Search(query string) (map[string]string, error)
 
+	// List all observations, optionally filtered by category.
+	ListAll(ctx context.Context, category string, limit int) ([]ObservationItem, error)
+
 	// Session consolidation
 	ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error
 

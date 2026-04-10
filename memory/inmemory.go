@@ -296,6 +296,32 @@ func (s *InMemoryStore) Search(query string) (map[string]string, error) {
 	return results, nil
 }
 
+// ListAll returns all observations, optionally filtered by category.
+func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int) ([]ObservationItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	items := make([]ObservationItem, 0)
+	for _, mem := range s.memories {
+		if category != "" && mem.Category != category {
+			continue
+		}
+		items = append(items, ObservationItem{
+			ID:       mem.ID,
+			Content:  mem.Content,
+			Category: mem.Category,
+		})
+		if len(items) >= limit {
+			break
+		}
+	}
+	return items, nil
+}
+
 // ConsolidateSession is a no-op for in-memory store.
 func (s *InMemoryStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error {
 	// In-memory store doesn't persist, so consolidation is meaningless
