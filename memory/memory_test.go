@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
@@ -466,5 +467,259 @@ func TestInMemoryStore_KeyValue(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Errorf("expected 1 result, got %d", len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryStore.Get — missing key returns empty string
+// ---------------------------------------------------------------------------
+
+func TestInMemoryStore_Get_MissingKey(t *testing.T) {
+	store := NewInMemoryStore()
+
+	val, err := store.Get("nonexistent")
+	if err != nil {
+		t.Fatalf("Get should not error for missing key: %v", err)
+	}
+	if val != "" {
+		t.Errorf("expected empty string for missing key, got '%s'", val)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryStore.RecallByCategory — limit=0 default and empty query
+// ---------------------------------------------------------------------------
+
+func TestInMemoryStore_RecallByCategory_DefaultLimit(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	// Store more than 5 findings containing the word "database"
+	for i := 0; i < 8; i++ {
+		store.RememberObservation(ctx, "database observation number "+string(rune('A'+i)), "finding", "test")
+	}
+
+	// limit=0 should default to 5
+	results, err := store.RecallByCategory(ctx, "database", "finding", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) > 5 {
+		t.Errorf("expected at most 5 results with default limit, got %d", len(results))
+	}
+}
+
+func TestInMemoryStore_RecallByCategory_EmptyQuery(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	store.RememberObservation(ctx, "some finding", "finding", "test")
+
+	// Empty query has no terms, so nothing matches
+	results, err := store.RecallByCategory(ctx, "", "finding", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for empty query, got %d", len(results))
+	}
+}
+
+func TestInMemoryStore_RecallByCategory_EmptyStore(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	results, err := store.RecallByCategory(ctx, "anything", "finding", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil for empty store, got %v", results)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryStore.RecallFIL — error path coverage (no real error from InMemory,
+// but we exercise the default limitPerCategory branch)
+// ---------------------------------------------------------------------------
+
+func TestInMemoryStore_RecallFIL_DefaultLimit(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	store.RememberObservation(ctx, "finding about databases", "finding", "test")
+	store.RememberObservation(ctx, "insight about databases", "insight", "test")
+	store.RememberObservation(ctx, "lesson about databases", "lesson", "test")
+
+	// limitPerCategory=0 should default to 5
+	fil, err := store.RecallFIL(ctx, "databases", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fil == nil {
+		t.Fatal("expected non-nil FIL result")
+	}
+	if len(fil.Findings) != 1 {
+		t.Errorf("expected 1 finding, got %d", len(fil.Findings))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryStore.Recall — TimeRange filter, MinScore, default limit
+// ---------------------------------------------------------------------------
+
+func TestInMemoryStore_Recall_TimeRangeFilter(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	store.RememberObservation(ctx, "database observation early", "finding", "test")
+
+	// Use a time range that excludes everything (far in the past)
+	past := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	pastEnd := time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	results, err := store.Recall(ctx, "database", RecallOpts{
+		Limit:     10,
+		TimeRange: &TimeRange{Start: past, End: pastEnd},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results with past time range, got %d", len(results))
+	}
+
+	// Use a time range that includes everything
+	now := time.Now()
+	results, err = store.Recall(ctx, "database", RecallOpts{
+		Limit:     10,
+		TimeRange: &TimeRange{Start: now.Add(-1 * time.Hour), End: now.Add(1 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected results with inclusive time range")
+	}
+}
+
+func TestInMemoryStore_Recall_MinScoreFilter(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	store.RememberObservation(ctx, "database is great", "finding", "test")
+
+	// High MinScore should filter out low-scoring results
+	results, err := store.Recall(ctx, "database", RecallOpts{
+		Limit:    10,
+		MinScore: 0.99,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Score for single term match is 0.1, so everything is filtered
+	if len(results) != 0 {
+		t.Errorf("expected 0 results with high min score, got %d", len(results))
+	}
+}
+
+func TestInMemoryStore_Recall_DefaultLimit(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	// Store 15 items all containing "database"
+	for i := 0; i < 15; i++ {
+		store.RememberObservation(ctx, "database item", "finding", "test")
+	}
+
+	// Limit=0 should default to 10
+	results, err := store.Recall(ctx, "database", RecallOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) > 10 {
+		t.Errorf("expected at most 10 results with default limit, got %d", len(results))
+	}
+}
+
+func TestInMemoryStore_Recall_EmptyStore(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	results, err := store.Recall(ctx, "anything", RecallOpts{Limit: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil for empty store, got %v", results)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryStore.RememberFIL — exercise all three category loops
+// ---------------------------------------------------------------------------
+
+func TestInMemoryStore_RememberFIL_EmptySlices(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+
+	ids, err := store.RememberFIL(ctx, nil, nil, nil, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected 0 IDs for empty slices, got %d", len(ids))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseFIL — uncovered branch: malformed JSON (end <= start)
+// ---------------------------------------------------------------------------
+
+func TestParseFIL_NoBraces(t *testing.T) {
+	f, i, l := parseFIL("no braces here")
+	if f != nil || i != nil || l != nil {
+		t.Errorf("expected nil slices, got f=%v i=%v l=%v", f, i, l)
+	}
+}
+
+func TestParseFIL_MalformedBraces(t *testing.T) {
+	// end brace before start brace
+	f, i, l := parseFIL("} something {")
+	if f != nil || i != nil || l != nil {
+		t.Errorf("expected nil slices, got f=%v i=%v l=%v", f, i, l)
+	}
+}
+
+func TestParseFIL_MarkdownCodeBlockEmpty(t *testing.T) {
+	// Code block with no JSON content
+	f, i, l := parseFIL("```\n```")
+	if f != nil || i != nil || l != nil {
+		t.Errorf("expected nil slices for empty code block, got f=%v i=%v l=%v", f, i, l)
+	}
+}
+
+func TestParseFIL_OnlyOpenBrace(t *testing.T) {
+	f, i, l := parseFIL("{")
+	if f != nil || i != nil || l != nil {
+		t.Errorf("expected nil slices, got f=%v i=%v l=%v", f, i, l)
+	}
+}
+
+func TestParseFIL_ValidBracesInvalidJSON(t *testing.T) {
+	// Has { and } but content is not valid JSON
+	f, i, l := parseFIL("{not valid json}")
+	if f != nil || i != nil || l != nil {
+		t.Errorf("expected nil slices, got f=%v i=%v l=%v", f, i, l)
+	}
+}
+
+func TestParseFIL_MarkdownBlockWithPreamble(t *testing.T) {
+	// Markdown code block with preamble text before the block - starts with ```
+	// but has preamble on first line before ```
+	input := "```json\n{\"findings\":[\"f1\"],\"insights\":[],\"lessons\":[]}\n```"
+	f, _, _ := parseFIL(input)
+	if len(f) != 1 || f[0] != "f1" {
+		t.Errorf("findings = %v, want [f1]", f)
 	}
 }
