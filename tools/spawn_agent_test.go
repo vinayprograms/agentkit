@@ -7,54 +7,9 @@ import (
 	"testing"
 )
 
-func TestSpawnAgent_Basic(t *testing.T) {
-	tool := SpawnAgent(nil)
-
-	if tool.Name() != "spawn_agent" {
-		t.Errorf("expected name 'spawn_agent', got %s", tool.Name())
-	}
-	if tool.Description() == "" {
-		t.Error("expected non-empty description")
-	}
-
-	params := tool.Parameters()
-	if _, ok := params["role"]; !ok {
-		t.Error("expected 'role' parameter")
-	}
-	if _, ok := params["task"]; !ok {
-		t.Error("expected 'task' parameter")
-	}
-}
-
-func TestSpawnAgent_RequiresSpawner(t *testing.T) {
-	tool := SpawnAgent(nil)
-
-	args, _ := Validate(tool.Parameters(), map[string]any{
-		"role": "researcher",
-		"task": "test task",
-	})
-	_, err := tool.Execute(context.Background(), args)
-	if err == nil {
-		t.Error("expected error when spawner not configured")
-	}
-}
-
-func TestSpawnAgent_RequiresRole(t *testing.T) {
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
-		return "result", nil
-	})
-
-	_, err := Validate(tool.Parameters(), map[string]any{
-		"task": "test task",
-	})
-	if err == nil {
-		t.Error("expected validation error when role missing")
-	}
-}
-
-func TestSpawnAgent_ExecutesSpawner(t *testing.T) {
+func TestSpawn_Single(t *testing.T) {
 	var capturedRole, capturedTask string
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
 		capturedRole = role
 		capturedTask = task
 		return "sub-agent output", nil
@@ -62,7 +17,7 @@ func TestSpawnAgent_ExecutesSpawner(t *testing.T) {
 
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"role": "researcher",
-		"task": "find information about X",
+		"task": "find information",
 	})
 	result, err := tool.Execute(context.Background(), args)
 	if err != nil {
@@ -71,25 +26,25 @@ func TestSpawnAgent_ExecutesSpawner(t *testing.T) {
 	if capturedRole != "researcher" {
 		t.Errorf("expected role 'researcher', got %s", capturedRole)
 	}
-	if capturedTask != "find information about X" {
-		t.Errorf("expected task 'find information about X', got %s", capturedTask)
+	if capturedTask != "find information" {
+		t.Errorf("expected task, got %s", capturedTask)
 	}
 	if !strings.Contains(result, "sub-agent output") {
-		t.Errorf("expected 'sub-agent output' in result, got %s", result)
+		t.Errorf("expected output in result, got %s", result)
 	}
 }
 
-func TestSpawnAgent_WithOutputs(t *testing.T) {
+func TestSpawn_SingleWithOutputs(t *testing.T) {
 	var capturedOutputs []string
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
 		capturedOutputs = outputs
-		return "result", nil
+		return `{"events":["e1"]}`, nil
 	})
 
 	args, _ := Validate(tool.Parameters(), map[string]any{
 		"role":    "researcher",
-		"task":    "find info",
-		"outputs": []any{"findings", "sources"},
+		"task":    "find events",
+		"outputs": []any{"events", "dates"},
 	})
 	_, err := tool.Execute(context.Background(), args)
 	if err != nil {
@@ -100,69 +55,121 @@ func TestSpawnAgent_WithOutputs(t *testing.T) {
 	}
 }
 
-func TestSpawnAgent_SpawnerReturnsError(t *testing.T) {
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
-		return "", fmt.Errorf("spawner exploded")
+func TestSpawn_SingleMissingRole(t *testing.T) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		return "", nil
 	})
 
 	args, _ := Validate(tool.Parameters(), map[string]any{
-		"role": "researcher",
 		"task": "do stuff",
 	})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
-		t.Error("expected error from spawner")
-	}
-	if !strings.Contains(err.Error(), "spawner exploded") {
-		t.Errorf("expected 'spawner exploded' error, got %q", err.Error())
+		t.Error("expected error for missing role")
 	}
 }
 
-func TestSpawnAgent_WithOutputsPassedToSpawner(t *testing.T) {
-	var capturedOutputs []string
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
-		capturedOutputs = outputs
-		return `{"events":["e1"],"dates":["d1"]}`, nil
+func TestSpawn_NoSpawner(t *testing.T) {
+	tool := Spawn(nil)
+	args, _ := Validate(tool.Parameters(), map[string]any{
+		"role": "test",
+		"task": "test",
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Error("expected error when spawner not configured")
+	}
+}
+
+func TestSpawn_SpawnerError(t *testing.T) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		return "", fmt.Errorf("spawner exploded")
 	})
 
 	args, _ := Validate(tool.Parameters(), map[string]any{
-		"role":    "researcher",
-		"task":    "find events",
-		"outputs": []any{"events", "dates"},
+		"role": "test",
+		"task": "test",
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "spawner exploded") {
+		t.Errorf("expected spawner error, got %v", err)
+	}
+}
+
+func TestSpawn_Multiple(t *testing.T) {
+	var mu = &struct{ count int }{}
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		mu.count++
+		return fmt.Sprintf("result from %s", role), nil
+	})
+
+	args, _ := Validate(tool.Parameters(), map[string]any{
+		"agents": []any{
+			map[string]any{"role": "researcher", "task": "find stuff"},
+			map[string]any{"role": "analyst", "task": "analyze stuff"},
+		},
 	})
 	result, err := tool.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(capturedOutputs) != 2 || capturedOutputs[0] != "events" || capturedOutputs[1] != "dates" {
-		t.Errorf("expected [events, dates], got %v", capturedOutputs)
+	if !strings.Contains(result, "researcher") {
+		t.Error("expected researcher in result")
 	}
-	if !strings.Contains(result, "events") {
-		t.Errorf("expected result to contain 'events', got %q", result)
+	if !strings.Contains(result, "analyst") {
+		t.Error("expected analyst in result")
 	}
 }
 
-func TestSpawnAgent_NoOutputsIsNil(t *testing.T) {
-	var capturedOutputs []string
-	called := false
-	tool := SpawnAgent(func(ctx context.Context, role, task string, outputs []string) (string, error) {
-		called = true
-		capturedOutputs = outputs
-		return "done", nil
+func TestSpawn_MultipleEmpty(t *testing.T) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		return "", nil
 	})
 
 	args, _ := Validate(tool.Parameters(), map[string]any{
-		"role": "worker",
-		"task": "do work",
+		"agents": []any{},
 	})
-	_, err := tool.Execute(context.Background(), args)
+	result, err := tool.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !called {
-		t.Error("spawner should have been called")
+	if result != "No agents specified." {
+		t.Errorf("expected 'No agents specified.', got %q", result)
 	}
-	if capturedOutputs != nil {
-		t.Errorf("expected nil outputs when not provided, got %v", capturedOutputs)
+}
+
+func TestSpawn_MultipleWithError(t *testing.T) {
+	tool := Spawn(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		if role == "failing" {
+			return "", fmt.Errorf("agent failed")
+		}
+		return "ok", nil
+	})
+
+	args, _ := Validate(tool.Parameters(), map[string]any{
+		"agents": []any{
+			map[string]any{"role": "working", "task": "work"},
+			map[string]any{"role": "failing", "task": "fail"},
+		},
+	})
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Error: agent failed") {
+		t.Errorf("expected error in result, got %q", result)
+	}
+	if !strings.Contains(result, "ok") {
+		t.Errorf("expected success in result, got %q", result)
+	}
+}
+
+func TestSpawn_NameAndDescription(t *testing.T) {
+	tool := Spawn(nil)
+	if tool.Name() != "spawn_agent" {
+		t.Errorf("expected 'spawn_agent', got %q", tool.Name())
+	}
+	if tool.Description() == "" {
+		t.Error("expected non-empty description")
 	}
 }

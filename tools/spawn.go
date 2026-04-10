@@ -7,168 +7,145 @@ import (
 	"sync"
 )
 
-// SpawnFunc is the function signature for spawning dynamic sub-agents.
-// outputs is optional -- when provided, the sub-agent returns structured JSON.
+// SpawnFunc is the callback that the consumer provides to handle sub-agent creation.
+//
+// The tools package does not know how to create agents — that's the consumer's
+// responsibility. The consumer implements SpawnFunc to wire in their agent runtime:
+// creating the sub-agent, setting up its context, running it, and collecting results.
+//
+// Parameters:
+//   - ctx: context for cancellation and timeouts
+//   - role: the persona/role for the sub-agent (e.g., "researcher", "critic")
+//   - task: the specific task description for the sub-agent
+//   - outputs: optional field names for structured JSON output; nil means freeform text
+//
+// Returns the sub-agent's response as a string, or an error if spawning/execution failed.
 type SpawnFunc func(ctx context.Context, role, task string, outputs []string) (string, error)
 
-// --- SpawnAgent Tool ---
-
-type spawnAgentTool struct {
+type spawnTool struct {
 	spawner SpawnFunc
 }
 
-// SpawnAgent creates a tool that spawns a single sub-agent to handle a task.
-func SpawnAgent(spawner SpawnFunc) Tool {
-	return &spawnAgentTool{spawner: spawner}
+// Spawn creates a tool that spawns sub-agents.
+// Handles both single agent (role + task) and multiple agents (agents array).
+// When multiple agents are specified, they run in parallel.
+func Spawn(spawner SpawnFunc) Tool {
+	return &spawnTool{spawner: spawner}
 }
 
-func (t *spawnAgentTool) Name() string { return "spawn_agent" }
+func (t *spawnTool) Name() string { return "spawn_agent" }
 
-func (t *spawnAgentTool) Description() string {
-	return `Spawn a sub-agent to handle a specific task.
+func (t *spawnTool) Description() string {
+	return `Spawn one or more sub-agents to handle tasks.
+
+For a single agent:
+  spawn_agent(role: "researcher", task: "Find key events", outputs: ["events", "dates"])
+
+For multiple agents in parallel:
+  spawn_agent(agents: [
+    {role: "researcher", task: "Find historical context"},
+    {role: "analyst", task: "Analyze current trends"}
+  ])
 
 Parameters:
-  - role (required): Name/role for the sub-agent (e.g., "researcher", "critic")
-  - task (required): Task description for the sub-agent
-  - outputs (optional): List of field names for structured output. When provided,
-    the sub-agent returns a JSON object with these fields. Use when you need
-    specific data to process further. Omit for freeform text responses.
+  Single agent mode:
+  - role (required): Name/role for the sub-agent
+  - task (required): Task description
+  - outputs (optional): List of field names for structured JSON response
 
-Returns:
-  - If outputs specified: JSON object with declared fields
-  - If outputs omitted: Plain text response
+  Multi-agent mode:
+  - agents (required): Array of agent specs, each with role, task, and optional outputs
 
-Example:
-  spawn_agent(role: "researcher", task: "Find key events", outputs: ["events", "dates"])
-  → {"events": [...], "dates": [...]}`
+Returns text response (single) or numbered results (multiple).`
 }
 
-func (t *spawnAgentTool) Parameters() map[string]Param {
+func (t *spawnTool) Parameters() map[string]Param {
 	return map[string]Param{
 		"role": {
 			Type:        StringParam,
-			Description: "The role/persona for the sub-agent (e.g., 'researcher', 'critic', 'analyst')",
-			Required:    true,
+			Description: "Role for a single sub-agent (e.g., 'researcher', 'critic')",
 		},
 		"task": {
 			Type:        StringParam,
-			Description: "The specific task for the sub-agent to complete",
-			Required:    true,
+			Description: "Task for a single sub-agent",
 		},
 		"outputs": {
 			Type:        ArrayParam,
-			Description: "Optional list of output field names for structured JSON response",
+			Description: "Optional output field names for structured JSON response",
+		},
+		"agents": {
+			Type:        ArrayParam,
+			Description: "Array of agent specs for parallel execution (each has role, task, optional outputs)",
 		},
 	}
 }
 
-func (t *spawnAgentTool) Execute(ctx context.Context, args Args) (string, error) {
-	role, err := args.String("role")
-	if err != nil {
-		return "", err
-	}
-	task, err := args.String("task")
-	if err != nil {
-		return "", err
-	}
-
-	outputs := args.StringSliceOr("outputs", nil)
-
+func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
 	if t.spawner == nil {
 		return "", fmt.Errorf("spawn_agent not available (no spawner configured)")
 	}
 
+	// Multi-agent mode: agents array takes precedence
+	if args.Has("agents") {
+		return t.spawnMultiple(ctx, args)
+	}
+
+	// Single-agent mode
+	return t.spawnSingle(ctx, args)
+}
+
+func (t *spawnTool) spawnSingle(ctx context.Context, args Args) (string, error) {
+	role, err := args.String("role")
+	if err != nil {
+		return "", fmt.Errorf("single agent requires 'role': %w", err)
+	}
+	task, err := args.String("task")
+	if err != nil {
+		return "", fmt.Errorf("single agent requires 'task': %w", err)
+	}
+	outputs := args.StringSliceOr("outputs", nil)
+
 	return t.spawner(ctx, role, task, outputs)
 }
 
-// --- SpawnAgents Tool ---
-
-type spawnAgentsTool struct {
-	spawner SpawnFunc
-}
-
-// SpawnAgents creates a tool that spawns multiple sub-agents in parallel.
-func SpawnAgents(spawner SpawnFunc) Tool {
-	return &spawnAgentsTool{spawner: spawner}
-}
-
-func (t *spawnAgentsTool) Name() string { return "spawn_agents" }
-
-func (t *spawnAgentsTool) Description() string {
-	return `Spawn multiple sub-agents in parallel.
-
-Parameters:
-  - agents (required): Array of agent specs, each with:
-    - role (required): Name/role for the sub-agent
-    - task (required): Task description
-    - outputs (optional): List of field names for structured output
-
-Returns: Array of results in same order as input agents.
-
-Example:
-  spawn_agents(agents: [
-    {role: "researcher", task: "Find historical context"},
-    {role: "analyst", task: "Analyze current trends"},
-    {role: "critic", task: "Identify weaknesses"}
-  ])
-  → ["Historical context...", "Current trends...", "Weaknesses..."]`
-}
-
-func (t *spawnAgentsTool) Parameters() map[string]Param {
-	return map[string]Param{
-		"agents": {
-			Type:        ArrayParam,
-			Description: "Array of agent specifications to run in parallel",
-			Required:    true,
-		},
-	}
-}
-
-// agentResult holds the result of a parallel agent spawn.
 type agentResult struct {
 	index  int
 	result string
 	err    error
 }
 
-func (t *spawnAgentsTool) Execute(ctx context.Context, args Args) (string, error) {
-	if t.spawner == nil {
-		return "", fmt.Errorf("spawn_agents not available (no spawner configured)")
-	}
-
-	// Get raw agents array — args validated as ArrayParam so we reach into the values.
+func (t *spawnTool) spawnMultiple(ctx context.Context, args Args) (string, error) {
 	agentsRaw, ok := args.values["agents"].([]any)
 	if !ok {
-		return "", fmt.Errorf("agents array is required")
+		return "", fmt.Errorf("agents must be an array")
 	}
-
 	if len(agentsRaw) == 0 {
 		return "No agents specified.", nil
 	}
 
-	// Parse agent specs
 	type agentSpec struct {
 		role    string
 		task    string
 		outputs []string
 	}
+
 	specs := make([]agentSpec, 0, len(agentsRaw))
 	for i, a := range agentsRaw {
 		agentMap, ok := a.(map[string]any)
 		if !ok {
 			return "", fmt.Errorf("agent[%d]: invalid format", i)
 		}
-		agent, err := Validate(map[string]Param{
-			"role": {Type: StringParam, Required: true},
-			"task": {Type: StringParam, Required: true},
+		specArgs, err := Validate(map[string]Param{
+			"role":    {Type: StringParam, Required: true},
+			"task":    {Type: StringParam, Required: true},
 			"outputs": {Type: ArrayParam},
 		}, agentMap)
 		if err != nil {
 			return "", fmt.Errorf("agent[%d]: %w", i, err)
 		}
-		role, _ := agent.String("role")
-		task, _ := agent.String("task")
-		outputs := agent.StringSliceOr("outputs", nil)
+		role, _ := specArgs.String("role")
+		task, _ := specArgs.String("task")
+		outputs := specArgs.StringSliceOr("outputs", nil)
 		specs = append(specs, agentSpec{role: role, task: task, outputs: outputs})
 	}
 
@@ -196,7 +173,6 @@ func (t *spawnAgentsTool) Execute(ctx context.Context, args Args) (string, error
 		collected[r.index] = r
 	}
 
-	// Build text output
 	var sb strings.Builder
 	for i, r := range collected {
 		if i > 0 {
