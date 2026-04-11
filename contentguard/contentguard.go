@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/vinayprograms/agentkit/logging"
 )
 
 // Config holds optional configuration for the guard.
@@ -26,7 +24,6 @@ type Guard struct {
 	stages     []Stage
 	workflow   Workflow
 	context map[string]string
-	logger     *logging.Logger
 
 	patterns []namedPattern
 	keywords []string
@@ -51,18 +48,10 @@ func New(stages []Stage, workflow Workflow, cfg Config) (*Guard, error) {
 		skip[t] = true
 	}
 
-	logger := logging.New().WithComponent("contentguard")
-
-	logger.Info("content guard initialized", map[string]interface{}{
-		"stages":  len(stages),
-		"context": len(cfg.Context),
-	})
-
 	return &Guard{
 		stages:        stages,
 		workflow:      workflow,
 		context:       cfg.Context,
-		logger:        logger,
 		patterns:      allPatterns,
 		keywords:      buildKeywords(cfg.Keywords),
 		skip:          skip,

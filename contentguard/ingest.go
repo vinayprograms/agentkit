@@ -32,12 +32,6 @@ func (g *Guard) ingest(trust Trust, kind Kind, mutable bool, text, source string
 	// so callers get a unique ID, but link to the existing one.
 	if trust == Untrusted {
 		if existingID, exists := g.contentHashes[hash]; exists {
-			if g.logger != nil {
-				g.logger.Debug("content deduplicated", map[string]interface{}{
-					"hash":   hash[:16] + "...",
-					"source": source,
-				})
-			}
 			if existing := g.contentByID[existingID]; existing != nil {
 				origins = append(origins, existing)
 			}
