@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vinayprograms/agentkit/acp"
+
 )
 
 // pipe creates a bidirectional pair of Conns connected via io.Pipe.
@@ -24,7 +24,7 @@ func pipe() (a, b *Conn) {
 func TestCallResponse(t *testing.T) {
 	a, b := pipe()
 
-	b.Handle("echo", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("echo", func(ctx context.Context, req *Request) (any, error) {
 		var params map[string]string
 		json.Unmarshal(req.Params, &params)
 		return params, nil
@@ -59,7 +59,7 @@ func TestNotification(t *testing.T) {
 	a, b := pipe()
 
 	received := make(chan string, 1)
-	b.HandleNotify("ping", func(ctx context.Context, n *acp.Notification) {
+	b.HandleNotify("ping", func(ctx context.Context, n *Notification) {
 		raw, _ := json.Marshal(n.Params)
 		received <- string(raw)
 	})
@@ -109,7 +109,7 @@ func TestMethodNotFound(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatal("expected error response")
 	}
-	if resp.Error.Code != acp.ErrNoMethod {
+	if resp.Error.Code != ErrNoMethod {
 		t.Fatalf("expected ErrNoMethod, got %d", resp.Error.Code)
 	}
 
@@ -120,8 +120,8 @@ func TestMethodNotFound(t *testing.T) {
 func TestHandlerReturnsACPError(t *testing.T) {
 	a, b := pipe()
 
-	b.Handle("fail", func(ctx context.Context, req *acp.Request) (any, error) {
-		return nil, &acp.Error{Code: acp.ErrBadParams, Message: "bad input"}
+	b.Handle("fail", func(ctx context.Context, req *Request) (any, error) {
+		return nil, &Error{Code: ErrBadParams, Message: "bad input"}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -136,7 +136,7 @@ func TestHandlerReturnsACPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if resp.Error == nil || resp.Error.Code != acp.ErrBadParams {
+	if resp.Error == nil || resp.Error.Code != ErrBadParams {
 		t.Fatalf("expected ErrBadParams, got %+v", resp.Error)
 	}
 
@@ -147,7 +147,7 @@ func TestHandlerReturnsACPError(t *testing.T) {
 func TestHandlerReturnsGoError(t *testing.T) {
 	a, b := pipe()
 
-	b.Handle("boom", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("boom", func(ctx context.Context, req *Request) (any, error) {
 		return nil, errors.New("something broke")
 	})
 
@@ -163,7 +163,7 @@ func TestHandlerReturnsGoError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if resp.Error == nil || resp.Error.Code != acp.ErrInternal {
+	if resp.Error == nil || resp.Error.Code != ErrInternal {
 		t.Fatalf("expected ErrInternal, got %+v", resp.Error)
 	}
 	if resp.Error.Message != "something broke" {
@@ -203,7 +203,7 @@ func TestContextCancelsCall(t *testing.T) {
 	a, b := pipe()
 
 	// Handler that blocks forever
-	b.Handle("slow", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("slow", func(ctx context.Context, req *Request) (any, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
@@ -272,12 +272,12 @@ func TestBidirectionalCalls(t *testing.T) {
 	a, b := pipe()
 
 	// a handles "ping" from b
-	a.Handle("ping", func(ctx context.Context, req *acp.Request) (any, error) {
+	a.Handle("ping", func(ctx context.Context, req *Request) (any, error) {
 		return map[string]string{"pong": "from-a"}, nil
 	})
 
 	// b handles "ping" from a
-	b.Handle("ping", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("ping", func(ctx context.Context, req *Request) (any, error) {
 		return map[string]string{"pong": "from-b"}, nil
 	})
 
@@ -316,7 +316,7 @@ func TestBidirectionalCalls(t *testing.T) {
 func TestConcurrentCalls(t *testing.T) {
 	a, b := pipe()
 
-	b.Handle("echo", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("echo", func(ctx context.Context, req *Request) (any, error) {
 		var params map[string]string
 		json.Unmarshal(req.Params, &params)
 		return params, nil
@@ -363,12 +363,12 @@ func TestCallbackFromHandler(t *testing.T) {
 	a, b := pipe()
 
 	// a handles permission requests from b
-	a.Handle("permission", func(ctx context.Context, req *acp.Request) (any, error) {
+	a.Handle("permission", func(ctx context.Context, req *Request) (any, error) {
 		return map[string]string{"decision": "allow"}, nil
 	})
 
 	// b's prompt handler calls back to a for permission
-	b.Handle("prompt", func(ctx context.Context, req *acp.Request) (any, error) {
+	b.Handle("prompt", func(ctx context.Context, req *Request) (any, error) {
 		// This Call goes from b → a while b is handling a request from a.
 		// Tests that goroutine-per-handler prevents deadlock.
 		resp, err := b.Call(ctx, "permission", map[string]string{"tool": "read_file"})
@@ -414,12 +414,12 @@ func TestRunReturnsOnEOF(t *testing.T) {
 }
 
 func TestRunSkipsEmptyLines(t *testing.T) {
-	req, _ := json.Marshal(acp.Request{JSONRPC: "2.0", ID: "1", Method: "test"})
+	req, _ := json.Marshal(Request{JSONRPC: "2.0", ID: "1", Method: "test"})
 	input := "\n\n" + string(req) + "\n\n"
 
 	var called bool
 	conn := NewConn(strings.NewReader(input), io.Discard)
-	conn.Handle("test", func(ctx context.Context, req *acp.Request) (any, error) {
+	conn.Handle("test", func(ctx context.Context, req *Request) (any, error) {
 		called = true
 		return "ok", nil
 	})

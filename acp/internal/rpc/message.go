@@ -1,4 +1,4 @@
-package acp
+package rpc
 
 import "encoding/json"
 
@@ -8,7 +8,6 @@ type Request struct {
 	ID      any             `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
-	Meta    Meta            `json:"_meta,omitempty"`
 }
 
 // Response is a JSON-RPC 2.0 response.
@@ -17,7 +16,6 @@ type Response struct {
 	ID      any    `json:"id"`
 	Result  any    `json:"result,omitempty"`
 	Error   *Error `json:"error,omitempty"`
-	Meta    Meta   `json:"_meta,omitempty"`
 }
 
 // Notification is a JSON-RPC 2.0 notification (no ID, no response expected).
@@ -25,11 +23,10 @@ type Notification struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
-	Meta    Meta   `json:"_meta,omitempty"`
 }
 
-// Error is a JSON-RPC 2.0 error object. It implements the error interface
-// so handlers can return it directly as a Go error.
+// Error is a JSON-RPC 2.0 error object. Implements the error interface
+// so handlers can return it directly.
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`

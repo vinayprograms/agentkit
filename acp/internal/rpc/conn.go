@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/vinayprograms/agentkit/acp"
+
 )
 
 // Sentinel errors.
@@ -20,13 +20,13 @@ var (
 )
 
 // RequestHandler handles an inbound JSON-RPC request.
-// Return a result to send a success response. Return an *acp.Error for a
+// Return a result to send a success response. Return an *Error for a
 // protocol error, or any other error for an internal error response.
-type RequestHandler func(ctx context.Context, req *acp.Request) (any, error)
+type RequestHandler func(ctx context.Context, req *Request) (any, error)
 
 // NotifyHandler handles an inbound JSON-RPC notification.
 // No response is sent. Errors are the handler's responsibility.
-type NotifyHandler func(ctx context.Context, n *acp.Notification)
+type NotifyHandler func(ctx context.Context, n *Notification)
 
 // Conn is a bidirectional JSON-RPC 2.0 connection.
 // Both sides of ACP (agent and host) use a Conn to send and receive
@@ -44,7 +44,7 @@ type Conn struct {
 	handlers map[string]RequestHandler
 	notif    map[string]NotifyHandler
 
-	pending sync.Map // id string → chan *acp.Response
+	pending sync.Map // id string → chan *Response
 	started atomic.Bool
 	done    chan struct{}
 }
@@ -83,7 +83,7 @@ func (c *Conn) HandleNotify(method string, h NotifyHandler) error {
 // Call sends a request and blocks until a response is received, the context
 // is cancelled, or the connection closes. The caller inspects resp.Error
 // for protocol-level errors.
-func (c *Conn) Call(ctx context.Context, method string, params any) (*acp.Response, error) {
+func (c *Conn) Call(ctx context.Context, method string, params any) (*Response, error) {
 	select {
 	case <-c.done:
 		return nil, ErrClosed
@@ -97,11 +97,11 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (*acp.Respon
 		return nil, fmt.Errorf("rpc: marshal params: %w", err)
 	}
 
-	ch := make(chan *acp.Response, 1)
+	ch := make(chan *Response, 1)
 	c.pending.Store(id, ch)
 	defer c.pending.Delete(id)
 
-	if err := c.send(acp.Request{
+	if err := c.send(Request{
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  method,
@@ -135,7 +135,7 @@ func (c *Conn) Notify(ctx context.Context, method string, params any) error {
 	default:
 	}
 
-	return c.send(acp.Notification{
+	return c.send(Notification{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
@@ -190,7 +190,7 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 		Method string          `json:"method,omitempty"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		c.respondError(nil, acp.ErrParse, "parse error")
+		c.respondError(nil, ErrParse, "parse error")
 		return
 	}
 
@@ -200,13 +200,13 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 	switch {
 	case hasID && !hasMethod:
 		// Response — correlate with pending Call.
-		var resp acp.Response
+		var resp Response
 		if err := json.Unmarshal(data, &resp); err != nil {
 			return
 		}
 		idStr := fmt.Sprintf("%v", resp.ID)
 		if val, ok := c.pending.Load(idStr); ok {
-			ch := val.(chan *acp.Response)
+			ch := val.(chan *Response)
 			select {
 			case ch <- &resp:
 			default:
@@ -215,16 +215,16 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 
 	case hasID && hasMethod:
 		// Request — dispatch to handler in a goroutine.
-		var req acp.Request
+		var req Request
 		if err := json.Unmarshal(data, &req); err != nil {
-			c.respondError(nil, acp.ErrParse, "parse error")
+			c.respondError(nil, ErrParse, "parse error")
 			return
 		}
 		go c.handleRequest(ctx, &req)
 
 	case !hasID && hasMethod:
 		// Notification — dispatch to handler in a goroutine.
-		var n acp.Notification
+		var n Notification
 		if err := json.Unmarshal(data, &n); err != nil {
 			return // notifications have no error response
 		}
@@ -232,32 +232,32 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 	}
 }
 
-func (c *Conn) handleRequest(ctx context.Context, req *acp.Request) {
+func (c *Conn) handleRequest(ctx context.Context, req *Request) {
 	h, ok := c.handlers[req.Method]
 	if !ok {
-		c.respondError(req.ID, acp.ErrNoMethod, "method not found")
+		c.respondError(req.ID, ErrNoMethod, "method not found")
 		return
 	}
 
 	result, err := h(ctx, req)
 	if err != nil {
-		var acpErr *acp.Error
+		var acpErr *Error
 		if errors.As(err, &acpErr) {
 			c.respondError(req.ID, acpErr.Code, acpErr.Message)
 		} else {
-			c.respondError(req.ID, acp.ErrInternal, err.Error())
+			c.respondError(req.ID, ErrInternal, err.Error())
 		}
 		return
 	}
 
-	c.send(acp.Response{
+	c.send(Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
 	})
 }
 
-func (c *Conn) handleNotify(ctx context.Context, n *acp.Notification) {
+func (c *Conn) handleNotify(ctx context.Context, n *Notification) {
 	h, ok := c.notif[n.Method]
 	if !ok {
 		return // silently drop per JSON-RPC spec
@@ -266,10 +266,10 @@ func (c *Conn) handleNotify(ctx context.Context, n *acp.Notification) {
 }
 
 func (c *Conn) respondError(id any, code int, message string) {
-	c.send(acp.Response{
+	c.send(Response{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &acp.Error{Code: code, Message: message},
+		Error:   &Error{Code: code, Message: message},
 	})
 }
 

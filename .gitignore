@@ -41,3 +41,6 @@ structured-errors
 
 # skip temporary design-time files
 design/
+
+# skip claude code specific content
+.claude/
