@@ -28,12 +28,16 @@ type Notification struct {
 	Meta    Meta   `json:"_meta,omitempty"`
 }
 
-// Error is a JSON-RPC 2.0 error object.
+// Error is a JSON-RPC 2.0 error object. It implements the error interface
+// so handlers can return it directly as a Go error.
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    any    `json:"data,omitempty"`
 }
+
+// Error implements the error interface.
+func (e *Error) Error() string { return e.Message }
 
 // Standard JSON-RPC error codes.
 const (
