@@ -137,6 +137,8 @@ acp/                    Entry point: Info, Meta
 
 ## Protocol Types Reference
 
+For detailed usage examples of every type, see [proto/README.md](proto/README.md).
+
 ### Content (`proto/content`) — [spec](https://agentclientprotocol.com/protocol/content)
 
 | Type | Description |
