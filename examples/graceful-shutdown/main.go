@@ -35,17 +35,17 @@ func main() {
 	fmt.Println("=== Graceful Shutdown Example ===")
 	fmt.Println()
 
-	// Create shutdown coordinator with progress reporting
-	coord := shutdown.NewCoordinator(shutdown.Config{
+	// Create shutdown sequence with progress reporting
+	coord := shutdown.New(shutdown.Config{
 		DefaultTimeout:  15 * time.Second,
 		ContinueOnError: true,
-		OnProgress: func(result shutdown.HandlerResult) {
+		Progress: func(r shutdown.Result) {
 			status := "✓"
-			if result.Err != nil {
+			if r.Err != nil {
 				status = "✗"
 			}
 			log.Printf("  %s [Phase %d] %s shutdown complete (%v)",
-				status, result.Phase, result.Name, result.Duration.Round(time.Millisecond))
+				status, r.Phase, r.Name, r.Duration.Round(time.Millisecond))
 		},
 	})
 
@@ -84,12 +84,12 @@ func main() {
 	fmt.Println()
 	fmt.Println("=== Shutdown Complete ===")
 
-	result := coord.Result()
-	fmt.Printf("Total duration: %v\n", result.TotalDuration.Round(time.Millisecond))
+	summary := coord.Summary()
+	fmt.Printf("Total duration: %v\n", summary.TotalDuration.Round(time.Millisecond))
 
-	if result.Err != nil {
-		fmt.Printf("Errors occurred: %v\n", result.Err)
-		for _, r := range result.Results {
+	if summary.Err != nil {
+		fmt.Printf("Errors occurred: %v\n", summary.Err)
+		for _, r := range summary.Results {
 			if r.Err != nil {
 				fmt.Printf("  - %s: %v\n", r.Name, r.Err)
 			}
@@ -149,8 +149,8 @@ func (s *httpServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		s.requests.Load(), s.inFlight.Load())
 }
 
-// OnShutdown implements shutdown.ShutdownHandler.
-func (s *httpServer) OnShutdown(ctx context.Context) error {
+// Shutdown implements shutdown.Handler.
+func (s *httpServer) Shutdown(ctx context.Context) error {
 	log.Printf("[server] Shutting down (in-flight: %d)...", s.inFlight.Load())
 
 	// Gracefully shutdown HTTP server (waits for in-flight requests)
@@ -227,8 +227,8 @@ func (p *workerPool) Submit(work func()) {
 	p.jobs <- job{work: work}
 }
 
-// OnShutdown implements shutdown.ShutdownHandler.
-func (p *workerPool) OnShutdown(ctx context.Context) error {
+// Shutdown implements shutdown.Handler.
+func (p *workerPool) Shutdown(ctx context.Context) error {
 	log.Printf("[workers] Shutting down (pending: %d)...", p.pending.Load())
 
 	// Stop accepting new jobs
@@ -278,8 +278,8 @@ func newCleanupHandler() *cleanupHandler {
 	}
 }
 
-// OnShutdown implements shutdown.ShutdownHandler.
-func (c *cleanupHandler) OnShutdown(ctx context.Context) error {
+// Shutdown implements shutdown.Handler.
+func (c *cleanupHandler) Shutdown(ctx context.Context) error {
 	log.Printf("[cleanup] Releasing resources...")
 
 	// Simulate closing database connections
