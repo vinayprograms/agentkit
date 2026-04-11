@@ -21,123 +21,74 @@ var (
 	ErrInvalidConfig = errors.New("invalid configuration")
 )
 
-// ShutdownHandler is implemented by components that need graceful shutdown.
-type ShutdownHandler interface {
-	// OnShutdown is called when shutdown is initiated.
-	// The context will be cancelled when the timeout is reached.
-	// Implementations should:
-	// - Stop accepting new work
-	// - Finish in-progress tasks (if time permits)
-	// - Re-queue pending work
-	// - Release resources
-	OnShutdown(ctx context.Context) error
+// Handler is implemented by components that need graceful shutdown.
+type Handler interface {
+	Shutdown(ctx context.Context) error
 }
 
-// ShutdownFunc is a convenience type for simple shutdown functions.
-type ShutdownFunc func(ctx context.Context) error
+// Func is a convenience type for simple shutdown functions.
+// It implements Handler, similar to http.HandlerFunc.
+//
+//	seq.Register("cache", shutdown.Func(func(ctx context.Context) error {
+//	    return cache.Flush(ctx)
+//	}))
+type Func func(ctx context.Context) error
 
-// OnShutdown implements ShutdownHandler.
-func (f ShutdownFunc) OnShutdown(ctx context.Context) error {
+// Shutdown implements Handler.
+func (f Func) Shutdown(ctx context.Context) error {
 	return f(ctx)
 }
 
-// ShutdownCoordinator manages graceful shutdown for multiple components.
-type ShutdownCoordinator interface {
-	// Register adds a handler to be called during shutdown.
-	// Handlers are called in registration order when no phase is specified.
-	Register(name string, handler ShutdownHandler)
-
-	// RegisterWithPhase adds a handler with a specific phase.
-	// Lower phase numbers are shut down first.
-	// Handlers in the same phase are shut down concurrently.
-	RegisterWithPhase(name string, handler ShutdownHandler, phase int)
-
-	// Shutdown initiates graceful shutdown.
-	// It calls all registered handlers in order.
-	// Returns ErrAlreadyShutdown if called more than once.
-	Shutdown(ctx context.Context) error
-
-	// ShutdownWithTimeout initiates shutdown with a timeout.
-	// This is a convenience wrapper around Shutdown.
-	ShutdownWithTimeout(timeout time.Duration) error
-
-	// HandleSignals registers handlers for SIGTERM and SIGINT.
-	// When a signal is received, Shutdown is called with the configured timeout.
-	// Must be called before the signals are expected.
-	HandleSignals()
-
-	// Done returns a channel that is closed when shutdown is complete.
-	Done() <-chan struct{}
-
-	// Err returns any error that occurred during shutdown.
-	// Only valid after Done() is closed.
-	Err() error
-}
-
-// HandlerResult contains the result of a single handler's shutdown.
-type HandlerResult struct {
-	// Name of the handler.
-	Name string
-
-	// Phase the handler was registered with.
-	Phase int
-
-	// Duration how long the handler took to shut down.
+// Result contains the outcome of a single handler's shutdown.
+type Result struct {
+	Name     string
+	Phase    int
 	Duration time.Duration
-
-	// Err is any error returned by the handler.
-	Err error
+	Err      error
 }
 
-// ShutdownResult contains the complete shutdown result.
-type ShutdownResult struct {
-	// TotalDuration of the entire shutdown process.
+// Summary contains the complete shutdown outcome.
+type Summary struct {
 	TotalDuration time.Duration
-
-	// Results for each handler.
-	Results []HandlerResult
-
-	// Err is the overall error (nil if all handlers succeeded).
-	Err error
+	Results       []Result
+	Err           error
 }
 
-// Failed returns true if any handler failed.
-func (r *ShutdownResult) Failed() bool {
-	return r.Err != nil
+// Failed reports whether any handler failed.
+func (s *Summary) Failed() bool {
+	return s.Err != nil
 }
 
 // FailedHandlers returns the names of handlers that failed.
-func (r *ShutdownResult) FailedHandlers() []string {
+func (s *Summary) FailedHandlers() []string {
 	var failed []string
-	for _, hr := range r.Results {
-		if hr.Err != nil {
-			failed = append(failed, hr.Name)
+	for _, r := range s.Results {
+		if r.Err != nil {
+			failed = append(failed, r.Name)
 		}
 	}
 	return failed
 }
 
-// Config configures the shutdown coordinator.
+// Config configures the shutdown sequence.
 type Config struct {
-	// DefaultTimeout is used when ShutdownWithTimeout is called without a timeout.
-	// Default: 30 seconds
+	// DefaultTimeout is used when HandleSignals triggers shutdown.
+	// Default: 30 seconds.
 	DefaultTimeout time.Duration
 
 	// DefaultPhase is assigned to handlers registered without a phase.
-	// Default: 100
+	// Default: 100.
 	DefaultPhase int
 
 	// ContinueOnError determines whether shutdown continues if a handler fails.
-	// If true, subsequent handlers are still called.
-	// Default: true
+	// Default: true.
 	ContinueOnError bool
 
-	// OnProgress is called when each handler completes.
-	// Can be used for logging.
-	OnProgress func(result HandlerResult)
+	// Progress is called when each handler completes. Optional.
+	Progress func(Result)
 }
 
-// Validate checks the configuration.
+// Validate reports whether the configuration is valid.
 func (c *Config) Validate() error {
 	if c.DefaultTimeout < 0 {
 		return ErrInvalidConfig
@@ -145,8 +96,8 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// DefaultConfig returns configuration with sensible defaults.
-func DefaultConfig() Config {
+// Defaults returns a Config with sensible defaults.
+func Defaults() Config {
 	return Config{
 		DefaultTimeout:  30 * time.Second,
 		DefaultPhase:    100,
@@ -154,9 +105,9 @@ func DefaultConfig() Config {
 	}
 }
 
-// registration holds a registered handler with its metadata.
-type registration struct {
+// entry holds a registered handler with its metadata.
+type entry struct {
 	name    string
-	handler ShutdownHandler
+	handler Handler
 	phase   int
 }
