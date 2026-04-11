@@ -29,16 +29,20 @@ import (
     "github.com/vinayprograms/agentkit/acp/proto/update"
 )
 
+type myAgent struct{}
+
+func (a *myAgent) Prompt(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
+    turn.SendUpdate(ctx, update.Update{
+        Type: update.Message, Role: "assistant",
+        Chunk: "Hello from the agent!",
+    })
+    return prompt.Result{Reason: prompt.EndTurn}, nil
+}
+
 func main() {
     srv := agent.New(agent.Config{
-        Info: acp.Info{Name: "my-agent", Version: "1.0"},
-        Prompt: func(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
-            turn.SendUpdate(ctx, update.Update{
-                Type: update.Message, Role: "assistant",
-                Chunk: "Hello from the agent!",
-            })
-            return prompt.Result{Reason: prompt.EndTurn}, nil
-        },
+        Info:    acp.Info{Name: "my-agent", Version: "1.0"},
+        Handler: &myAgent{},
     })
     srv.Run(context.Background(), os.Stdin, os.Stdout)
 }
@@ -92,22 +96,22 @@ func main() {
 Host (editor/IDE)                    Agent (AI)
       │                                │
       │──── initialize ───────────────▶│
-      │◀─── result ───────────────────│
+      │◀─── result ──────────────────-─│
       │──── authenticate ─────────────▶│  (optional)
-      │◀─── result ───────────────────│
+      │◀─── result ─────────────────-──│
       │──── session/new ──────────────▶│
-      │◀─── result ───────────────────│
+      │◀─── result ───────-────────────│
       │──── session/prompt ───────────▶│
       │                                │
-      │◀─── session/update ───────────│  (streaming: chunks, tool calls, plan)
-      │◀─── request_permission ───────│  (agent asks host)
+      │◀─── session/update -───────────│  (streaming: chunks, tool calls, plan)
+      │◀─── request_permission ──-─────│  (agent asks host)
       │──── result ───────────────────▶│
-      │◀─── fs/read_text_file ────────│  (agent asks host)
+      │◀─── fs/read_text_file ────-────│  (agent asks host)
       │──── result ───────────────────▶│
-      │◀─── terminal/create ──────────│  (agent asks host)
+      │◀─── terminal/create ───────-───│  (agent asks host)
       │──── result ───────────────────▶│
       │                                │
-      │◀─── result ───────────────────│  (prompt complete)
+      │◀─── result ─────────────────-──│  (prompt complete)
 ```
 
 The protocol is **bidirectional**: both sides send requests and handle incoming requests concurrently over a single JSON-RPC 2.0 connection.

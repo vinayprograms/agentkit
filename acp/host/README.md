@@ -156,14 +156,11 @@ Set `Config.Terminal` to advertise the terminal capability.
 ### Permission handling
 
 ```go
-type myPermission struct {
-    ui *editor.UI
-}
-
-func (p *myPermission) Request(ctx context.Context, perm tool.Permission) (tool.Approval, error) {
-    // Show dialog to the user and wait for their decision.
-    decision := p.ui.ShowPermissionDialog(perm.ToolCall)
-    return tool.Approval{Decision: decision}, nil
+host.Config{
+    Permission: func(ctx context.Context, perm tool.Permission) (tool.Approval, error) {
+        decision := ui.ShowPermissionDialog(perm.ToolCall)
+        return tool.Approval{Decision: decision}, nil
+    },
 }
 ```
 
@@ -226,7 +223,7 @@ sess, err := h.LoadSession(ctx, session.LoadParams{
 |---|---|---|
 | `FSHandler` | `ReadFile`, `WriteFile` | `ReadTextFile`, `WriteTextFile` |
 | `TerminalHandler` | `Create`, `Output`, `Wait`, `Kill`, `Release` | `Terminal` |
-| `PermissionHandler` | `Request` | (required by protocol) |
+| `Config.Permission` (func) | single function | (required by protocol) |
 
 All handler methods receive a `sessionID` parameter so implementations can scope resources per session (e.g., show terminals in the correct editor tab).
 

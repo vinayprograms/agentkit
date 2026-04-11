@@ -7,24 +7,29 @@ This package provides the agent-side ACP implementation. An agent is an AI codin
 ## Minimal Agent
 
 ```go
-srv := agent.New(agent.Config{
-    Info: acp.Info{Name: "my-agent", Version: "1.0"},
-    Prompt: func(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
-        // Process the prompt and respond.
-        return prompt.Result{Reason: prompt.EndTurn}, nil
-    },
-})
-srv.Run(ctx, os.Stdin, os.Stdout)
+type myAgent struct{}
+
+func (a *myAgent) Prompt(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
+    return prompt.Result{Reason: prompt.EndTurn}, nil
+}
+
+func main() {
+    srv := agent.New(agent.Config{
+        Info:    acp.Info{Name: "my-agent", Version: "1.0"},
+        Handler: &myAgent{},
+    })
+    srv.Run(ctx, os.Stdin, os.Stdout)
+}
 ```
 
-`Config.Prompt` is the only required field. Everything else has sensible defaults.
+`Config.Handler` is the only required field. Everything else has sensible defaults.
 
 ## The Turn Object
 
-When a prompt arrives, your handler receives a `*Turn` — a session-scoped handle with methods to call back to the host:
+When a prompt arrives, your `Prompt` method receives a `*Turn` — a session-scoped handle with methods to call back to the host:
 
 ```go
-Prompt: func(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
+func (a *myAgent) Prompt(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
     // The incoming prompt content.
     for _, block := range turn.Params.Content {
         fmt.Println(block.Text)

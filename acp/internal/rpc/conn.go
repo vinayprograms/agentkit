@@ -273,6 +273,28 @@ func (c *Conn) respondError(id any, code int, message string) {
 	})
 }
 
+// Invoke sends a typed JSON-RPC request and unmarshals the result into T.
+// Combines Call + error check + unmarshal in one step.
+func Invoke[T any](ctx context.Context, c *Conn, method string, params any) (T, error) {
+	var zero T
+	resp, err := c.Call(ctx, method, params)
+	if err != nil {
+		return zero, err
+	}
+	if resp.Error != nil {
+		return zero, resp.Error
+	}
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return zero, fmt.Errorf("rpc: marshal result: %w", err)
+	}
+	var result T
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return zero, fmt.Errorf("rpc: unmarshal result: %w", err)
+	}
+	return result, nil
+}
+
 func (c *Conn) send(msg any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
