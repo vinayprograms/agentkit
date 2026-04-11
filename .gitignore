@@ -39,3 +39,5 @@ rate-limiting
 result-publication
 structured-errors
 
+# skip temporary design-time files
+design/
