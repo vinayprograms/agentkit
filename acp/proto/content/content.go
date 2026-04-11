@@ -1,17 +1,18 @@
-package acp
+// Package content defines displayable blocks in prompts, outputs, and tool results.
+package content
 
-// Content type discriminators.
+// Block type discriminators.
 const (
-	TypeText     = "text"
-	TypeImage    = "image"
-	TypeAudio    = "audio"
-	TypeResource = "resource"
-	TypeLink     = "resource_link"
+	Text     = "text"
+	Image    = "image"
+	Audio    = "audio"
+	Resource = "resource"
+	Link     = "resource_link"
 )
 
-// Content is a displayable block in prompts, outputs, and tool results.
-// The Type field determines which other fields are populated.
-type Content struct {
+// Block is a single displayable unit. The Type field determines
+// which other fields are populated.
+type Block struct {
 	Type string `json:"type"`
 
 	// Text content.
@@ -22,7 +23,7 @@ type Content struct {
 	MimeType string `json:"mimeType,omitempty"`
 
 	// Embedded resource (full file/resource content for @-mentions).
-	Resource *Resource `json:"resource,omitempty"`
+	Embedded *Embedded `json:"resource,omitempty"`
 
 	// Resource link (reference the agent can fetch itself).
 	URI         string `json:"uri,omitempty"`
@@ -30,11 +31,11 @@ type Content struct {
 	Description string `json:"description,omitempty"`
 
 	Annotations map[string]any `json:"annotations,omitempty"`
-	Meta        Meta           `json:"_meta,omitempty"`
+	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
-// Resource is embedded file or resource content.
-type Resource struct {
+// Embedded is file or resource content included inline.
+type Embedded struct {
 	URI      string `json:"uri"`
 	MimeType string `json:"mimeType,omitempty"`
 	Text     string `json:"text,omitempty"`

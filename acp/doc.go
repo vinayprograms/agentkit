@@ -1,11 +1,22 @@
-// Package acp defines the Agent Client Protocol wire types.
+// Package acp provides the Agent Client Protocol — a standard for communication
+// between code editors (hosts) and AI coding agents.
 //
-// ACP standardizes communication between code editors (hosts) and AI coding
-// agents. This package contains the shared protocol types used by both sides.
-// For implementations, see acp/agent (agent-side) and acp/host (host-side).
+// # Getting started
 //
-// The protocol is built on JSON-RPC 2.0 with bidirectional communication:
-// both host and agent can send requests and notifications to each other.
+// To build an agent, use [github.com/vinayprograms/agentkit/acp/agent].
+// To build a host (editor/IDE), use [github.com/vinayprograms/agentkit/acp/host].
+//
+// Protocol types live under acp/proto/:
+//
+//	acp/proto/content    — content blocks (text, image, audio, resources)
+//	acp/proto/tool       — tool calls, permissions, lifecycle
+//	acp/proto/prompt     — prompt turns and stop reasons
+//	acp/proto/plan       — execution plan steps
+//	acp/proto/config     — runtime settings and slash commands
+//	acp/proto/update     — session update notifications
+//	acp/proto/terminal   — terminal lifecycle management
+//	acp/proto/fs         — file system operations
+//	acp/proto/session    — session lifecycle
 //
 // # Message Flow
 //
@@ -24,10 +35,4 @@
 //	  │◀─── fs/read_text_file ─────│ (agent asks host)
 //	  │──── result ────────────────▶│
 //	  │◀─── result ────────────────│ (prompt complete)
-//
-// # Extensibility
-//
-// Every protocol type supports a Meta field (serialized as "_meta") for custom
-// data without breaking the core protocol. Reserved meta keys: "traceparent",
-// "tracestate", "baggage" (W3C trace context).
 package acp
