@@ -10,7 +10,6 @@ require (
 	github.com/blevesearch/bleve/v2 v2.5.7
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
-	github.com/nats-io/nats.go v1.49.0
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.40.0
@@ -59,10 +58,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/nats-io/nkeys v0.4.12 // indirect
-	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
