@@ -46,6 +46,16 @@ func TestNewOpenAIWithKey(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIWithBaseURL(t *testing.T) {
+	e, err := New(Config{Provider: "openai", APIKey: "sk-test", BaseURL: "https://custom.api.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+}
+
 func TestNewGoogleMissingKey(t *testing.T) {
 	_, err := New(Config{Provider: "google"})
 	if err == nil {
@@ -82,6 +92,21 @@ func TestNewOpenAICompat(t *testing.T) {
 		Provider: "openai-compat",
 		BaseURL:  "http://localhost:11434/v1",
 		Model:    "nomic-embed-text",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+}
+
+func TestNewOpenAICompatWithAPIKey(t *testing.T) {
+	e, err := New(Config{
+		Provider: "openai-compat",
+		BaseURL:  "http://localhost:11434/v1",
+		Model:    "nomic-embed-text",
+		APIKey:   "sk-test",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
