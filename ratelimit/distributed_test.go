@@ -10,7 +10,7 @@ import (
 )
 
 func TestDistributedLimiter_New(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -33,7 +33,7 @@ func TestDistributedLimiter_InvalidConfig(t *testing.T) {
 	}
 
 	// Missing agent ID
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	_, err = NewDistributedLimiter(DistributedConfig{
@@ -45,7 +45,7 @@ func TestDistributedLimiter_InvalidConfig(t *testing.T) {
 }
 
 func TestDistributedLimiter_SetCapacity(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -69,7 +69,7 @@ func TestDistributedLimiter_SetCapacity(t *testing.T) {
 }
 
 func TestDistributedLimiter_AcquireRelease(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -108,7 +108,7 @@ func TestDistributedLimiter_AcquireRelease(t *testing.T) {
 }
 
 func TestDistributedLimiter_AnnounceReduced(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -134,7 +134,7 @@ func TestDistributedLimiter_AnnounceReduced(t *testing.T) {
 }
 
 func TestDistributedLimiter_ReceivesUpdates(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	// Create two limiters
@@ -191,7 +191,7 @@ func TestDistributedLimiter_ReceivesUpdates(t *testing.T) {
 }
 
 func TestDistributedLimiter_IgnoresOwnUpdates(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -243,7 +243,7 @@ func TestDistributedConfig_Defaults(t *testing.T) {
 }
 
 func TestDistributedLimiter_Recovery(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -283,7 +283,7 @@ func TestDistributedLimiter_Recovery(t *testing.T) {
 }
 
 func TestDistributedLimiter_Recovery_NoMaxRecovery(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -321,7 +321,7 @@ func TestDistributedLimiter_Recovery_NoMaxRecovery(t *testing.T) {
 }
 
 func TestDistributedLimiter_AnnounceReduced_UnknownResource(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -338,7 +338,7 @@ func TestDistributedLimiter_AnnounceReduced_UnknownResource(t *testing.T) {
 }
 
 func TestDistributedLimiter_AnnounceReduced_MinCapacity(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -361,7 +361,7 @@ func TestDistributedLimiter_AnnounceReduced_MinCapacity(t *testing.T) {
 }
 
 func TestDistributedLimiter_HandleUpdate_MalformedMessage(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -388,7 +388,7 @@ func TestDistributedLimiter_HandleUpdate_MalformedMessage(t *testing.T) {
 }
 
 func TestDistributedLimiter_HandleUpdate_UnknownResource(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -423,7 +423,7 @@ func TestDistributedLimiter_HandleUpdate_UnknownResource(t *testing.T) {
 }
 
 func TestDistributedLimiter_HandleUpdate_HigherCapacity(t *testing.T) {
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	limiter, err := NewDistributedLimiter(DistributedConfig{
@@ -476,7 +476,7 @@ func TestDistributedConfig_Validate(t *testing.T) {
 		t.Errorf("expected ErrInvalidConfig for empty config, got %v", err)
 	}
 
-	mbus := bus.NewMemoryBus(bus.DefaultConfig())
+	mbus := bus.Memory(bus.Config{})
 	defer mbus.Close()
 
 	cfg = DistributedConfig{Bus: mbus}

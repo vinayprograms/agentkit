@@ -11,7 +11,7 @@ import (
 
 // BusMonitor monitors heartbeats over a message bus.
 type BusMonitor struct {
-	bus           bus.MessageBus
+	bus           bus.Bus
 	timeout       time.Duration
 	checkInterval time.Duration
 

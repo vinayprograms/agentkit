@@ -101,7 +101,7 @@ type Monitor interface {
 // SenderConfig configures a heartbeat sender.
 type SenderConfig struct {
 	// Bus is the message bus for publishing heartbeats.
-	Bus bus.MessageBus
+	Bus bus.Bus
 
 	// AgentID is the unique identifier for this agent.
 	AgentID string
@@ -137,7 +137,7 @@ func DefaultSenderConfig() SenderConfig {
 // MonitorConfig configures a heartbeat monitor.
 type MonitorConfig struct {
 	// Bus is the message bus for subscribing to heartbeats.
-	Bus bus.MessageBus
+	Bus bus.Bus
 
 	// Timeout for considering an agent dead.
 	// Should be 2-3x the expected heartbeat interval.

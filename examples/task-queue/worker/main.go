@@ -51,7 +51,7 @@ type TaskResult struct {
 // Worker processes tasks from the queue.
 type Worker struct {
 	id       string
-	bus      bus.MessageBus
+	bus      bus.Bus
 	registry registry.Registry
 
 	tasksProcessed int
@@ -69,8 +69,8 @@ func main() {
 
 	// Create in-memory message bus
 	// NOTE: For distributed workers, use NATS:
-	//   natsBus, _ := bus.NewNATSBus("nats://localhost:4222", bus.DefaultConfig())
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	//   natsBus, _ := bus.NATS(bus.NATSConfig{URL: "nats://localhost:4222"})
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	// Create in-memory registry

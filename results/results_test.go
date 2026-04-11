@@ -551,7 +551,7 @@ func TestMemoryPublisher_DeleteWithActiveSubscription(t *testing.T) {
 // =============================================================================
 
 func TestBusPublisher_PublishAndGet(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -585,7 +585,7 @@ func TestBusPublisher_PublishAndGet(t *testing.T) {
 }
 
 func TestBusPublisher_Subscribe(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -631,7 +631,7 @@ func TestBusPublisher_Subscribe(t *testing.T) {
 }
 
 func TestBusPublisher_ErrorPaths(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -676,7 +676,7 @@ func TestBusPublisher_ErrorPaths(t *testing.T) {
 }
 
 func TestBusPublisher_ClosedPublisher(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -707,7 +707,7 @@ func TestBusPublisher_ClosedPublisher(t *testing.T) {
 }
 
 func TestBusPublisher_Delete(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -728,7 +728,7 @@ func TestBusPublisher_Delete(t *testing.T) {
 }
 
 func TestBusPublisher_List(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -760,7 +760,7 @@ func TestBusPublisher_List(t *testing.T) {
 }
 
 func TestBusPublisher_SubscribeToExistingTerminal(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -791,7 +791,7 @@ func TestBusPublisher_SubscribeToExistingTerminal(t *testing.T) {
 }
 
 func TestBusPublisher_ConfigDefaults(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	// Test with empty config
@@ -808,7 +808,7 @@ func TestBusPublisher_ConfigDefaults(t *testing.T) {
 }
 
 func TestBusSub_ResultsAndCancel(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -856,7 +856,7 @@ func TestBusSub_ResultsAndCancel(t *testing.T) {
 }
 
 func TestBusPublisher_UpdateExistingResult(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())
@@ -880,7 +880,7 @@ func TestBusPublisher_UpdateExistingResult(t *testing.T) {
 }
 
 func TestBusPublisher_ConcurrentAccess(t *testing.T) {
-	mb := bus.NewMemoryBus(bus.DefaultConfig())
+	mb := bus.Memory(bus.Config{})
 	defer mb.Close()
 
 	pub := NewBusPublisher(mb, DefaultBusPublisherConfig())

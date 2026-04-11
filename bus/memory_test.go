@@ -7,7 +7,9 @@ import (
 	"time"
 )
 
-// --- Unit Tests ---
+// ============================================================================
+// Subject validation and matching
+// ============================================================================
 
 func TestValidateSubject(t *testing.T) {
 	tests := []struct {
@@ -21,50 +23,103 @@ func TestValidateSubject(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := ValidateSubject(tt.subject)
+		err := validateSubject(tt.subject)
 		if (err != nil) != tt.wantErr {
-			t.Errorf("ValidateSubject(%q) = %v, wantErr %v", tt.subject, err, tt.wantErr)
+			t.Errorf("validateSubject(%q) = %v, wantErr %v", tt.subject, err, tt.wantErr)
 		}
 	}
 }
 
-func TestMemoryBus_Publish(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestSubjectMatch(t *testing.T) {
+	tests := []struct {
+		pattern string
+		subject string
+		want    bool
+	}{
+		// Exact match
+		{"foo", "foo", true},
+		{"foo.bar", "foo.bar", true},
+		{"foo", "bar", false},
+		{"foo.bar", "foo.baz", false},
 
-	// Publish without subscribers should not error
-	err := bus.Publish("test", []byte("hello"))
-	if err != nil {
+		// Wildcard (*)
+		{"foo.*", "foo.bar", true},
+		{"foo.*", "foo.baz", true},
+		{"foo.*", "foo", false},
+		{"foo.*", "foo.bar.baz", false},
+		{"*.bar", "foo.bar", true},
+		{"*.bar", "baz.bar", true},
+		{"foo.*.baz", "foo.bar.baz", true},
+		{"foo.*.baz", "foo.bar.qux", false},
+
+		// WildcardAll (>)
+		{"foo.>", "foo.bar", true},
+		{"foo.>", "foo.bar.baz", true},
+		{"foo.>", "foo", false}, // > must match at least one
+		{">", "foo", true},
+		{">", "foo.bar", true},
+
+		// Length mismatches
+		{"foo.bar", "foo", false},
+		{"foo", "foo.bar", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"_"+tt.subject, func(t *testing.T) {
+			if got := subjectMatch(tt.pattern, tt.subject); got != tt.want {
+				t.Errorf("subjectMatch(%q, %q) = %v, want %v", tt.pattern, tt.subject, got, tt.want)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Publish
+// ============================================================================
+
+func TestPublish(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	if err := b.Publish("test", []byte("hello")); err != nil {
 		t.Errorf("Publish error: %v", err)
 	}
 }
 
-func TestMemoryBus_PublishInvalidSubject(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestPublishInvalidSubject(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-	err := bus.Publish("", []byte("hello"))
-	if err != ErrInvalidSubject {
+	if err := b.Publish("", []byte("hello")); err != ErrInvalidSubject {
 		t.Errorf("expected ErrInvalidSubject, got %v", err)
 	}
 }
 
-// --- Integration Tests ---
+func TestPublishAfterClose(t *testing.T) {
+	b := Memory(Config{})
+	b.Close()
 
-func TestMemoryBus_Subscribe(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+	if err := b.Publish("test", []byte("hello")); err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
 
-	sub, err := bus.Subscribe("test")
+// ============================================================================
+// Subscribe
+// ============================================================================
+
+func TestSubscribe(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, err := b.Subscribe("test")
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
 	defer sub.Unsubscribe()
 
-	// Publish
-	bus.Publish("test", []byte("hello"))
+	b.Publish("test", []byte("hello"))
 
-	// Receive
 	select {
 	case msg := <-sub.Messages():
 		if string(msg.Data) != "hello" {
@@ -78,18 +133,17 @@ func TestMemoryBus_Subscribe(t *testing.T) {
 	}
 }
 
-func TestMemoryBus_MultipleSubscribers(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestSubscribeMultiple(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-	sub1, _ := bus.Subscribe("test")
-	sub2, _ := bus.Subscribe("test")
+	sub1, _ := b.Subscribe("test")
+	sub2, _ := b.Subscribe("test")
 	defer sub1.Unsubscribe()
 	defer sub2.Unsubscribe()
 
-	bus.Publish("test", []byte("hello"))
+	b.Publish("test", []byte("hello"))
 
-	// Both should receive
 	for i, sub := range []Subscription{sub1, sub2} {
 		select {
 		case msg := <-sub.Messages():
@@ -102,14 +156,79 @@ func TestMemoryBus_MultipleSubscribers(t *testing.T) {
 	}
 }
 
-func TestMemoryBus_QueueSubscribe(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestSubscribeAfterClose(t *testing.T) {
+	b := Memory(Config{})
+	b.Close()
 
-	// Create 3 queue subscribers
+	_, err := b.Subscribe("test")
+	if err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestSubscribeWildcard(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, _ := b.Subscribe("events.*")
+	defer sub.Unsubscribe()
+
+	b.Publish("events.user", []byte("user event"))
+	b.Publish("events.order", []byte("order event"))
+	b.Publish("other.topic", []byte("should not match"))
+
+	for _, want := range []string{"user event", "order event"} {
+		select {
+		case msg := <-sub.Messages():
+			if string(msg.Data) != want {
+				t.Errorf("data = %q, want %q", msg.Data, want)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("timeout waiting for %q", want)
+		}
+	}
+
+	select {
+	case msg := <-sub.Messages():
+		t.Errorf("unexpected message: %q", msg.Data)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestSubscribeWildcardAll(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, _ := b.Subscribe("events.>")
+	defer sub.Unsubscribe()
+
+	b.Publish("events.user.created", []byte("deep"))
+	b.Publish("events.order", []byte("shallow"))
+	b.Publish("other", []byte("no match"))
+
+	for _, want := range []string{"deep", "shallow"} {
+		select {
+		case msg := <-sub.Messages():
+			if string(msg.Data) != want {
+				t.Errorf("data = %q, want %q", msg.Data, want)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("timeout waiting for %q", want)
+		}
+	}
+}
+
+// ============================================================================
+// Queue subscribe
+// ============================================================================
+
+func TestQueueSubscribe(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
 	var subs []Subscription
 	for i := 0; i < 3; i++ {
-		sub, _ := bus.QueueSubscribe("test", "workers")
+		sub, _ := b.QueueSubscribe("test", "workers")
 		subs = append(subs, sub)
 	}
 	defer func() {
@@ -118,12 +237,10 @@ func TestMemoryBus_QueueSubscribe(t *testing.T) {
 		}
 	}()
 
-	// Publish 10 messages
 	for i := 0; i < 10; i++ {
-		bus.Publish("test", []byte("msg"))
+		b.Publish("test", []byte("msg"))
 	}
 
-	// Count received per subscriber
 	var received [3]int32
 	var wg sync.WaitGroup
 	for i, sub := range subs {
@@ -143,30 +260,51 @@ func TestMemoryBus_QueueSubscribe(t *testing.T) {
 	}
 	wg.Wait()
 
-	// All 10 messages should be received (distributed)
 	total := received[0] + received[1] + received[2]
 	if total != 10 {
 		t.Errorf("total received = %d, want 10 (distribution: %v)", total, received)
 	}
 }
 
-func TestMemoryBus_Request(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestQueueSubscribeEmptyQueue(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-	// Start responder
-	sub, _ := bus.Subscribe("service")
+	_, err := b.QueueSubscribe("test", "")
+	if err != ErrInvalidSubject {
+		t.Errorf("expected ErrInvalidSubject, got %v", err)
+	}
+}
+
+func TestQueueSubscribeAfterClose(t *testing.T) {
+	b := Memory(Config{})
+	b.Close()
+
+	_, err := b.QueueSubscribe("test", "workers")
+	if err != ErrClosed {
+		t.Errorf("expected ErrClosed, got %v", err)
+	}
+}
+
+// ============================================================================
+// Request/Reply
+// ============================================================================
+
+func TestRequest(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, _ := b.Subscribe("service")
 	go func() {
 		for msg := range sub.Messages() {
 			if msg.Reply != "" {
-				bus.Publish(msg.Reply, []byte("pong"))
+				b.Publish(msg.Reply, []byte("pong"))
 			}
 		}
 	}()
 	defer sub.Unsubscribe()
 
-	// Send request
-	reply, err := bus.Request("service", []byte("ping"), time.Second)
+	reply, err := b.Request("service", []byte("ping"), time.Second)
 	if err != nil {
 		t.Fatalf("Request error: %v", err)
 	}
@@ -175,123 +313,98 @@ func TestMemoryBus_Request(t *testing.T) {
 	}
 }
 
-func TestMemoryBus_RequestTimeout(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+func TestRequestTimeout(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-	// No responder
-	_, err := bus.Request("service", []byte("ping"), 50*time.Millisecond)
+	_, err := b.Request("service", []byte("ping"), 50*time.Millisecond)
 	if err != ErrTimeout {
 		t.Errorf("expected ErrTimeout, got %v", err)
 	}
 }
 
-// --- Failure Tests ---
+func TestRequestInvalidSubject(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-func TestMemoryBus_PublishAfterClose(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	bus.Close()
+	_, err := b.Request("", []byte("ping"), time.Second)
+	if err != ErrInvalidSubject {
+		t.Errorf("expected ErrInvalidSubject, got %v", err)
+	}
+}
 
-	err := bus.Publish("test", []byte("hello"))
+func TestRequestAfterClose(t *testing.T) {
+	b := Memory(Config{})
+	b.Close()
+
+	_, err := b.Request("service", []byte("ping"), time.Second)
 	if err != ErrClosed {
 		t.Errorf("expected ErrClosed, got %v", err)
 	}
 }
 
-func TestMemoryBus_SubscribeAfterClose(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	bus.Close()
+// ============================================================================
+// Unsubscribe and Close
+// ============================================================================
 
-	_, err := bus.Subscribe("test")
-	if err != ErrClosed {
-		t.Errorf("expected ErrClosed, got %v", err)
-	}
-}
+func TestUnsubscribe(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-func TestMemoryBus_Unsubscribe(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
-
-	sub, _ := bus.Subscribe("test")
-
-	// Unsubscribe before any publish
-	err := sub.Unsubscribe()
-	if err != nil {
+	sub, _ := b.Subscribe("test")
+	if err := sub.Unsubscribe(); err != nil {
 		t.Errorf("Unsubscribe error: %v", err)
 	}
 
-	// Channel should be closed after unsubscribe
 	_, ok := <-sub.Messages()
 	if ok {
 		t.Error("expected channel to be closed after unsubscribe")
 	}
 }
 
-func TestMemoryBus_CloseClosesSubscriptions(t *testing.T) {
-	bus := NewMemoryBus(DefaultConfig())
-	sub, _ := bus.Subscribe("test")
+func TestUnsubscribeIdempotent(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
 
-	bus.Close()
+	sub, _ := b.Subscribe("test")
+	sub.Unsubscribe()
+	if err := sub.Unsubscribe(); err != nil {
+		t.Errorf("second Unsubscribe should be no-op, got %v", err)
+	}
+}
 
-	// Channel should be closed
+func TestCloseClosesSubscriptions(t *testing.T) {
+	b := Memory(Config{})
+	sub, _ := b.Subscribe("test")
+
+	b.Close()
+
 	_, ok := <-sub.Messages()
 	if ok {
 		t.Error("expected channel to be closed")
 	}
 }
 
-// --- Performance Tests ---
-
-func BenchmarkMemoryBus_Publish(b *testing.B) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
-
-	sub, _ := bus.Subscribe("bench")
-	go func() {
-		for range sub.Messages() {
-		}
-	}()
-
-	data := []byte("benchmark message")
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		bus.Publish("bench", data)
+func TestCloseIdempotent(t *testing.T) {
+	b := Memory(Config{})
+	b.Close()
+	if err := b.Close(); err != nil {
+		t.Errorf("second Close should be no-op, got %v", err)
 	}
 }
 
-func BenchmarkMemoryBus_Request(b *testing.B) {
-	bus := NewMemoryBus(DefaultConfig())
-	defer bus.Close()
+// ============================================================================
+// Buffer behavior
+// ============================================================================
 
-	sub, _ := bus.Subscribe("service")
-	go func() {
-		for msg := range sub.Messages() {
-			if msg.Reply != "" {
-				bus.Publish(msg.Reply, []byte("pong"))
-			}
-		}
-	}()
+func TestBufferFull(t *testing.T) {
+	b := Memory(Config{BufferSize: 1})
+	defer b.Close()
 
-	data := []byte("ping")
-	b.ResetTimer()
+	sub, _ := b.Subscribe("test")
 
-	for i := 0; i < b.N; i++ {
-		bus.Request("service", data, time.Second)
-	}
-}
-
-// --- Security Tests ---
-
-func TestMemoryBus_BufferFull(t *testing.T) {
-	bus := NewMemoryBus(Config{BufferSize: 1})
-	defer bus.Close()
-
-	sub, _ := bus.Subscribe("test")
-
-	// Fill buffer
-	bus.Publish("test", []byte("1"))
-	bus.Publish("test", []byte("2")) // Should be dropped
+	b.Publish("test", []byte("1"))
+	b.Publish("test", []byte("2")) // dropped
 
 	select {
 	case msg := <-sub.Messages():
@@ -302,11 +415,157 @@ func TestMemoryBus_BufferFull(t *testing.T) {
 		t.Error("expected at least one message")
 	}
 
-	// Should not block
 	select {
 	case <-sub.Messages():
 		t.Error("unexpected second message")
 	default:
-		// Expected - second was dropped
+	}
+}
+
+func TestDefaultBufferSize(t *testing.T) {
+	b := Memory(Config{}) // zero value
+	defer b.Close()
+
+	sub, _ := b.Subscribe("test")
+	defer sub.Unsubscribe()
+
+	// Should use default 256 buffer
+	b.Publish("test", []byte("hello"))
+
+	select {
+	case msg := <-sub.Messages():
+		if string(msg.Data) != "hello" {
+			t.Errorf("data = %q, want %q", msg.Data, "hello")
+		}
+	case <-time.After(time.Second):
+		t.Error("timeout")
+	}
+}
+
+// ============================================================================
+// Queue unsubscribe
+// ============================================================================
+
+func TestQueueUnsubscribe(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, _ := b.QueueSubscribe("test", "workers")
+	if err := sub.Unsubscribe(); err != nil {
+		t.Errorf("Unsubscribe error: %v", err)
+	}
+
+	_, ok := <-sub.Messages()
+	if ok {
+		t.Error("expected channel to be closed")
+	}
+}
+
+// ============================================================================
+// Edge cases
+// ============================================================================
+
+func TestSubscribeInvalidSubject(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	_, err := b.Subscribe("")
+	if err != ErrInvalidSubject {
+		t.Errorf("expected ErrInvalidSubject, got %v", err)
+	}
+}
+
+func TestQueueSubscribeInvalidSubject(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	_, err := b.QueueSubscribe("", "workers")
+	if err != ErrInvalidSubject {
+		t.Errorf("expected ErrInvalidSubject, got %v", err)
+	}
+}
+
+func TestDispatchNonMatchingSubject(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	sub, _ := b.QueueSubscribe("foo", "workers")
+	defer sub.Unsubscribe()
+
+	// Publish to different subject — should not match
+	b.Publish("bar", []byte("no match"))
+
+	select {
+	case <-sub.Messages():
+		t.Error("should not receive message for non-matching subject")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestCloseWithQueueSubscriptions(t *testing.T) {
+	b := Memory(Config{})
+
+	sub1, _ := b.QueueSubscribe("test", "workers")
+	sub2, _ := b.QueueSubscribe("test", "workers")
+
+	b.Close()
+
+	_, ok1 := <-sub1.Messages()
+	_, ok2 := <-sub2.Messages()
+	if ok1 || ok2 {
+		t.Error("expected all queue channels to be closed")
+	}
+}
+
+func TestRemoveQueueSubMissing(t *testing.T) {
+	b := Memory(Config{})
+	defer b.Close()
+
+	// Subscribe and unsubscribe from a queue — exercises removeQueueSub
+	sub, _ := b.QueueSubscribe("test", "group1")
+	sub.Unsubscribe()
+
+	// Second unsubscribe — idempotent
+	sub.Unsubscribe()
+}
+
+// ============================================================================
+// Benchmarks
+// ============================================================================
+
+func BenchmarkPublish(b *testing.B) {
+	mb := Memory(Config{})
+	defer mb.Close()
+
+	sub, _ := mb.Subscribe("bench")
+	go func() {
+		for range sub.Messages() {
+		}
+	}()
+
+	data := []byte("benchmark message")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mb.Publish("bench", data)
+	}
+}
+
+func BenchmarkRequest(b *testing.B) {
+	mb := Memory(Config{})
+	defer mb.Close()
+
+	sub, _ := mb.Subscribe("service")
+	go func() {
+		for msg := range sub.Messages() {
+			if msg.Reply != "" {
+				mb.Publish(msg.Reply, []byte("pong"))
+			}
+		}
+	}()
+
+	data := []byte("ping")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mb.Request("service", data, time.Second)
 	}
 }

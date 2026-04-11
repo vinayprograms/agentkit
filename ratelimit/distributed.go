@@ -12,7 +12,7 @@ import (
 // DistributedConfig configures a distributed rate limiter.
 type DistributedConfig struct {
 	// Bus is the message bus for coordination.
-	Bus bus.MessageBus
+	Bus bus.Bus
 
 	// AgentID is the unique identifier for this agent.
 	AgentID string

@@ -33,7 +33,7 @@ func DefaultBusPublisherConfig() BusPublisherConfig {
 // Results are stored in memory, but updates are broadcast over the bus,
 // enabling distributed subscribers to receive notifications.
 type BusPublisher struct {
-	bus    bus.MessageBus
+	bus    bus.Bus
 	config BusPublisherConfig
 
 	mu      sync.RWMutex
@@ -52,7 +52,7 @@ type busResultSub struct {
 }
 
 // NewBusPublisher creates a new bus-backed result publisher.
-func NewBusPublisher(mb bus.MessageBus, cfg BusPublisherConfig) *BusPublisher {
+func NewBusPublisher(mb bus.Bus, cfg BusPublisherConfig) *BusPublisher {
 	if cfg.SubjectPrefix == "" {
 		cfg.SubjectPrefix = DefaultBusPublisherConfig().SubjectPrefix
 	}

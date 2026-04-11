@@ -66,7 +66,7 @@ func TestSenderConfig_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid",
-			cfg:     SenderConfig{Bus: bus.NewMemoryBus(bus.DefaultConfig()), AgentID: "agent-1"},
+			cfg:     SenderConfig{Bus: bus.Memory(bus.Config{}), AgentID: "agent-1"},
 			wantErr: false,
 		},
 		{
@@ -76,7 +76,7 @@ func TestSenderConfig_Validate(t *testing.T) {
 		},
 		{
 			name:    "missing agent id",
-			cfg:     SenderConfig{Bus: bus.NewMemoryBus(bus.DefaultConfig())},
+			cfg:     SenderConfig{Bus: bus.Memory(bus.Config{})},
 			wantErr: true,
 		},
 	}
@@ -94,7 +94,7 @@ func TestSenderConfig_Validate(t *testing.T) {
 // --- Integration Tests ---
 
 func TestBusSender_StartStop(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, err := NewBusSender(SenderConfig{
@@ -132,7 +132,7 @@ func TestBusSender_StartStop(t *testing.T) {
 }
 
 func TestBusSender_DoubleStart(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -152,7 +152,7 @@ func TestBusSender_DoubleStart(t *testing.T) {
 }
 
 func TestBusSender_StopBeforeStart(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -168,7 +168,7 @@ func TestBusSender_StopBeforeStart(t *testing.T) {
 }
 
 func TestBusSender_SetStatus(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -196,7 +196,7 @@ func TestBusSender_SetStatus(t *testing.T) {
 }
 
 func TestBusSender_SetLoad(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -227,7 +227,7 @@ func TestBusSender_SetLoad(t *testing.T) {
 }
 
 func TestBusSender_SetMetadata(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -260,7 +260,7 @@ func TestBusSender_SetMetadata(t *testing.T) {
 }
 
 func TestBusSender_ContextCancel(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -284,7 +284,7 @@ func TestBusSender_ContextCancel(t *testing.T) {
 // --- System Tests ---
 
 func TestBusSender_MultipleHeartbeats(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	sender, _ := NewBusSender(SenderConfig{
@@ -352,7 +352,7 @@ func BenchmarkHeartbeat_Unmarshal(b *testing.B) {
 }
 
 func BenchmarkBusSender_Send(b *testing.B) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	// Drain messages

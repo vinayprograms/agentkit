@@ -53,7 +53,7 @@
 //	import "github.com/vinayprograms/agentkit/bus"
 //
 //	// Reuse bus connection
-//	natsBus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+//	natsBus, _ := bus.NATS(bus.NATSConfig{URL: "nats://localhost:4222"})
 //	reg, _ := registry.NewNATSRegistry(natsBus.Conn(), registry.NATSRegistryConfig{
 //	    BucketName: "my-swarm-registry",
 //	    TTL:        30 * time.Second,

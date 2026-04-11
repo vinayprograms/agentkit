@@ -1,47 +1,42 @@
-// Package bus provides message bus clients for agent-to-agent communication.
-//
-// The MessageBus interface enables pub/sub and request/reply patterns over
-// various backends (NATS, in-memory). All implementations use channel-based
-// APIs for Go-idiomatic concurrent use.
 package bus
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
-// Common errors.
+// Sentinel errors.
 var (
-	ErrClosed       = errors.New("bus closed")
-	ErrTimeout      = errors.New("request timeout")
-	ErrNoResponders = errors.New("no responders")
+	ErrClosed         = errors.New("bus closed")
+	ErrTimeout        = errors.New("request timeout")
+	ErrNoResponders   = errors.New("no responders")
 	ErrInvalidSubject = errors.New("invalid subject")
 )
 
-// Message represents a message received from the bus.
-type Message struct {
-	// Subject the message was published to.
-	Subject string
+// Subject wildcards for pattern-based subscriptions.
+const (
+	// Wildcard matches exactly one token in a subject.
+	// "foo.*" matches "foo.bar" but not "foo.bar.baz".
+	Wildcard = "*"
 
-	// Data is the message payload.
-	Data []byte
+	// WildcardAll matches one or more trailing tokens (must be last).
+	// "foo.>" matches "foo.bar" and "foo.bar.baz".
+	WildcardAll = ">"
+)
 
-	// Reply is the reply subject for request/reply pattern.
-	// Empty for regular pub/sub messages.
-	Reply string
-}
-
-// MessageBus provides pub/sub and request/reply messaging.
-type MessageBus interface {
+// Bus provides pub/sub and request/reply messaging.
+// Safe for concurrent use.
+type Bus interface {
 	// Publish sends a message to all subscribers of a subject.
 	Publish(subject string, data []byte) error
 
 	// Subscribe creates a subscription to a subject.
-	// All subscribers receive all messages.
+	// Supports Wildcard (*) and WildcardAll (>) in subject patterns.
 	Subscribe(subject string) (Subscription, error)
 
 	// QueueSubscribe creates a queue subscription.
-	// Messages are load-balanced across queue members.
+	// Messages are load-balanced across queue members with the same queue name.
 	QueueSubscribe(subject, queue string) (Subscription, error)
 
 	// Request sends a request and waits for a single reply.
@@ -55,32 +50,57 @@ type MessageBus interface {
 // Subscription represents an active subscription.
 type Subscription interface {
 	// Messages returns the channel for incoming messages.
-	// Channel is closed when subscription ends.
+	// Channel is closed when the subscription ends.
 	Messages() <-chan *Message
 
-	// Unsubscribe cancels the subscription.
+	// Unsubscribe cancels the subscription and closes the Messages channel.
 	Unsubscribe() error
 }
 
-// Config holds common bus configuration.
+// Message represents a message received from the bus.
+type Message struct {
+	Subject string // subject the message was published to
+	Data    []byte // message payload
+	Reply   string // reply subject for request/reply (empty for pub/sub)
+}
+
+// Config holds bus configuration. Zero value uses sensible defaults.
 type Config struct {
-	// BufferSize for subscription channels.
-	// Default: 256
+	// BufferSize for subscription channels. Default: 256.
 	BufferSize int
 }
 
-// DefaultConfig returns configuration with sensible defaults.
-func DefaultConfig() Config {
-	return Config{
-		BufferSize: 256,
+func (c Config) bufferSize() int {
+	if c.BufferSize <= 0 {
+		return 256
 	}
+	return c.BufferSize
 }
 
-// ValidateSubject checks if a subject is valid.
-func ValidateSubject(subject string) error {
+// validateSubject checks if a subject is valid.
+func validateSubject(subject string) error {
 	if subject == "" {
 		return ErrInvalidSubject
 	}
-	// Add more validation as needed (NATS wildcards, etc.)
 	return nil
+}
+
+// subjectMatch reports whether subject matches pattern,
+// supporting Wildcard (*) and WildcardAll (>) tokens.
+func subjectMatch(pattern, subject string) bool {
+	ptokens := strings.Split(pattern, ".")
+	stokens := strings.Split(subject, ".")
+
+	for i, pt := range ptokens {
+		if pt == WildcardAll {
+			return i <= len(stokens)-1 // > must match at least one token
+		}
+		if i >= len(stokens) {
+			return false
+		}
+		if pt != Wildcard && pt != stokens[i] {
+			return false
+		}
+	}
+	return len(ptokens) == len(stokens)
 }

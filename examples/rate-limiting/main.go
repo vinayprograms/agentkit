@@ -168,7 +168,7 @@ func demonstrateDistributedLimiter() {
 
 	// Create in-memory bus for this demo
 	// In production, use NATS or another distributed bus
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	// Create two agents sharing the same rate limit
@@ -271,7 +271,7 @@ func demonstrateDistributedLimiter() {
 	fmt.Println("=== Example Complete ===")
 }
 
-func createAgent(b bus.MessageBus, agentID string) (*ratelimit.DistributedLimiter, error) {
+func createAgent(b bus.Bus, agentID string) (*ratelimit.DistributedLimiter, error) {
 	config := ratelimit.DefaultDistributedConfig()
 	config.Bus = b
 	config.AgentID = agentID

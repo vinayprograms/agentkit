@@ -6,59 +6,50 @@ import (
 	"time"
 )
 
-// getNATSURL returns the NATS URL for testing, or skips the test.
-func getNATSURL(t *testing.T) string {
+// natsURL returns the NATS URL for testing, or skips the test.
+func natsURL(t *testing.T) string {
 	url := os.Getenv("NATS_URL")
 	if url == "" {
 		url = "nats://localhost:4222"
 	}
 
-	// Skip if short mode or NATS not available
 	if testing.Short() {
 		t.Skip("skipping NATS test in short mode")
 	}
 
-	// Try to connect
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
 	cfg.ConnectTimeout = 2 * time.Second
 	cfg.MaxReconnects = 0
 
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
 		t.Skipf("skipping: NATS not available at %s: %v", url, err)
 	}
-	bus.Close()
+	b.Close()
 
 	return url
 }
 
-// --- Integration Tests ---
+func TestNATS_PubSub(t *testing.T) {
+	url := natsURL(t)
 
-func TestNATSBus_PubSub(t *testing.T) {
-	url := getNATSURL(t)
-
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
-		t.Fatalf("NewNATSBus error: %v", err)
+		t.Fatalf("NATS error: %v", err)
 	}
-	defer bus.Close()
+	defer b.Close()
 
-	sub, err := bus.Subscribe("test.nats")
+	sub, err := b.Subscribe("test.nats")
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
 	defer sub.Unsubscribe()
 
-	// Publish
-	err = bus.Publish("test.nats", []byte("hello nats"))
-	if err != nil {
-		t.Fatalf("Publish error: %v", err)
-	}
+	b.Publish("test.nats", []byte("hello nats"))
 
-	// Receive
 	select {
 	case msg := <-sub.Messages():
 		if string(msg.Data) != "hello nats" {
@@ -69,27 +60,24 @@ func TestNATSBus_PubSub(t *testing.T) {
 	}
 }
 
-func TestNATSBus_QueueSubscribe(t *testing.T) {
-	url := getNATSURL(t)
+func TestNATS_QueueSubscribe(t *testing.T) {
+	url := natsURL(t)
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
-		t.Fatalf("NewNATSBus error: %v", err)
+		t.Fatalf("NATS error: %v", err)
 	}
-	defer bus.Close()
+	defer b.Close()
 
-	// Create queue subscribers
-	sub1, _ := bus.QueueSubscribe("test.queue", "workers")
-	sub2, _ := bus.QueueSubscribe("test.queue", "workers")
+	sub1, _ := b.QueueSubscribe("test.queue", "workers")
+	sub2, _ := b.QueueSubscribe("test.queue", "workers")
 	defer sub1.Unsubscribe()
 	defer sub2.Unsubscribe()
 
-	// Publish
-	bus.Publish("test.queue", []byte("queued"))
+	b.Publish("test.queue", []byte("queued"))
 
-	// Only one should receive
 	received := 0
 	timeout := time.After(time.Second)
 	for i := 0; i < 2; i++ {
@@ -108,30 +96,28 @@ func TestNATSBus_QueueSubscribe(t *testing.T) {
 	}
 }
 
-func TestNATSBus_Request(t *testing.T) {
-	url := getNATSURL(t)
+func TestNATS_Request(t *testing.T) {
+	url := natsURL(t)
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
-		t.Fatalf("NewNATSBus error: %v", err)
+		t.Fatalf("NATS error: %v", err)
 	}
-	defer bus.Close()
+	defer b.Close()
 
-	// Start responder
-	sub, _ := bus.Subscribe("test.service")
+	sub, _ := b.Subscribe("test.service")
 	go func() {
 		for msg := range sub.Messages() {
 			if msg.Reply != "" {
-				bus.Publish(msg.Reply, []byte("nats-pong"))
+				b.Publish(msg.Reply, []byte("nats-pong"))
 			}
 		}
 	}()
 	defer sub.Unsubscribe()
 
-	// Request
-	reply, err := bus.Request("test.service", []byte("ping"), 2*time.Second)
+	reply, err := b.Request("test.service", []byte("ping"), 2*time.Second)
 	if err != nil {
 		t.Fatalf("Request error: %v", err)
 	}
@@ -140,77 +126,72 @@ func TestNATSBus_Request(t *testing.T) {
 	}
 }
 
-func TestNATSBus_RequestTimeout(t *testing.T) {
-	url := getNATSURL(t)
+func TestNATS_RequestTimeout(t *testing.T) {
+	url := natsURL(t)
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
-		t.Fatalf("NewNATSBus error: %v", err)
+		t.Fatalf("NATS error: %v", err)
 	}
-	defer bus.Close()
+	defer b.Close()
 
-	// No responder - should timeout
-	_, err = bus.Request("test.noresponder", []byte("ping"), 100*time.Millisecond)
+	_, err = b.Request("test.noresponder", []byte("ping"), 100*time.Millisecond)
 	if err != ErrTimeout && err != ErrNoResponders {
 		t.Errorf("expected timeout/no responders error, got %v", err)
 	}
 }
 
-// --- Failure Tests ---
-
-func TestNATSBus_InvalidURL(t *testing.T) {
+func TestNATS_InvalidURL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = "nats://invalid-host-that-does-not-exist:4222"
 	cfg.ConnectTimeout = 500 * time.Millisecond
 	cfg.MaxReconnects = 0
 
-	_, err := NewNATSBus(cfg)
+	_, err := NATS(cfg)
 	if err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
 
-func TestNATSBus_PublishAfterClose(t *testing.T) {
-	url := getNATSURL(t)
+func TestNATS_PublishAfterClose(t *testing.T) {
+	url := natsURL(t)
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	b, err := NATS(cfg)
 	if err != nil {
-		t.Fatalf("NewNATSBus error: %v", err)
+		t.Fatalf("NATS error: %v", err)
 	}
 
-	bus.Close()
+	b.Close()
 
-	err = bus.Publish("test", []byte("hello"))
+	err = b.Publish("test", []byte("hello"))
 	if err != ErrClosed {
 		t.Errorf("expected ErrClosed, got %v", err)
 	}
 }
 
-// --- Performance Tests ---
-
-func BenchmarkNATSBus_Publish(b *testing.B) {
+func BenchmarkNATS_Publish(b *testing.B) {
 	url := os.Getenv("NATS_URL")
 	if url == "" {
 		b.Skip("NATS_URL not set")
 	}
 
-	cfg := DefaultNATSConfig()
+	cfg := NATSDefaults()
 	cfg.URL = url
-	bus, err := NewNATSBus(cfg)
+	mb, err := NATS(cfg)
 	if err != nil {
-		b.Fatalf("NewNATSBus error: %v", err)
+		b.Fatalf("NATS error: %v", err)
 	}
-	defer bus.Close()
+	defer mb.Close()
 
-	sub, _ := bus.Subscribe("bench")
+	sub, _ := mb.Subscribe("bench")
 	go func() {
 		for range sub.Messages() {
 		}
@@ -218,8 +199,7 @@ func BenchmarkNATSBus_Publish(b *testing.B) {
 
 	data := []byte("benchmark message")
 	b.ResetTimer()
-
 	for i := 0; i < b.N; i++ {
-		bus.Publish("bench", data)
+		mb.Publish("bench", data)
 	}
 }

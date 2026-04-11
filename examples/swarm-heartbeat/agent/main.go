@@ -44,7 +44,7 @@ type Agent struct {
 	id           string
 	name         string
 	capabilities []string
-	bus          bus.MessageBus
+	bus          bus.Bus
 	registry     registry.Registry
 
 	// Configurable intervals
@@ -62,7 +62,7 @@ type AgentConfig struct {
 }
 
 // NewAgent creates a new swarm agent.
-func NewAgent(cfg AgentConfig, b bus.MessageBus, reg registry.Registry) *Agent {
+func NewAgent(cfg AgentConfig, b bus.Bus, reg registry.Registry) *Agent {
 	return &Agent{
 		id:                cfg.ID,
 		name:              cfg.Name,
@@ -248,9 +248,9 @@ func main() {
 
 	// Create in-memory bus and registry
 	// NOTE: For distributed swarms, use NATS:
-	//   natsBus, _ := bus.NewNATSBus("nats://localhost:4222", bus.DefaultConfig())
+	//   natsBus, _ := bus.NATS(bus.NATSConfig{URL: "nats://localhost:4222"})
 	//   natsReg, _ := registry.NewNATSRegistry(nc, registry.NATSConfig{...})
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	memReg := registry.NewMemoryRegistry(registry.MemoryConfig{TTL: *ttl})

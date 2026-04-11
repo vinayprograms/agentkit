@@ -94,7 +94,7 @@ func demonstrateBusPublisher() {
 	ctx := context.Background()
 
 	// Create an in-memory bus (for demo - use NATS in production)
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	// Create a bus-backed publisher

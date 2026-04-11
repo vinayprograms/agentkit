@@ -19,7 +19,7 @@ func TestMonitorConfig_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid",
-			cfg:     MonitorConfig{Bus: bus.NewMemoryBus(bus.DefaultConfig())},
+			cfg:     MonitorConfig{Bus: bus.Memory(bus.Config{})},
 			wantErr: false,
 		},
 		{
@@ -52,7 +52,7 @@ func TestDefaultMonitorConfig(t *testing.T) {
 // --- Integration Tests ---
 
 func TestBusMonitor_Watch(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	monitor, err := NewBusMonitor(MonitorConfig{
@@ -90,7 +90,7 @@ func TestBusMonitor_Watch(t *testing.T) {
 }
 
 func TestBusMonitor_IsAlive(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	monitor, _ := NewBusMonitor(MonitorConfig{
@@ -125,7 +125,7 @@ func TestBusMonitor_IsAlive(t *testing.T) {
 }
 
 func TestBusMonitor_LastHeartbeat(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	monitor, _ := NewBusMonitor(MonitorConfig{
@@ -162,7 +162,7 @@ func TestBusMonitor_LastHeartbeat(t *testing.T) {
 // --- System Tests: Multiple Agents ---
 
 func TestBusMonitor_MultipleAgents(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	monitor, _ := NewBusMonitor(MonitorConfig{
@@ -297,7 +297,7 @@ func TestMemoryMonitor_Resurrection(t *testing.T) {
 // --- Performance Tests ---
 
 func BenchmarkBusMonitor_ProcessHeartbeat(b *testing.B) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	monitor, _ := NewBusMonitor(MonitorConfig{
@@ -454,7 +454,7 @@ func TestMemoryMonitor_MultipleCallbacks(t *testing.T) {
 // --- End-to-End Integration Test ---
 
 func TestSenderMonitor_Integration(t *testing.T) {
-	msgBus := bus.NewMemoryBus(bus.DefaultConfig())
+	msgBus := bus.Memory(bus.Config{})
 	defer msgBus.Close()
 
 	// Create sender

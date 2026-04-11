@@ -11,7 +11,7 @@ import (
 
 // BusSender sends heartbeats over a message bus.
 type BusSender struct {
-	bus     bus.MessageBus
+	bus     bus.Bus
 	agentID string
 	interval time.Duration
 

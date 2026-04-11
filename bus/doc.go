@@ -1,48 +1,29 @@
 // Package bus provides message bus clients for agent-to-agent communication.
 //
-// # Overview
+// The [Bus] interface enables pub/sub and request/reply patterns over
+// various backends (NATS, in-memory). Subscriptions support wildcards:
 //
-// The MessageBus interface enables pub/sub and request/reply patterns for
-// distributed agent communication. All implementations use channel-based APIs
-// for Go-idiomatic concurrent use.
+//   - [Wildcard] (*) matches exactly one token: "foo.*" matches "foo.bar"
+//   - [WildcardAll] (>) matches trailing tokens: "foo.>" matches "foo.bar.baz"
 //
-// # Available Implementations
+// # Pub/Sub
 //
-//   - NATSBus: Production-grade messaging using NATS
-//   - MemoryBus: In-memory implementation for testing and single-process use
+//	b := bus.Memory(bus.Config{})
+//	b.Publish("events.user", data)
+//	sub, _ := b.Subscribe("events.*")
+//	for msg := range sub.Messages() { ... }
 //
-// # Patterns
+// # Queue Groups (load balanced)
 //
-// Pub/Sub - broadcast to all subscribers:
-//
-//	bus.Publish("events.user", data)
-//	sub, _ := bus.Subscribe("events.user")
-//	for msg := range sub.Messages() {
-//	    // Handle message
-//	}
-//
-// Queue Groups - load balanced across workers:
-//
-//	sub, _ := bus.QueueSubscribe("tasks", "workers")
+//	sub, _ := b.QueueSubscribe("tasks", "workers")
 //	// Only one worker in the group receives each message
 //
-// Request/Reply - synchronous RPC:
+// # Request/Reply
 //
-//	// Responder
-//	sub, _ := bus.Subscribe("service")
-//	for msg := range sub.Messages() {
-//	    bus.Publish(msg.Reply, response)
-//	}
+//	reply, _ := b.Request("service", data, timeout)
 //
-//	// Requester
-//	reply, _ := bus.Request("service", data, timeout)
+// # Implementations
 //
-// # Queue Groups for Swarm Agents
-//
-// Queue subscriptions enable load balancing across agent instances:
-//
-//   - Multiple agents subscribe to same subject with same queue name
-//   - Each message delivered to exactly one agent in the queue group
-//   - Natural scaling: add more agents to handle more load
-//   - No coordination needed between agents
+//   - [Memory]: in-memory channels for testing and single-process use
+//   - [NATS]: production-grade messaging via NATS server
 package bus

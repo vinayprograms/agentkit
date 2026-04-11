@@ -52,7 +52,7 @@ type AgentState struct {
 
 // Monitor watches the swarm for agent events.
 type Monitor struct {
-	bus      bus.MessageBus
+	bus      bus.Bus
 	registry registry.Registry
 
 	mu     sync.RWMutex
@@ -62,7 +62,7 @@ type Monitor struct {
 }
 
 // NewMonitor creates a new swarm monitor.
-func NewMonitor(b bus.MessageBus, reg registry.Registry, deadThreshold time.Duration) *Monitor {
+func NewMonitor(b bus.Bus, reg registry.Registry, deadThreshold time.Duration) *Monitor {
 	return &Monitor{
 		bus:           b,
 		registry:      reg,
@@ -389,7 +389,7 @@ func main() {
 	flag.Parse()
 
 	// Create in-memory bus and registry
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	memReg := registry.NewMemoryRegistry(registry.MemoryConfig{TTL: *ttl})

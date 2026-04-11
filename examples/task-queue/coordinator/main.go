@@ -51,7 +51,7 @@ type TaskResult struct {
 
 // Coordinator manages task distribution and tracking.
 type Coordinator struct {
-	bus      bus.MessageBus
+	bus      bus.Bus
 	registry registry.Registry
 
 	mu       sync.RWMutex
@@ -63,7 +63,7 @@ type Coordinator struct {
 
 func main() {
 	// Create in-memory message bus
-	memBus := bus.NewMemoryBus(bus.DefaultConfig())
+	memBus := bus.Memory(bus.Config{})
 	defer memBus.Close()
 
 	// Create in-memory registry with 30s TTL
@@ -274,7 +274,7 @@ func (c *Coordinator) printFinalStats() {
 // --- Embedded Worker (for demo) ---
 // In production, use worker.go as a separate process
 
-func runEmbeddedWorker(ctx context.Context, b bus.MessageBus, reg registry.Registry, workerID string) {
+func runEmbeddedWorker(ctx context.Context, b bus.Bus, reg registry.Registry, workerID string) {
 	// Register with the registry
 	info := registry.AgentInfo{
 		ID:           workerID,
@@ -308,7 +308,7 @@ func runEmbeddedWorker(ctx context.Context, b bus.MessageBus, reg registry.Regis
 	}
 }
 
-func processTask(b bus.MessageBus, reg registry.Registry, workerID string, msg *bus.Message) {
+func processTask(b bus.Bus, reg registry.Registry, workerID string, msg *bus.Message) {
 	var task Task
 	if err := json.Unmarshal(msg.Data, &task); err != nil {
 		return

@@ -13,7 +13,7 @@
 // # Usage
 //
 //	// Production: NATS JetStream KV
-//	bus, _ := bus.NewNATSBus(bus.NATSConfig{URL: "nats://localhost:4222"})
+//	bus, _ := bus.NATS(bus.NATSConfig{URL: "nats://localhost:4222"})
 //	store, _ := state.NewNATSStore(state.NATSStoreConfig{
 //	    Conn:   bus.Conn(),
 //	    Bucket: "agent-state",
