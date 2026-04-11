@@ -38,17 +38,17 @@ func demonstrateErrorCreation() {
 	fmt.Println("--- 1. Creating Errors with Different Categories ---")
 
 	// Transient errors (may succeed on retry)
-	timeout := errors.Timeout("database connection timed out")
+	timeout := errors.New(errors.Timeout, "database connection timed out")
 	fmt.Printf("Timeout error:\n  Message: %s\n  Code: %s\n  Category: %s\n  Retryable: %v\n\n",
 		timeout.Error(), timeout.Code(), timeout.Category(), timeout.Retryable())
 
 	// Permanent errors (won't succeed on retry)
-	notFound := errors.NotFound("user ID 12345 does not exist")
+	notFound := errors.New(errors.NotFound, "user ID 12345 does not exist")
 	fmt.Printf("NotFound error:\n  Message: %s\n  Code: %s\n  Category: %s\n  Retryable: %v\n\n",
 		notFound.Error(), notFound.Code(), notFound.Category(), notFound.Retryable())
 
 	// Resource errors (rate limits, quotas)
-	rateLimited := errors.RateLimited("API quota exceeded",
+	rateLimited := errors.New(errors.RateLimit, "API quota exceeded",
 		errors.WithMetadata("limit", "100/min"),
 		errors.WithMetadata("reset_at", time.Now().Add(time.Minute).Format(time.RFC3339)),
 	)
@@ -56,16 +56,18 @@ func demonstrateErrorCreation() {
 		rateLimited.Error(), rateLimited.Code(), rateLimited.Category(), rateLimited.Retryable(), rateLimited.Metadata())
 
 	// Agent-specific errors
-	agentOffline := errors.AgentOffline("worker-agent-3")
-	fmt.Printf("AgentOffline error:\n  Message: %s\n  Code: %s\n  Category: %s\n  AgentID: %s\n  Retryable: %v\n\n",
-		agentOffline.Error(), agentOffline.Code(), agentOffline.Category(), agentOffline.AgentID(), agentOffline.Retryable())
+	agentOffline := errors.New(errors.AgentOffline, "worker-agent-3 is offline",
+		errors.WithMetadata("agent_id", "worker-agent-3"),
+	)
+	fmt.Printf("AgentOffline error:\n  Message: %s\n  Code: %s\n  Category: %s\n  Retryable: %v\n\n",
+		agentOffline.Error(), agentOffline.Code(), agentOffline.Category(), agentOffline.Retryable())
 
 	// Custom error with explicit category override
-	customErr := errors.New(errors.ErrCodeInternal, "unexpected state detected",
+	customErr := errors.New(errors.Internal, "unexpected state detected",
 		errors.WithCategory(errors.CategoryTransient), // Override: make it transient
 		errors.WithRetryable(true),
-		errors.WithAgentID("coordinator"),
-		errors.WithTaskID("task-abc-123"),
+		errors.WithMetadata("agent_id", "coordinator"),
+		errors.WithMetadata("task_id", "task-abc-123"),
 	)
 	fmt.Printf("Custom error with overrides:\n  Message: %s\n  Code: %s\n  Category: %s\n  Retryable: %v\n\n",
 		customErr.Error(), customErr.Code(), customErr.Category(), customErr.Retryable())
@@ -76,12 +78,12 @@ func demonstrateErrorWrapping() {
 	fmt.Println("--- 2. Wrapping Errors with Context ---")
 
 	// Simulate a chain of operations that fail
-	baseErr := errors.Timeout("connection reset by peer")
+	baseErr := errors.New(errors.Timeout, "connection reset by peer")
 
 	// Wrap with context at each layer
 	serviceErr := errors.Wrap(baseErr, "failed to fetch user profile")
 	handlerErr := errors.Wrap(serviceErr, "user lookup handler failed",
-		errors.WithAgentID("api-gateway"),
+		errors.WithMetadata("agent_id", "api-gateway"),
 	)
 
 	fmt.Printf("Error chain:\n")
@@ -98,42 +100,40 @@ func demonstrateErrorWrapping() {
 			wrapped.Error(), wrapped.Code(), wrapped.Retryable())
 	}
 
-	// Wrap with specific code
-	specificErr := errors.WrapWithCode(stdErr, errors.ErrCodeUnavailable, "service unavailable")
+	// Wrap with specific code using New + WithCause
+	specificErr := errors.New(errors.Unavailable, "service unavailable", errors.WithCause(stdErr))
 	fmt.Printf("Wrapped with specific code:\n  Code: %s\n  Category: %s\n  Retryable: %v\n\n",
 		specificErr.Code(), specificErr.Category(), specificErr.Retryable())
 }
 
-// demonstrateErrorChecking shows how to check error categories with Is/As.
+// demonstrateErrorChecking shows how to check error categories with Has/As.
 func demonstrateErrorChecking() {
-	fmt.Println("--- 3. Checking Error Categories with Is/As ---")
+	fmt.Println("--- 3. Checking Error Categories with Has/As ---")
 
 	// Create a wrapped error chain
-	inner := errors.RateLimited("too many requests")
+	inner := errors.New(errors.RateLimit, "too many requests")
 	middle := errors.Wrap(inner, "agent request failed")
 	outer := errors.Wrap(middle, "task coordination error")
 
 	// Check specific code
-	fmt.Printf("Is RATE_LIMITED: %v\n", errors.Is(outer, errors.ErrCodeRateLimit))
-	fmt.Printf("Is TIMEOUT: %v\n", errors.Is(outer, errors.ErrCodeTimeout))
+	fmt.Printf("Has RATE_LIMITED: %v\n", errors.Has(outer, errors.RateLimit))
+	fmt.Printf("Has TIMEOUT: %v\n", errors.Has(outer, errors.Timeout))
 
-	// Check category
-	fmt.Printf("Is Resource: %v\n", errors.IsResource(outer))
-	fmt.Printf("Is Transient: %v\n", errors.IsTransient(outer))
-	fmt.Printf("Is Permanent: %v\n", errors.IsPermanent(outer))
+	// Check retryable
+	fmt.Printf("Is Retryable: %v\n", errors.IsRetryable(outer))
 
-	// Extract as AgentError
-	if agentErr := errors.AsAgentError(outer); agentErr != nil {
-		fmt.Printf("\nExtracted AgentError:\n")
+	// Extract as *Error using stdlib As
+	var agentErr *errors.Error
+	if errors.As(outer, &agentErr) {
+		fmt.Printf("\nExtracted *Error:\n")
 		fmt.Printf("  Code: %s\n", agentErr.Code())
 		fmt.Printf("  Category: %s\n", agentErr.Category())
 		fmt.Printf("  Metadata: %v\n", agentErr.Metadata())
 	}
 
-	// Get code and category directly
+	// Get code directly
 	fmt.Printf("\nDirect extraction:\n")
-	fmt.Printf("  Code: %s\n", errors.Code(outer))
-	fmt.Printf("  Category: %s\n", errors.Category(outer))
+	fmt.Printf("  Code: %s\n", errors.CodeOf(outer))
 	fmt.Printf("  Retryable: %v\n\n", errors.IsRetryable(outer))
 }
 
@@ -146,12 +146,12 @@ func demonstrateRetryLogic() {
 		name string
 		err  error
 	}{
-		{"Network timeout", errors.Timeout("connection timeout")},
-		{"Not found", errors.NotFound("resource missing")},
-		{"Rate limited", errors.RateLimited("quota exceeded")},
-		{"Auth failed", errors.Unauthorized("invalid token")},
-		{"Agent offline", errors.AgentOffline("worker-1")},
-		{"Coordination failure", errors.CoordinationFailure("consensus not reached")},
+		{"Network timeout", errors.New(errors.Timeout, "connection timeout")},
+		{"Not found", errors.New(errors.NotFound, "resource missing")},
+		{"Rate limited", errors.New(errors.RateLimit, "quota exceeded")},
+		{"Auth failed", errors.New(errors.Unauthorized, "invalid token")},
+		{"Agent offline", errors.New(errors.AgentOffline, "worker-1 is offline")},
+		{"Coordination failure", errors.New(errors.Coordination, "consensus not reached")},
 	}
 
 	for _, tc := range testCases {
@@ -172,21 +172,20 @@ func makeRetryDecision(err error) string {
 		return "Don't retry (permanent)"
 	}
 
-	category := errors.Category(err)
-	switch category {
-	case errors.CategoryTransient:
-		return "Retry immediately (transient)"
-	case errors.CategoryResource:
-		// For rate limits, could check metadata for reset time
-		if meta := errors.GetMetadata(err); meta != nil {
-			if resetAt, ok := meta["reset_at"]; ok {
+	var e *errors.Error
+	if errors.As(err, &e) {
+		switch e.Category() {
+		case errors.CategoryTransient:
+			return "Retry immediately (transient)"
+		case errors.CategoryResource:
+			if resetAt, ok := e.Metadata()["reset_at"]; ok {
 				return fmt.Sprintf("Retry after %s (rate limited)", resetAt)
 			}
+			return "Retry with backoff (resource)"
 		}
-		return "Retry with backoff (resource)"
-	default:
-		return "Retry with caution"
 	}
+
+	return "Retry with caution"
 }
 
 // simulateRetryLoop demonstrates a typical retry pattern.
@@ -203,7 +202,7 @@ func simulateRetryLoop() {
 			break
 		}
 
-		fmt.Printf("  Attempt %d: %s (code=%s)\n", attempt, err.Error(), errors.Code(err))
+		fmt.Printf("  Attempt %d: %s (code=%s)\n", attempt, err.Error(), errors.CodeOf(err))
 
 		if !errors.IsRetryable(err) {
 			fmt.Printf("  → Giving up: error is not retryable\n")
@@ -215,7 +214,7 @@ func simulateRetryLoop() {
 			break
 		}
 
-		fmt.Printf("  → Will retry (category=%s)\n", errors.Category(err))
+		fmt.Printf("  → Will retry\n")
 	}
 	fmt.Println()
 }
@@ -224,9 +223,9 @@ func simulateRetryLoop() {
 func simulateUnreliableOperation(attempt int) error {
 	switch attempt {
 	case 1:
-		return errors.Timeout("operation timed out")
+		return errors.New(errors.Timeout, "operation timed out")
 	case 2:
-		return errors.New(errors.ErrCodeUnavailable, "service temporarily unavailable")
+		return errors.New(errors.Unavailable, "service temporarily unavailable")
 	default:
 		return nil // Success on third attempt
 	}
@@ -237,8 +236,9 @@ func demonstrateErrorFormatting() {
 	fmt.Println("--- 5. Error Formatting and JSON Output ---")
 
 	// Create a rich error with full metadata
-	err := errors.TaskFailed("task-xyz-789", "execution timeout",
-		errors.WithAgentID("executor-2"),
+	err := errors.New(errors.TaskFailed, "task xyz-789 failed: execution timeout",
+		errors.WithMetadata("task_id", "task-xyz-789"),
+		errors.WithMetadata("agent_id", "executor-2"),
 		errors.WithMetadata("duration_ms", "30000"),
 		errors.WithMetadata("stage", "data_processing"),
 	)
@@ -251,9 +251,6 @@ func demonstrateErrorFormatting() {
 	fmt.Printf("  Code: %s\n", err.Code())
 	fmt.Printf("  Category: %s\n", err.Category())
 	fmt.Printf("  Retryable: %v\n", err.Retryable())
-	fmt.Printf("  AgentID: %s\n", err.AgentID())
-	fmt.Printf("  TaskID: %s\n", err.TaskID())
-	fmt.Printf("  Timestamp: %s\n", err.Timestamp().Format(time.RFC3339))
 	fmt.Printf("  Metadata: %v\n\n", err.Metadata())
 
 	// JSON serialization (useful for cross-agent communication)
@@ -262,8 +259,8 @@ func demonstrateErrorFormatting() {
 
 	// Demonstrate deserialization
 	var restored errors.Error
-	if err := json.Unmarshal(jsonData, &restored); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to unmarshal: %v\n", err)
+	if e := json.Unmarshal(jsonData, &restored); e != nil {
+		fmt.Fprintf(os.Stderr, "Failed to unmarshal: %v\n", e)
 		return
 	}
 	fmt.Printf("Restored from JSON:\n")

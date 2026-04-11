@@ -6,26 +6,116 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 )
 
 // ============================================================================
-// 1. Error creation with different codes/categories
+// 1. Code and Category types
+// ============================================================================
+
+func TestCodeDefaultCategory(t *testing.T) {
+	tests := []struct {
+		code Code
+		want Category
+	}{
+		// Transient
+		{Timeout, CategoryTransient},
+		{Unavailable, CategoryTransient},
+		{NetworkErr, CategoryTransient},
+		{RetryLater, CategoryTransient},
+		{AgentOffline, CategoryTransient},
+		{AgentBusy, CategoryTransient},
+		{Coordination, CategoryTransient},
+		{HandoffFailed, CategoryTransient},
+		// Permanent
+		{NotFound, CategoryPermanent},
+		{Conflict, CategoryPermanent},
+		{InvalidInput, CategoryPermanent},
+		{Unauthorized, CategoryPermanent},
+		{Forbidden, CategoryPermanent},
+		{AlreadyExists, CategoryPermanent},
+		{Precondition, CategoryPermanent},
+		{Unsupported, CategoryPermanent},
+		{Canceled, CategoryPermanent},
+		{TaskFailed, CategoryPermanent},
+		{CapabilityMissing, CategoryPermanent},
+		// Resource
+		{RateLimit, CategoryResource},
+		{QuotaExceeded, CategoryResource},
+		{ResourceBusy, CategoryResource},
+		{Capacity, CategoryResource},
+		// Internal
+		{Internal, CategoryInternal},
+		{Corruption, CategoryInternal},
+		{Assertion, CategoryInternal},
+		{Panic, CategoryInternal},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.code), func(t *testing.T) {
+			if got := tt.code.DefaultCategory(); got != tt.want {
+				t.Errorf("DefaultCategory() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodeDefaultCategoryUnknown(t *testing.T) {
+	unknown := Code("UNKNOWN_CODE")
+	if got := unknown.DefaultCategory(); got != CategoryInternal {
+		t.Errorf("DefaultCategory() = %v, want CategoryInternal", got)
+	}
+}
+
+func TestCodeDescription(t *testing.T) {
+	if got := Timeout.Description(); got != "operation timed out" {
+		t.Errorf("Description() = %v", got)
+	}
+}
+
+func TestCodeDescriptionUnknown(t *testing.T) {
+	unknown := Code("UNKNOWN_CODE")
+	if got := unknown.Description(); got != "unknown error" {
+		t.Errorf("Description() = %v, want 'unknown error'", got)
+	}
+}
+
+func TestCategoryIsRetryable(t *testing.T) {
+	tests := []struct {
+		category  Category
+		retryable bool
+	}{
+		{CategoryTransient, true},
+		{CategoryResource, true},
+		{CategoryPermanent, false},
+		{CategoryInternal, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			if got := tt.category.IsRetryable(); got != tt.retryable {
+				t.Errorf("IsRetryable() = %v, want %v", got, tt.retryable)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// 2. Error creation
 // ============================================================================
 
 func TestNew(t *testing.T) {
 	tests := []struct {
 		name         string
-		code         ErrorCode
+		code         Code
 		message      string
-		wantCategory ErrorCategory
+		wantCategory Category
 	}{
-		{"timeout", ErrCodeTimeout, "operation timed out", CategoryTransient},
-		{"not_found", ErrCodeNotFound, "resource not found", CategoryPermanent},
-		{"rate_limit", ErrCodeRateLimit, "too many requests", CategoryResource},
-		{"internal", ErrCodeInternal, "internal error", CategoryInternal},
-		{"agent_offline", ErrCodeAgentOffline, "agent down", CategoryTransient},
-		{"task_failed", ErrCodeTaskFailed, "task failed", CategoryPermanent},
+		{"timeout", Timeout, "operation timed out", CategoryTransient},
+		{"not_found", NotFound, "resource not found", CategoryPermanent},
+		{"rate_limit", RateLimit, "too many requests", CategoryResource},
+		{"internal", Internal, "internal error", CategoryInternal},
+		{"agent_offline", AgentOffline, "agent down", CategoryTransient},
+		{"task_failed", TaskFailed, "task failed", CategoryPermanent},
 	}
 
 	for _, tt := range tests {
@@ -40,57 +130,52 @@ func TestNew(t *testing.T) {
 			if err.Error() != tt.message {
 				t.Errorf("Error() = %v, want %v", err.Error(), tt.message)
 			}
-			if err.Timestamp().IsZero() {
-				t.Error("Timestamp() should not be zero")
-			}
 		})
 	}
 }
 
 func TestNewf(t *testing.T) {
-	err := Newf(ErrCodeNotFound, "user %s not found", "alice")
-	want := "user alice not found"
-	if err.Error() != want {
-		t.Errorf("Error() = %v, want %v", err.Error(), want)
+	err := Newf(NotFound, "user %s not found", "alice")
+	if got := err.Error(); got != "user alice not found" {
+		t.Errorf("Error() = %v, want 'user alice not found'", got)
 	}
 }
 
-func TestFromCode(t *testing.T) {
-	err := FromCode(ErrCodeTimeout)
-	if err.Code() != ErrCodeTimeout {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeTimeout)
+func TestFrom(t *testing.T) {
+	err := From(Timeout)
+	if err.Code() != Timeout {
+		t.Errorf("Code() = %v, want %v", err.Code(), Timeout)
 	}
-	// Should use the default description
 	if err.Error() != "operation timed out" {
-		t.Errorf("Error() = %v, want %v", err.Error(), "operation timed out")
+		t.Errorf("Error() = %v, want 'operation timed out'", err.Error())
 	}
 }
 
-func TestFromCodeWithOptions(t *testing.T) {
-	err := FromCode(ErrCodeNotFound, WithMetadata("resource", "user"))
+func TestFromWithOptions(t *testing.T) {
+	err := From(NotFound, WithMetadata("resource", "user"))
 	if err.Metadata()["resource"] != "user" {
 		t.Error("expected metadata 'resource' to be 'user'")
 	}
 }
 
 // ============================================================================
-// 2. Retryable vs non-retryable errors
+// 3. Retryable behavior
 // ============================================================================
 
 func TestRetryable(t *testing.T) {
 	tests := []struct {
 		name      string
-		code      ErrorCode
+		code      Code
 		wantRetry bool
 	}{
-		{"timeout is retryable", ErrCodeTimeout, true},
-		{"unavailable is retryable", ErrCodeUnavailable, true},
-		{"network_err is retryable", ErrCodeNetworkErr, true},
-		{"rate_limit is retryable", ErrCodeRateLimit, true},
-		{"not_found is not retryable", ErrCodeNotFound, false},
-		{"invalid_input is not retryable", ErrCodeInvalidInput, false},
-		{"internal is not retryable", ErrCodeInternal, false},
-		{"forbidden is not retryable", ErrCodeForbidden, false},
+		{"timeout is retryable", Timeout, true},
+		{"unavailable is retryable", Unavailable, true},
+		{"network_err is retryable", NetworkErr, true},
+		{"rate_limit is retryable", RateLimit, true},
+		{"not_found is not retryable", NotFound, false},
+		{"invalid_input is not retryable", InvalidInput, false},
+		{"internal is not retryable", Internal, false},
+		{"forbidden is not retryable", Forbidden, false},
 	}
 
 	for _, tt := range tests {
@@ -105,44 +190,24 @@ func TestRetryable(t *testing.T) {
 
 func TestWithRetryableOverride(t *testing.T) {
 	// Override a normally retryable error to be non-retryable
-	err := New(ErrCodeTimeout, "permanent timeout", WithRetryable(false))
+	err := New(Timeout, "permanent timeout", WithRetryable(false))
 	if err.Retryable() {
 		t.Error("expected error to be non-retryable after override")
 	}
 
 	// Override a normally non-retryable error to be retryable
-	err2 := New(ErrCodeNotFound, "maybe retry", WithRetryable(true))
+	err2 := New(NotFound, "maybe retry", WithRetryable(true))
 	if !err2.Retryable() {
 		t.Error("expected error to be retryable after override")
 	}
 }
 
-func TestErrorCategoryIsRetryable(t *testing.T) {
-	tests := []struct {
-		category  ErrorCategory
-		retryable bool
-	}{
-		{CategoryTransient, true},
-		{CategoryResource, true},
-		{CategoryPermanent, false},
-		{CategoryInternal, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.category), func(t *testing.T) {
-			if tt.category.IsRetryable() != tt.retryable {
-				t.Errorf("%s.IsRetryable() = %v, want %v", tt.category, tt.category.IsRetryable(), tt.retryable)
-			}
-		})
-	}
-}
-
 // ============================================================================
-// 3. Metadata handling
+// 4. Metadata
 // ============================================================================
 
 func TestMetadata(t *testing.T) {
-	err := New(ErrCodeInternal, "test",
+	err := New(Internal, "test",
 		WithMetadata("key1", "value1"),
 		WithMetadata("key2", "value2"),
 	)
@@ -153,30 +218,19 @@ func TestMetadata(t *testing.T) {
 	}
 }
 
-func TestWithMetadataMap(t *testing.T) {
-	m := map[string]string{"a": "1", "b": "2"}
-	err := New(ErrCodeInternal, "test", WithMetadataMap(m))
-
-	meta := err.Metadata()
-	if meta["a"] != "1" || meta["b"] != "2" {
-		t.Errorf("Metadata() = %v, want a=1, b=2", meta)
-	}
-}
-
 func TestMetadataImmutability(t *testing.T) {
-	err := New(ErrCodeInternal, "test", WithMetadata("original", "value"))
+	err := New(Internal, "test", WithMetadata("original", "value"))
 
 	meta := err.Metadata()
 	meta["injected"] = "evil"
 
-	// Original should not be modified
 	if err.Metadata()["injected"] != "" {
 		t.Error("Metadata() should return a copy, not the original map")
 	}
 }
 
 func TestNilMetadata(t *testing.T) {
-	err := New(ErrCodeInternal, "test")
+	err := New(Internal, "test")
 	meta := err.Metadata()
 	if meta == nil {
 		t.Error("Metadata() should return empty map, not nil")
@@ -187,7 +241,43 @@ func TestNilMetadata(t *testing.T) {
 }
 
 // ============================================================================
-// 4. Error wrapping and unwrapping
+// 5. Options
+// ============================================================================
+
+func TestWithCategory(t *testing.T) {
+	err := New(Timeout, "timeout", WithCategory(CategoryPermanent))
+	if err.Category() != CategoryPermanent {
+		t.Errorf("Category() = %v, want %v", err.Category(), CategoryPermanent)
+	}
+}
+
+func TestWithCause(t *testing.T) {
+	cause := fmt.Errorf("root cause")
+	err := New(Internal, "wrapper", WithCause(cause))
+
+	if err.Unwrap() != cause {
+		t.Error("Unwrap() should return cause set via WithCause")
+	}
+}
+
+func TestErrorMessageWithCause(t *testing.T) {
+	cause := fmt.Errorf("root cause")
+	err := New(Internal, "wrapper", WithCause(cause))
+
+	if err.Error() != "wrapper: root cause" {
+		t.Errorf("Error() = %v, want 'wrapper: root cause'", err.Error())
+	}
+}
+
+func TestErrorMessageWithoutCause(t *testing.T) {
+	err := New(Internal, "test message")
+	if err.Error() != "test message" {
+		t.Errorf("Error() = %v, want 'test message'", err.Error())
+	}
+}
+
+// ============================================================================
+// 6. Wrapping
 // ============================================================================
 
 func TestWrap(t *testing.T) {
@@ -200,9 +290,9 @@ func TestWrap(t *testing.T) {
 	if err.Unwrap() != cause {
 		t.Error("Unwrap() should return original error")
 	}
-	// Should default to internal for unknown errors
-	if err.Code() != ErrCodeInternal {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeInternal)
+	// Default to internal for unknown errors
+	if err.Code() != Internal {
+		t.Errorf("Code() = %v, want %v", err.Code(), Internal)
 	}
 }
 
@@ -214,436 +304,249 @@ func TestWrapNil(t *testing.T) {
 }
 
 func TestWrapAgentError(t *testing.T) {
-	original := New(ErrCodeNotFound, "resource missing",
+	original := New(NotFound, "resource missing",
 		WithMetadata("id", "123"),
-		WithAgentID("agent-1"),
-		WithTaskID("task-1"),
 	)
 	wrapped := Wrap(original, "operation failed")
 
-	// Should preserve properties
-	if wrapped.Code() != ErrCodeNotFound {
-		t.Errorf("wrapped.Code() = %v, want %v", wrapped.Code(), ErrCodeNotFound)
+	if wrapped.Code() != NotFound {
+		t.Errorf("wrapped.Code() = %v, want %v", wrapped.Code(), NotFound)
 	}
 	if wrapped.Metadata()["id"] != "123" {
 		t.Error("wrapped error should preserve metadata")
-	}
-	if wrapped.AgentID() != "agent-1" {
-		t.Error("wrapped error should preserve agent ID")
-	}
-	if wrapped.TaskID() != "task-1" {
-		t.Error("wrapped error should preserve task ID")
 	}
 	if !errors.Is(wrapped, original) {
 		t.Error("wrapped error should be 'Is' original")
 	}
 }
 
-func TestWrapf(t *testing.T) {
+func TestWrapContextDeadlineExceeded(t *testing.T) {
+	err := Wrap(context.DeadlineExceeded, "operation timed out")
+
+	if err.Code() != Timeout {
+		t.Errorf("Code() = %v, want %v", err.Code(), Timeout)
+	}
+	if !errors.Is(err.Unwrap(), context.DeadlineExceeded) {
+		t.Error("should preserve original context error")
+	}
+}
+
+func TestWrapContextCanceled(t *testing.T) {
+	err := Wrap(context.Canceled, "operation canceled")
+
+	if err.Code() != Canceled {
+		t.Errorf("Code() = %v, want %v", err.Code(), Canceled)
+	}
+	if !errors.Is(err.Unwrap(), context.Canceled) {
+		t.Error("should preserve original context error")
+	}
+}
+
+func TestWrapWrappedContextError(t *testing.T) {
+	wrapped := fmt.Errorf("inner: %w", context.DeadlineExceeded)
+	err := Wrap(wrapped, "outer context")
+
+	if err.Code() != Timeout {
+		t.Errorf("Code() = %v, want %v for wrapped context.DeadlineExceeded", err.Code(), Timeout)
+	}
+}
+
+func TestWrapWithOptions(t *testing.T) {
 	cause := fmt.Errorf("db error")
-	err := Wrapf(cause, "failed to fetch user %s", "bob")
+	err := Wrap(cause, "query failed", WithMetadata("table", "users"))
 
-	if err.Error() != "failed to fetch user bob: db error" {
-		t.Errorf("Error() = %v", err.Error())
+	if err.Metadata()["table"] != "users" {
+		t.Error("Wrap should accept options")
 	}
 }
 
-func TestWrapWithCode(t *testing.T) {
-	cause := fmt.Errorf("network issue")
-	err := WrapWithCode(cause, ErrCodeUnavailable, "service down")
+func TestWrapAgentErrorWithOptions(t *testing.T) {
+	original := New(NotFound, "missing")
+	wrapped := Wrap(original, "lookup failed", WithMetadata("extra", "info"))
 
-	if err.Code() != ErrCodeUnavailable {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeUnavailable)
+	if wrapped.Metadata()["extra"] != "info" {
+		t.Error("Wrap should apply options when wrapping an *Error")
 	}
-}
-
-func TestWrapWithCodeNil(t *testing.T) {
-	err := WrapWithCode(nil, ErrCodeInternal, "message")
-	if err != nil {
-		t.Error("WrapWithCode(nil, ...) should return nil")
-	}
-}
-
-func TestWithCause(t *testing.T) {
-	cause := fmt.Errorf("root cause")
-	err := New(ErrCodeInternal, "wrapper", WithCause(cause))
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause set via WithCause")
+	if wrapped.Code() != NotFound {
+		t.Errorf("Code() = %v, want %v", wrapped.Code(), NotFound)
 	}
 }
 
 // ============================================================================
-// 5. JSON serialization/deserialization roundtrip
+// 7. Inspection free functions
 // ============================================================================
 
-func TestJSONRoundtrip(t *testing.T) {
-	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
-	original := New(ErrCodeNotFound, "user not found",
-		WithMetadata("user_id", "123"),
-		WithAgentID("agent-1"),
-		WithTaskID("task-42"),
-		WithTimestamp(ts),
-		WithRetryable(false),
-	)
+func TestHas(t *testing.T) {
+	err := New(NotFound, "not found")
 
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+	if !Has(err, NotFound) {
+		t.Error("Has() should return true for matching code")
 	}
-
-	var restored Error
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("Unmarshal failed: %v", err)
-	}
-
-	if restored.Code() != original.Code() {
-		t.Errorf("Code mismatch: %v vs %v", restored.Code(), original.Code())
-	}
-	if restored.Category() != original.Category() {
-		t.Errorf("Category mismatch: %v vs %v", restored.Category(), original.Category())
-	}
-	if restored.Error() != original.message { // note: no cause after roundtrip
-		t.Errorf("Message mismatch: %v vs %v", restored.Error(), original.message)
-	}
-	if restored.AgentID() != original.AgentID() {
-		t.Errorf("AgentID mismatch: %v vs %v", restored.AgentID(), original.AgentID())
-	}
-	if restored.TaskID() != original.TaskID() {
-		t.Errorf("TaskID mismatch: %v vs %v", restored.TaskID(), original.TaskID())
-	}
-	if restored.Retryable() != original.Retryable() {
-		t.Errorf("Retryable mismatch: %v vs %v", restored.Retryable(), original.Retryable())
-	}
-	if restored.Metadata()["user_id"] != "123" {
-		t.Error("Metadata not preserved")
-	}
-	if !restored.Timestamp().Equal(ts) {
-		t.Errorf("Timestamp mismatch: %v vs %v", restored.Timestamp(), ts)
+	if Has(err, Timeout) {
+		t.Error("Has() should return false for non-matching code")
 	}
 }
 
-func TestJSONWithCause(t *testing.T) {
-	cause := fmt.Errorf("underlying issue")
-	err := New(ErrCodeInternal, "wrapper", WithCause(cause))
-
-	data, _ := json.Marshal(err)
-
-	var j map[string]interface{}
-	json.Unmarshal(data, &j)
-
-	if j["cause"] != "underlying issue" {
-		t.Errorf("cause should be serialized: %v", j["cause"])
-	}
-}
-
-func TestJSONUnmarshalWithCause(t *testing.T) {
-	jsonStr := `{"code":"INTERNAL","category":"internal","message":"test","cause":"original error"}`
-
-	var err Error
-	if e := json.Unmarshal([]byte(jsonStr), &err); e != nil {
-		t.Fatalf("Unmarshal failed: %v", e)
-	}
-
-	if err.Unwrap() == nil {
-		t.Error("Unwrap() should return reconstructed cause")
-	}
-	if err.Unwrap().Error() != "original error" {
-		t.Errorf("Unwrap().Error() = %v, want 'original error'", err.Unwrap().Error())
-	}
-}
-
-func TestJSONWithoutTimestamp(t *testing.T) {
-	jsonStr := `{"code":"NOT_FOUND","category":"permanent","message":"test"}`
-
-	var err Error
-	if e := json.Unmarshal([]byte(jsonStr), &err); e != nil {
-		t.Fatalf("Unmarshal failed: %v", e)
-	}
-
-	if !err.Timestamp().IsZero() {
-		t.Error("Timestamp should be zero when not in JSON")
-	}
-}
-
-// ============================================================================
-// 6. Inspection helpers (Is, IsCategory, IsRetryable, etc.)
-// ============================================================================
-
-func TestIs(t *testing.T) {
-	err := New(ErrCodeNotFound, "not found")
-
-	if !Is(err, ErrCodeNotFound) {
-		t.Error("Is() should return true for matching code")
-	}
-	if Is(err, ErrCodeTimeout) {
-		t.Error("Is() should return false for non-matching code")
-	}
-}
-
-func TestIsWithWrappedError(t *testing.T) {
-	original := New(ErrCodeNotFound, "not found")
+func TestHasWithWrappedError(t *testing.T) {
+	original := New(NotFound, "not found")
 	wrapped := fmt.Errorf("context: %w", original)
 
-	if !Is(wrapped, ErrCodeNotFound) {
-		t.Error("Is() should find code in wrapped error")
+	if !Has(wrapped, NotFound) {
+		t.Error("Has() should find code in wrapped error")
 	}
 }
 
-func TestIsWithNonAgentError(t *testing.T) {
+func TestHasWithNonError(t *testing.T) {
 	err := fmt.Errorf("regular error")
-	if Is(err, ErrCodeInternal) {
-		t.Error("Is() should return false for non-AgentError")
-	}
-}
-
-func TestIsCategory(t *testing.T) {
-	err := New(ErrCodeTimeout, "timeout")
-
-	if !IsCategory(err, CategoryTransient) {
-		t.Error("IsCategory() should match")
-	}
-	if IsCategory(err, CategoryPermanent) {
-		t.Error("IsCategory() should not match wrong category")
-	}
-}
-
-func TestIsCategoryNonAgentError(t *testing.T) {
-	err := fmt.Errorf("regular error")
-	if IsCategory(err, CategoryInternal) {
-		t.Error("IsCategory() should return false for non-AgentError")
+	if Has(err, Internal) {
+		t.Error("Has() should return false for non-Error")
 	}
 }
 
 func TestIsRetryable(t *testing.T) {
-	retryable := New(ErrCodeTimeout, "timeout")
-	nonRetryable := New(ErrCodeNotFound, "not found")
-
-	if !IsRetryable(retryable) {
+	if !IsRetryable(New(Timeout, "timeout")) {
 		t.Error("IsRetryable() should return true for retryable error")
 	}
-	if IsRetryable(nonRetryable) {
+	if IsRetryable(New(NotFound, "not found")) {
 		t.Error("IsRetryable() should return false for non-retryable error")
 	}
 }
 
-func TestIsRetryableNonAgentError(t *testing.T) {
+func TestIsRetryableNonError(t *testing.T) {
 	err := fmt.Errorf("regular error")
 	if IsRetryable(err) {
-		t.Error("IsRetryable() should return false for non-AgentError")
+		t.Error("IsRetryable() should return false for non-Error")
 	}
 }
 
-func TestIsTransient(t *testing.T) {
-	if !IsTransient(New(ErrCodeTimeout, "timeout")) {
-		t.Error("IsTransient() should return true")
-	}
-	if IsTransient(New(ErrCodeNotFound, "not found")) {
-		t.Error("IsTransient() should return false")
+func TestCodeOf(t *testing.T) {
+	err := New(Timeout, "timeout")
+	if CodeOf(err) != Timeout {
+		t.Errorf("CodeOf() = %v, want %v", CodeOf(err), Timeout)
 	}
 }
 
-func TestIsPermanent(t *testing.T) {
-	if !IsPermanent(New(ErrCodeNotFound, "not found")) {
-		t.Error("IsPermanent() should return true")
-	}
-	if IsPermanent(New(ErrCodeTimeout, "timeout")) {
-		t.Error("IsPermanent() should return false")
-	}
-}
-
-func TestIsResource(t *testing.T) {
-	if !IsResource(New(ErrCodeRateLimit, "rate limited")) {
-		t.Error("IsResource() should return true")
-	}
-	if IsResource(New(ErrCodeNotFound, "not found")) {
-		t.Error("IsResource() should return false")
-	}
-}
-
-func TestIsInternal(t *testing.T) {
-	if !IsInternal(New(ErrCodeInternal, "internal")) {
-		t.Error("IsInternal() should return true")
-	}
-	if IsInternal(New(ErrCodeNotFound, "not found")) {
-		t.Error("IsInternal() should return false")
-	}
-}
-
-func TestCode(t *testing.T) {
-	err := New(ErrCodeTimeout, "timeout")
-	if Code(err) != ErrCodeTimeout {
-		t.Errorf("Code() = %v, want %v", Code(err), ErrCodeTimeout)
-	}
-}
-
-func TestCodeNonAgentError(t *testing.T) {
+func TestCodeOfNonError(t *testing.T) {
 	err := fmt.Errorf("regular error")
-	if Code(err) != "" {
-		t.Errorf("Code() should return empty string for non-AgentError")
+	if CodeOf(err) != "" {
+		t.Error("CodeOf() should return empty string for non-Error")
 	}
 }
 
-func TestCategoryExtract(t *testing.T) {
-	err := New(ErrCodeTimeout, "timeout")
-	if Category(err) != CategoryTransient {
-		t.Errorf("Category() = %v, want %v", Category(err), CategoryTransient)
+func TestCodeOfWrapped(t *testing.T) {
+	original := New(NotFound, "not found")
+	wrapped := fmt.Errorf("context: %w", original)
+
+	if CodeOf(wrapped) != NotFound {
+		t.Error("CodeOf() should find code in wrapped error")
 	}
 }
 
-func TestCategoryExtractNonAgentError(t *testing.T) {
-	err := fmt.Errorf("regular error")
-	if Category(err) != "" {
-		t.Errorf("Category() should return empty string for non-AgentError")
-	}
-}
+// ============================================================================
+// 8. Stdlib re-exports
+// ============================================================================
 
-func TestGetMetadata(t *testing.T) {
-	err := New(ErrCodeInternal, "test", WithMetadata("key", "value"))
-	meta := GetMetadata(err)
-	if meta["key"] != "value" {
-		t.Error("GetMetadata() should return metadata")
-	}
-}
-
-func TestGetMetadataNonAgentError(t *testing.T) {
-	err := fmt.Errorf("regular error")
-	if GetMetadata(err) != nil {
-		t.Error("GetMetadata() should return nil for non-AgentError")
-	}
-}
-
-func TestAsAgentError(t *testing.T) {
-	agentErr := New(ErrCodeTimeout, "timeout")
+func TestStdlibAs(t *testing.T) {
+	agentErr := New(Timeout, "timeout")
 	wrapped := fmt.Errorf("wrapped: %w", agentErr)
 
-	extracted := AsAgentError(wrapped)
-	if extracted == nil {
-		t.Error("AsAgentError() should extract AgentError from wrapped")
+	var target *Error
+	if !As(wrapped, &target) {
+		t.Error("As() should extract Error from wrapped")
 	}
-	if extracted.Code() != ErrCodeTimeout {
-		t.Errorf("extracted.Code() = %v, want %v", extracted.Code(), ErrCodeTimeout)
-	}
-}
-
-func TestAsAgentErrorNonAgent(t *testing.T) {
-	err := fmt.Errorf("regular error")
-	if AsAgentError(err) != nil {
-		t.Error("AsAgentError() should return nil for non-AgentError")
+	if target.Code() != Timeout {
+		t.Errorf("extracted.Code() = %v, want %v", target.Code(), Timeout)
 	}
 }
 
-// ============================================================================
-// 7. Convenience constructors (Timeout, NotFound, RateLimited, etc.)
-// ============================================================================
+func TestStdlibIs(t *testing.T) {
+	sentinel := fmt.Errorf("sentinel")
+	wrapped := fmt.Errorf("wrapped: %w", sentinel)
 
-func TestTimeout(t *testing.T) {
-	err := Timeout("operation timed out")
-	if err.Code() != ErrCodeTimeout {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeTimeout)
-	}
-	if err.Category() != CategoryTransient {
-		t.Errorf("Category() = %v, want %v", err.Category(), CategoryTransient)
+	if !Is(wrapped, sentinel) {
+		t.Error("Is() should find sentinel in chain")
 	}
 }
 
-func TestNotFound(t *testing.T) {
-	err := NotFound("user not found")
-	if err.Code() != ErrCodeNotFound {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeNotFound)
-	}
-	if err.Category() != CategoryPermanent {
-		t.Errorf("Category() = %v, want %v", err.Category(), CategoryPermanent)
+func TestStdlibUnwrap(t *testing.T) {
+	inner := fmt.Errorf("inner")
+	outer := fmt.Errorf("outer: %w", inner)
+
+	if Unwrap(outer) != inner {
+		t.Error("Unwrap() should return inner error")
 	}
 }
 
-func TestRateLimited(t *testing.T) {
-	err := RateLimited("too many requests")
-	if err.Code() != ErrCodeRateLimit {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeRateLimit)
+func TestStdlibJoin(t *testing.T) {
+	err1 := New(Timeout, "timeout 1")
+	err2 := New(NotFound, "not found")
+
+	joined := Join(err1, err2)
+	if joined == nil {
+		t.Fatal("Join() should return error")
 	}
-	if !err.Retryable() {
-		t.Error("rate limit error should be retryable")
+	if !errors.Is(joined, err1) || !errors.Is(joined, err2) {
+		t.Error("joined error should contain both errors")
 	}
 }
 
-func TestUnauthorized(t *testing.T) {
-	err := Unauthorized("invalid token")
-	if err.Code() != ErrCodeUnauthorized {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeUnauthorized)
-	}
-}
-
-func TestForbidden(t *testing.T) {
-	err := Forbidden("access denied")
-	if err.Code() != ErrCodeForbidden {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeForbidden)
-	}
-}
-
-func TestInvalidInput(t *testing.T) {
-	err := InvalidInput("missing field")
-	if err.Code() != ErrCodeInvalidInput {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeInvalidInput)
-	}
-}
-
-func TestConflict(t *testing.T) {
-	err := Conflict("version mismatch")
-	if err.Code() != ErrCodeConflict {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeConflict)
-	}
-}
-
-func TestInternal(t *testing.T) {
-	err := Internal("unexpected error")
-	if err.Code() != ErrCodeInternal {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeInternal)
-	}
-}
-
-func TestAgentOffline(t *testing.T) {
-	err := AgentOffline("agent-123")
-	if err.Code() != ErrCodeAgentOffline {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeAgentOffline)
-	}
-	if err.AgentID() != "agent-123" {
-		t.Errorf("AgentID() = %v, want 'agent-123'", err.AgentID())
-	}
-	if !err.Retryable() {
-		t.Error("agent offline should be retryable")
-	}
-}
-
-func TestTaskFailed(t *testing.T) {
-	err := TaskFailed("task-456", "execution timeout")
-	if err.Code() != ErrCodeTaskFailed {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeTaskFailed)
-	}
-	if err.TaskID() != "task-456" {
-		t.Errorf("TaskID() = %v, want 'task-456'", err.TaskID())
-	}
-}
-
-func TestCoordinationFailure(t *testing.T) {
-	err := CoordinationFailure("consensus failed")
-	if err.Code() != ErrCodeCoordination {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeCoordination)
-	}
-}
-
-func TestConvenienceWithOptions(t *testing.T) {
-	err := Timeout("timeout", WithMetadata("attempt", "3"), WithAgentID("agent-1"))
-	if err.Metadata()["attempt"] != "3" {
-		t.Error("convenience constructor should accept options")
-	}
-	if err.AgentID() != "agent-1" {
-		t.Error("convenience constructor should apply agent ID option")
+func TestStdlibJoinAllNil(t *testing.T) {
+	joined := Join(nil, nil, nil)
+	if joined != nil {
+		t.Error("Join() with all nils should return nil")
 	}
 }
 
 // ============================================================================
-// 8. Panic recovery
+// 9. Chain utilities
+// ============================================================================
+
+func TestCause(t *testing.T) {
+	root := fmt.Errorf("root cause")
+	middle := fmt.Errorf("middle: %w", root)
+	outer := fmt.Errorf("outer: %w", middle)
+
+	cause := Cause(outer)
+	if cause != root {
+		t.Errorf("Cause() = %v, want root cause", cause)
+	}
+}
+
+func TestCauseNoChain(t *testing.T) {
+	err := fmt.Errorf("single error")
+	if Cause(err) != err {
+		t.Error("Cause() should return same error if no chain")
+	}
+}
+
+func TestCauseWithAgentError(t *testing.T) {
+	root := fmt.Errorf("database error")
+	agentErr := New(Internal, "operation failed", WithCause(root))
+
+	if Cause(agentErr) != root {
+		t.Error("Cause() should find root through Error")
+	}
+}
+
+func TestCollect(t *testing.T) {
+	err1 := fmt.Errorf("error 1")
+	err2 := fmt.Errorf("error 2")
+
+	collected := Collect(nil, err1, nil, err2, nil)
+	if len(collected) != 2 {
+		t.Errorf("Collect() returned %d errors, want 2", len(collected))
+	}
+}
+
+func TestCollectAllNil(t *testing.T) {
+	collected := Collect(nil, nil)
+	if len(collected) != 0 {
+		t.Error("Collect() with all nils should return empty slice")
+	}
+}
+
+// ============================================================================
+// 10. RecoverPanic
 // ============================================================================
 
 func TestRecoverPanicWithError(t *testing.T) {
@@ -651,8 +554,8 @@ func TestRecoverPanicWithError(t *testing.T) {
 	if err == nil {
 		t.Fatal("RecoverPanic() should return error")
 	}
-	if err.Code() != ErrCodePanic {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodePanic)
+	if err.Code() != Panic {
+		t.Errorf("Code() = %v, want %v", err.Code(), Panic)
 	}
 	if err.Error() != "panic error" {
 		t.Errorf("Error() = %v", err.Error())
@@ -677,14 +580,10 @@ func TestRecoverPanicWithOtherType(t *testing.T) {
 	if err.Error() != "42" {
 		t.Errorf("Error() = %v", err.Error())
 	}
-	if err.Metadata()["panic_value"] != "int" {
-		t.Errorf("panic_value metadata = %v", err.Metadata()["panic_value"])
-	}
 }
 
 func TestRecoverPanicWithNil(t *testing.T) {
-	err := RecoverPanic(nil)
-	if err != nil {
+	if RecoverPanic(nil) != nil {
 		t.Error("RecoverPanic(nil) should return nil")
 	}
 }
@@ -704,284 +603,117 @@ func TestRecoverPanicIntegration(t *testing.T) {
 	if recovered == nil {
 		t.Fatal("should have recovered panic")
 	}
-	if recovered.Code() != ErrCodePanic {
-		t.Errorf("Code() = %v, want %v", recovered.Code(), ErrCodePanic)
+	if recovered.Code() != Panic {
+		t.Errorf("Code() = %v, want %v", recovered.Code(), Panic)
 	}
 }
 
 // ============================================================================
-// 9. Context error detection (deadline exceeded, canceled)
+// 11. JSON serialization
 // ============================================================================
 
-func TestWrapContextDeadlineExceeded(t *testing.T) {
-	err := Wrap(context.DeadlineExceeded, "operation timed out")
+func TestJSONRoundtrip(t *testing.T) {
+	original := New(NotFound, "user not found",
+		WithMetadata("user_id", "123"),
+		WithRetryable(false),
+	)
 
-	if err.Code() != ErrCodeTimeout {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeTimeout)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
 	}
-	if !errors.Is(err.Unwrap(), context.DeadlineExceeded) {
-		t.Error("should preserve original context error")
+
+	var restored Error
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
 	}
-}
 
-func TestWrapContextCanceled(t *testing.T) {
-	err := Wrap(context.Canceled, "operation canceled")
-
-	if err.Code() != ErrCodeCanceled {
-		t.Errorf("Code() = %v, want %v", err.Code(), ErrCodeCanceled)
+	if restored.Code() != original.Code() {
+		t.Errorf("Code mismatch: %v vs %v", restored.Code(), original.Code())
 	}
-	if !errors.Is(err.Unwrap(), context.Canceled) {
-		t.Error("should preserve original context error")
+	if restored.Category() != original.Category() {
+		t.Errorf("Category mismatch: %v vs %v", restored.Category(), original.Category())
 	}
-}
-
-func TestWrapWrappedContextError(t *testing.T) {
-	wrapped := fmt.Errorf("inner: %w", context.DeadlineExceeded)
-	err := Wrap(wrapped, "outer context")
-
-	if err.Code() != ErrCodeTimeout {
-		t.Errorf("Code() = %v, want %v for wrapped context.DeadlineExceeded", err.Code(), ErrCodeTimeout)
+	if restored.Error() != original.message {
+		t.Errorf("Message mismatch: %v vs %v", restored.Error(), original.message)
 	}
-}
-
-// ============================================================================
-// 10. Error chain inspection
-// ============================================================================
-
-func TestCause(t *testing.T) {
-	root := fmt.Errorf("root cause")
-	middle := fmt.Errorf("middle: %w", root)
-	outer := fmt.Errorf("outer: %w", middle)
-
-	cause := Cause(outer)
-	if cause != root {
-		t.Errorf("Cause() = %v, want root cause", cause)
+	if restored.Retryable() != original.Retryable() {
+		t.Errorf("Retryable mismatch: %v vs %v", restored.Retryable(), original.Retryable())
+	}
+	if restored.Metadata()["user_id"] != "123" {
+		t.Error("Metadata not preserved")
 	}
 }
 
-func TestCauseNoChain(t *testing.T) {
-	err := fmt.Errorf("single error")
-	cause := Cause(err)
-	if cause != err {
-		t.Error("Cause() should return same error if no chain")
+func TestJSONWithCause(t *testing.T) {
+	cause := fmt.Errorf("underlying issue")
+	err := New(Internal, "wrapper", WithCause(cause))
+
+	data, _ := json.Marshal(err)
+
+	var j map[string]any
+	json.Unmarshal(data, &j)
+
+	if j["cause"] != "underlying issue" {
+		t.Errorf("cause should be serialized: %v", j["cause"])
 	}
 }
 
-func TestCauseWithAgentError(t *testing.T) {
-	root := fmt.Errorf("database error")
-	agentErr := New(ErrCodeInternal, "operation failed", WithCause(root))
+func TestJSONUnmarshalWithCause(t *testing.T) {
+	jsonStr := `{"code":"INTERNAL","category":"internal","message":"test","cause":"original error"}`
 
-	cause := Cause(agentErr)
-	if cause != root {
-		t.Error("Cause() should find root through AgentError")
+	var e Error
+	if err := json.Unmarshal([]byte(jsonStr), &e); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if e.Unwrap() == nil {
+		t.Error("Unwrap() should return reconstructed cause")
+	}
+	if e.Unwrap().Error() != "original error" {
+		t.Errorf("Unwrap().Error() = %v, want 'original error'", e.Unwrap().Error())
 	}
 }
 
-func TestJoin(t *testing.T) {
-	err1 := New(ErrCodeTimeout, "timeout 1")
-	err2 := New(ErrCodeNotFound, "not found")
+func TestJSONNoTimestampOrAgentFields(t *testing.T) {
+	err := New(Internal, "test", WithMetadata("agent_id", "a1"))
 
-	joined := Join(err1, err2)
-	if joined == nil {
-		t.Fatal("Join() should return error")
+	data, _ := json.Marshal(err)
+	var j map[string]any
+	json.Unmarshal(data, &j)
+
+	// These fields should not exist in JSON
+	if _, ok := j["timestamp"]; ok {
+		t.Error("JSON should not contain 'timestamp' field")
 	}
-	if !errors.Is(joined, err1) || !errors.Is(joined, err2) {
-		t.Error("joined error should contain both errors")
+	if _, ok := j["agent_id"]; ok {
+		t.Error("JSON should not contain 'agent_id' field — agent_id goes in metadata")
 	}
-}
-
-func TestJoinAllNil(t *testing.T) {
-	joined := Join(nil, nil, nil)
-	if joined != nil {
-		t.Error("Join() with all nils should return nil")
-	}
-}
-
-func TestCollect(t *testing.T) {
-	err1 := fmt.Errorf("error 1")
-	err2 := fmt.Errorf("error 2")
-
-	collected := Collect(nil, err1, nil, err2, nil)
-	if len(collected) != 2 {
-		t.Errorf("Collect() returned %d errors, want 2", len(collected))
+	if _, ok := j["task_id"]; ok {
+		t.Error("JSON should not contain 'task_id' field")
 	}
 }
 
-func TestCollectAllNil(t *testing.T) {
-	collected := Collect(nil, nil)
-	if len(collected) != 0 {
-		t.Error("Collect() with all nils should return empty slice")
-	}
-}
-
-func TestFirstRetryable(t *testing.T) {
-	errs := []error{
-		New(ErrCodeNotFound, "not found"),
-		New(ErrCodeTimeout, "timeout"),
-		New(ErrCodeRateLimit, "rate limited"),
-	}
-
-	first := FirstRetryable(errs)
-	if first == nil {
-		t.Fatal("FirstRetryable() should find retryable error")
-	}
-	if Code(first) != ErrCodeTimeout {
-		t.Errorf("FirstRetryable() = %v, want first retryable (timeout)", Code(first))
-	}
-}
-
-func TestFirstRetryableNone(t *testing.T) {
-	errs := []error{
-		New(ErrCodeNotFound, "not found"),
-		New(ErrCodeForbidden, "forbidden"),
-	}
-
-	first := FirstRetryable(errs)
-	if first != nil {
-		t.Error("FirstRetryable() should return nil when none retryable")
-	}
-}
-
-func TestFirstRetryableEmpty(t *testing.T) {
-	first := FirstRetryable(nil)
-	if first != nil {
-		t.Error("FirstRetryable(nil) should return nil")
-	}
-}
-
-func TestAllRetryable(t *testing.T) {
-	errs := []error{
-		New(ErrCodeTimeout, "timeout"),
-		New(ErrCodeRateLimit, "rate limited"),
-	}
-
-	if !AllRetryable(errs) {
-		t.Error("AllRetryable() should return true when all are retryable")
-	}
-}
-
-func TestAllRetryableFalse(t *testing.T) {
-	errs := []error{
-		New(ErrCodeTimeout, "timeout"),
-		New(ErrCodeNotFound, "not found"),
-	}
-
-	if AllRetryable(errs) {
-		t.Error("AllRetryable() should return false when one is not retryable")
-	}
-}
-
-func TestAllRetryableEmpty(t *testing.T) {
-	if !AllRetryable(nil) {
-		t.Error("AllRetryable(nil) should return true")
-	}
-}
-
-func TestAnyRetryable(t *testing.T) {
-	errs := []error{
-		New(ErrCodeNotFound, "not found"),
-		New(ErrCodeTimeout, "timeout"),
-	}
-
-	if !AnyRetryable(errs) {
-		t.Error("AnyRetryable() should return true when one is retryable")
-	}
-}
-
-func TestAnyRetryableFalse(t *testing.T) {
-	errs := []error{
-		New(ErrCodeNotFound, "not found"),
-		New(ErrCodeForbidden, "forbidden"),
-	}
-
-	if AnyRetryable(errs) {
-		t.Error("AnyRetryable() should return false when none are retryable")
-	}
-}
-
-func TestAnyRetryableEmpty(t *testing.T) {
-	if AnyRetryable(nil) {
-		t.Error("AnyRetryable(nil) should return false")
+func TestJSONUnmarshalError(t *testing.T) {
+	var e Error
+	if err := json.Unmarshal([]byte(`{invalid}`), &e); err == nil {
+		t.Error("should fail on invalid JSON")
 	}
 }
 
 // ============================================================================
-// Additional edge cases and coverage
+// 12. All codes have descriptions and categories
 // ============================================================================
 
-func TestErrorCodeString(t *testing.T) {
-	code := ErrCodeTimeout
-	if code.String() != "TIMEOUT" {
-		t.Errorf("String() = %v, want TIMEOUT", code.String())
-	}
-}
-
-func TestErrorCategoryString(t *testing.T) {
-	cat := CategoryTransient
-	if cat.String() != "transient" {
-		t.Errorf("String() = %v, want transient", cat.String())
-	}
-}
-
-func TestErrorCodeDefaultRetryable(t *testing.T) {
-	if !ErrCodeTimeout.DefaultRetryable() {
-		t.Error("Timeout should be default retryable")
-	}
-	if ErrCodeNotFound.DefaultRetryable() {
-		t.Error("NotFound should not be default retryable")
-	}
-}
-
-func TestErrorCodeDescription(t *testing.T) {
-	if ErrCodeTimeout.Description() != "operation timed out" {
-		t.Errorf("Description() = %v", ErrCodeTimeout.Description())
-	}
-}
-
-func TestErrorCodeDescriptionUnknown(t *testing.T) {
-	unknown := ErrorCode("UNKNOWN_CODE")
-	if unknown.Description() != "unknown error" {
-		t.Errorf("Description() = %v, want 'unknown error'", unknown.Description())
-	}
-}
-
-func TestErrorCodeDefaultCategoryUnknown(t *testing.T) {
-	unknown := ErrorCode("UNKNOWN_CODE")
-	if unknown.DefaultCategory() != CategoryInternal {
-		t.Errorf("DefaultCategory() = %v, want CategoryInternal", unknown.DefaultCategory())
-	}
-}
-
-func TestWithCategory(t *testing.T) {
-	// Override default category
-	err := New(ErrCodeTimeout, "timeout", WithCategory(CategoryPermanent))
-	if err.Category() != CategoryPermanent {
-		t.Errorf("Category() = %v, want %v", err.Category(), CategoryPermanent)
-	}
-}
-
-func TestAgentErrorInterface(t *testing.T) {
-	// Ensure *Error implements AgentError
-	var _ AgentError = New(ErrCodeInternal, "test")
-}
-
-func TestErrorWithEmptyCause(t *testing.T) {
-	err := New(ErrCodeInternal, "test message")
-	if err.Error() != "test message" {
-		t.Errorf("Error() without cause = %v, want 'test message'", err.Error())
-	}
-}
-
-func TestAllErrorCodes(t *testing.T) {
-	// Test that all error codes have valid default categories
-	codes := []ErrorCode{
-		ErrCodeTimeout, ErrCodeUnavailable, ErrCodeNetworkErr, ErrCodeRetryLater,
-		ErrCodeNotFound, ErrCodeConflict, ErrCodeInvalidInput, ErrCodeUnauthorized,
-		ErrCodeForbidden, ErrCodeAlreadyExists, ErrCodePrecondition, ErrCodeUnsupported,
-		ErrCodeCanceled, ErrCodeRateLimit, ErrCodeQuotaExceeded, ErrCodeResourceBusy,
-		ErrCodeCapacity, ErrCodeInternal, ErrCodeCorruption, ErrCodeAssertion,
-		ErrCodePanic, ErrCodeAgentOffline, ErrCodeAgentBusy, ErrCodeTaskFailed,
-		ErrCodeCoordination, ErrCodeHandoffFailed, ErrCodeCapabilityMissing,
+func TestAllCodesHaveDescriptionsAndCategories(t *testing.T) {
+	codes := []Code{
+		Timeout, Unavailable, NetworkErr, RetryLater,
+		NotFound, Conflict, InvalidInput, Unauthorized,
+		Forbidden, AlreadyExists, Precondition, Unsupported,
+		Canceled, RateLimit, QuotaExceeded, ResourceBusy,
+		Capacity, Internal, Corruption, Assertion,
+		Panic, AgentOffline, AgentBusy, TaskFailed,
+		Coordination, HandoffFailed, CapabilityMissing,
 	}
 
 	for _, code := range codes {
@@ -989,7 +721,6 @@ func TestAllErrorCodes(t *testing.T) {
 		if cat == "" {
 			t.Errorf("code %s has empty default category", code)
 		}
-		// All codes should have descriptions
 		desc := code.Description()
 		if desc == "" || desc == "unknown error" {
 			t.Errorf("code %s missing description", code)
@@ -997,42 +728,53 @@ func TestAllErrorCodes(t *testing.T) {
 	}
 }
 
-func TestMetadataMapMerge(t *testing.T) {
-	// Test that multiple metadata calls merge
-	err := New(ErrCodeInternal, "test",
+// ============================================================================
+// 13. Edge cases for coverage
+// ============================================================================
+
+func TestJSONRoundtripWithoutCause(t *testing.T) {
+	original := New(NotFound, "not found")
+	data, _ := json.Marshal(original)
+
+	var restored Error
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if restored.Unwrap() != nil {
+		t.Error("Unwrap() should be nil when no cause in JSON")
+	}
+}
+
+// nilUnwrapper implements Unwrap() but returns nil.
+type nilUnwrapper struct{}
+
+func (n nilUnwrapper) Error() string { return "nil unwrapper" }
+func (n nilUnwrapper) Unwrap() error { return nil }
+
+func TestCauseWithNilUnwrap(t *testing.T) {
+	err := nilUnwrapper{}
+	cause := Cause(err)
+	if cause != err {
+		t.Error("Cause() should return the error itself when Unwrap() returns nil")
+	}
+}
+
+// ============================================================================
+// 14. Metadata merge across multiple WithMetadata calls
+// ============================================================================
+
+func TestMetadataMerge(t *testing.T) {
+	err := New(Internal, "test",
 		WithMetadata("a", "1"),
-		WithMetadataMap(map[string]string{"b": "2", "c": "3"}),
-		WithMetadata("d", "4"),
+		WithMetadata("b", "2"),
+		WithMetadata("c", "3"),
 	)
 
 	meta := err.Metadata()
-	expected := map[string]string{"a": "1", "b": "2", "c": "3", "d": "4"}
+	expected := map[string]string{"a": "1", "b": "2", "c": "3"}
 	for k, v := range expected {
 		if meta[k] != v {
 			t.Errorf("Metadata[%s] = %v, want %v", k, meta[k], v)
 		}
-	}
-}
-
-func TestJSONInvalidTimestamp(t *testing.T) {
-	// Invalid timestamp should be silently ignored
-	jsonStr := `{"code":"INTERNAL","category":"internal","message":"test","timestamp":"invalid"}`
-
-	var err Error
-	if e := json.Unmarshal([]byte(jsonStr), &err); e != nil {
-		t.Fatalf("Unmarshal failed: %v", e)
-	}
-
-	if !err.Timestamp().IsZero() {
-		t.Error("invalid timestamp should result in zero time")
-	}
-}
-
-func TestJSONUnmarshalError(t *testing.T) {
-	invalidJSON := `{invalid json}`
-
-	var err Error
-	if e := json.Unmarshal([]byte(invalidJSON), &err); e == nil {
-		t.Error("should fail on invalid JSON")
 	}
 }
