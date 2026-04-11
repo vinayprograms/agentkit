@@ -4,7 +4,7 @@
 //
 //	h := host.New(host.Config{
 //	    Info:     acp.Info{Name: "my-editor", Version: "2.0"},
-//	    FS:       myFSHandler,
+//	    FS:       myFS,
 //	    OnUpdate: func(ctx context.Context, u update.Update) { ... },
 //	})
 //	h.Start(ctx, agentStdout, agentStdin)
@@ -31,16 +31,16 @@ import (
 	"github.com/vinayprograms/agentkit/acp/proto/update"
 )
 
-// FSHandler implements host-mediated file system access.
+// FS implements host-mediated file system access.
 // Non-nil on Config → ReadTextFile and WriteTextFile advertised.
-type FSHandler interface {
+type FS interface {
 	ReadFile(ctx context.Context, sessionID string, p fs.ReadParams) (fs.ReadResult, error)
 	WriteFile(ctx context.Context, sessionID string, p fs.WriteParams) (fs.WriteResult, error)
 }
 
-// TerminalHandler implements host-mediated terminal management.
+// Terminal implements host-mediated terminal management.
 // Non-nil on Config → Terminal capability advertised.
-type TerminalHandler interface {
+type Terminal interface {
 	Create(ctx context.Context, sessionID string, p terminal.Create) (string, error)
 	Output(ctx context.Context, sessionID, terminalID string) (terminal.Result, error)
 	Wait(ctx context.Context, sessionID, terminalID string) (terminal.Result, error)
@@ -57,8 +57,8 @@ type Config struct {
 	// nil auto-rejects all permission requests.
 	Permission func(ctx context.Context, p tool.Permission) (tool.Approval, error)
 
-	FS       FSHandler       // nil = not advertised
-	Terminal TerminalHandler // nil = not advertised
+	FS       FS       // nil = not advertised
+	Terminal Terminal // nil = not advertised
 
 	// OnUpdate is called for each session/update notification.
 	// Must not block. nil drops updates silently.
