@@ -12,7 +12,20 @@ type Create struct {
 	Meta        map[string]any    `json:"_meta,omitempty"`
 }
 
-// Result is returned by terminal operations (output, wait).
+// Created is returned by terminal/create with the new terminal's ID.
+type Created struct {
+	TerminalID string         `json:"terminalId"`
+	Meta       map[string]any `json:"_meta,omitempty"`
+}
+
+// Ref identifies an existing terminal for subsequent operations
+// (output, wait, kill, release).
+type Ref struct {
+	TerminalID string         `json:"terminalId"`
+	Meta       map[string]any `json:"_meta,omitempty"`
+}
+
+// Result is returned by output and wait operations.
 // Output populates Output; wait populates both ExitCode and Output.
 type Result struct {
 	ExitCode int            `json:"exitCode,omitempty"`
