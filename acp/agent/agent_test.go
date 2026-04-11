@@ -11,6 +11,7 @@ import (
 	"github.com/vinayprograms/agentkit/acp"
 	"github.com/vinayprograms/agentkit/acp/agent"
 	"github.com/vinayprograms/agentkit/acp/host"
+	"github.com/vinayprograms/agentkit/acp/proto/config"
 	"github.com/vinayprograms/agentkit/acp/proto/content"
 	"github.com/vinayprograms/agentkit/acp/proto/fs"
 	"github.com/vinayprograms/agentkit/acp/proto/prompt"
@@ -313,6 +314,192 @@ func TestAuth(t *testing.T) {
 
 	if err := h.Start(ctx, hr, hw); err != nil {
 		t.Fatalf("Start with correct token: %v", err)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+// writeAgent writes a file via the host.
+type writeAgent struct{}
+
+func (a *writeAgent) Prompt(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
+	_, err := turn.WriteFile(ctx, fs.WriteParams{Path: "/out.txt", Content: "written"})
+	if err != nil {
+		return prompt.Result{}, err
+	}
+	return prompt.Result{Reason: prompt.EndTurn}, nil
+}
+
+func TestWriteFileCallback(t *testing.T) {
+	ar, aw, hr, hw := pipe()
+	mock := &mockFS{}
+
+	srv := agent.New(agent.Config{
+		Info:    acp.Info{Name: "agent", Version: "1"},
+		Handler: &writeAgent{},
+	})
+	h := host.New(host.Config{
+		Info: acp.Info{Name: "host", Version: "1"},
+		FS:   mock,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Run(ctx, ar, aw) }()
+
+	h.Start(ctx, hr, hw)
+	sess, _ := h.NewSession(ctx, session.Params{Cwd: "/"})
+	h.Prompt(ctx, sess.ID, []content.Block{{Type: content.Text, Text: "write"}})
+
+	if mock.content != "written" {
+		t.Fatalf("expected 'written', got %q", mock.content)
+	}
+	cancel()
+	wg.Wait()
+}
+
+// outputAgent reads terminal output.
+type outputAgent struct{}
+
+func (a *outputAgent) Prompt(ctx context.Context, turn *agent.Turn) (prompt.Result, error) {
+	id, _ := turn.CreateTerminal(ctx, terminal.Create{Command: "echo"})
+	r, _ := turn.TerminalOutput(ctx, id)
+	_ = turn.TerminalKill(ctx, id)
+	_ = turn.TerminalRelease(ctx, id)
+	turn.SendUpdate(ctx, update.Update{Type: update.Message, Chunk: r.Output})
+	return prompt.Result{Reason: prompt.EndTurn}, nil
+}
+
+func TestTerminalOutputAndKill(t *testing.T) {
+	ar, aw, hr, hw := pipe()
+
+	srv := agent.New(agent.Config{
+		Info:    acp.Info{Name: "agent", Version: "1"},
+		Handler: &outputAgent{},
+	})
+	h := host.New(host.Config{
+		Info:     acp.Info{Name: "host", Version: "1"},
+		Terminal: &mockTerminal{},
+		OnUpdate: func(_ context.Context, _ update.Update) {},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Run(ctx, ar, aw) }()
+
+	h.Start(ctx, hr, hw)
+	sess, _ := h.NewSession(ctx, session.Params{Cwd: "/"})
+	h.Prompt(ctx, sess.ID, []content.Block{{Type: content.Text, Text: "go"}})
+
+	cancel()
+	wg.Wait()
+}
+
+func TestLoadSession(t *testing.T) {
+	ar, aw, hr, hw := pipe()
+
+	srv := agent.New(agent.Config{
+		Info:    acp.Info{Name: "agent", Version: "1"},
+		Handler: &echoAgent{},
+		LoadSession: func(_ context.Context, p session.LoadParams) (session.LoadResult, error) {
+			return session.LoadResult{
+				Session: session.Session{ID: p.SessionID},
+			}, nil
+		},
+	})
+	h := host.New(host.Config{Info: acp.Info{Name: "host", Version: "1"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Run(ctx, ar, aw) }()
+
+	h.Start(ctx, hr, hw)
+	sess, err := h.LoadSession(ctx, session.LoadParams{SessionID: "prev-1"})
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if sess.ID != "prev-1" {
+		t.Fatalf("expected prev-1, got %s", sess.ID)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSetMode(t *testing.T) {
+	ar, aw, hr, hw := pipe()
+
+	var mode string
+	srv := agent.New(agent.Config{
+		Info:    acp.Info{Name: "agent", Version: "1"},
+		Handler: &echoAgent{},
+		SetMode: func(_ context.Context, p config.ModeParams) (config.ModeResult, error) {
+			mode = p.Mode
+			return config.ModeResult{}, nil
+		},
+	})
+	h := host.New(host.Config{Info: acp.Info{Name: "host", Version: "1"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Run(ctx, ar, aw) }()
+
+	h.Start(ctx, hr, hw)
+	h.NewSession(ctx, session.Params{Cwd: "/"})
+	_, err := h.SetMode(ctx, config.ModeParams{Mode: "plan"})
+	if err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+	if mode != "plan" {
+		t.Fatalf("expected plan, got %s", mode)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSetOption(t *testing.T) {
+	ar, aw, hr, hw := pipe()
+
+	var optVal string
+	srv := agent.New(agent.Config{
+		Info:    acp.Info{Name: "agent", Version: "1"},
+		Handler: &echoAgent{},
+		SetOption: func(_ context.Context, p config.SetParams) (config.SetResult, error) {
+			optVal = p.Value
+			return config.SetResult{}, nil
+		},
+	})
+	h := host.New(host.Config{Info: acp.Info{Name: "host", Version: "1"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Run(ctx, ar, aw) }()
+
+	h.Start(ctx, hr, hw)
+	h.NewSession(ctx, session.Params{Cwd: "/"})
+	_, err := h.SetOption(ctx, config.SetParams{OptionID: "model", Value: "opus"})
+	if err != nil {
+		t.Fatalf("SetOption: %v", err)
+	}
+	if optVal != "opus" {
+		t.Fatalf("expected opus, got %s", optVal)
 	}
 
 	cancel()
