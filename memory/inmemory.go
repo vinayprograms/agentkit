@@ -31,7 +31,8 @@ func NewInMemoryStore() *InMemoryStore {
 // RememberObservation stores an observation with its category and returns the ID.
 func (s *InMemoryStore) RememberObservation(ctx context.Context, content, category, source string) (id string, err error) {
 	var end func(*error)
-	ctx, end = startSpan(ctx, "memory.remember_observation", "inmemory",
+	ctx, end = trace(ctx, "remember_observation",
+		attribute.String("memory.store", "inmemory"),
 		attribute.String("memory.category", category),
 		attribute.String("memory.source", source),
 	)
@@ -57,7 +58,7 @@ func (s *InMemoryStore) RememberObservation(ctx context.Context, content, catego
 
 // RememberFIL stores multiple observations and returns their IDs.
 func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) (ids []string, err error) {
-	ctx, end := startSpan(ctx, "memory.remember_fil", "inmemory", attribute.String("memory.source", source))
+	ctx, end := trace(ctx, "remember_fil", attribute.String("memory.store", "inmemory"), attribute.String("memory.source", source))
 	defer end(&err)
 
 
@@ -90,7 +91,7 @@ func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, les
 
 // RetrieveByID gets a single observation by ID.
 func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (item *ObservationItem, err error) {
-	_, end := startSpan(ctx, "memory.retrieve_by_id", "inmemory")
+	_, end := trace(ctx, "retrieve_by_id", attribute.String("memory.store", "inmemory"))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -110,7 +111,7 @@ func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (item *Obse
 
 // RecallByCategory searches for memories in a specific category using simple substring match.
 func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category string, limit int) (out []string, err error) {
-	_, end := startSpan(ctx, "memory.recall_by_category", "inmemory", attribute.String("memory.category", category))
+	_, end := trace(ctx, "recall_by_category", attribute.String("memory.store", "inmemory"), attribute.String("memory.category", category))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -174,7 +175,7 @@ func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category st
 
 // RecallFIL performs search and returns results grouped as FIL.
 func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCategory int) (res *FILResult, err error) {
-	ctx, end := startSpan(ctx, "memory.recall_fil", "inmemory")
+	ctx, end := trace(ctx, "recall_fil", attribute.String("memory.store", "inmemory"))
 	defer end(&err)
 
 	if limitPerCategory <= 0 {
@@ -205,7 +206,7 @@ func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCat
 
 // Recall searches for memories matching the query (all categories).
 func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpts) (results []MemoryResult, err error) {
-	_, end := startSpan(ctx, "memory.recall", "inmemory")
+	_, end := trace(ctx, "recall", attribute.String("memory.store", "inmemory"))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -318,7 +319,7 @@ func (s *InMemoryStore) Search(query string) (map[string]string, error) {
 
 // ListAll returns all observations, optionally filtered by category.
 func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int) (items []ObservationItem, err error) {
-	_, end := startSpan(ctx, "memory.list_all", "inmemory", attribute.String("memory.category", category))
+	_, end := trace(ctx, "list_all", attribute.String("memory.store", "inmemory"), attribute.String("memory.category", category))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -347,7 +348,7 @@ func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int)
 
 // ConsolidateSession is a no-op for in-memory store.
 func (s *InMemoryStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) (err error) {
-	_, end := startSpan(ctx, "memory.consolidate_session", "inmemory", attribute.String("memory.session_id", sessionID))
+	_, end := trace(ctx, "consolidate_session", attribute.String("memory.store", "inmemory"), attribute.String("memory.session_id", sessionID))
 	defer end(&err)
 
 	// In-memory store doesn't persist, so consolidation is meaningless

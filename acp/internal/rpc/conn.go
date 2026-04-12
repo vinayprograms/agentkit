@@ -10,13 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
-
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/acp/internal/rpc")
 
 // Sentinel errors.
 var (
@@ -89,17 +84,8 @@ func (c *Conn) HandleNotify(method string, h NotifyHandler) error {
 // is cancelled, or the connection closes. The caller inspects resp.Error
 // for protocol-level errors.
 func (c *Conn) Call(ctx context.Context, method string, params any) (resp *Response, err error) {
-	ctx, span := tracer.Start(ctx, "rpc.call",
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(attribute.String("rpc.method", method)),
-	)
-	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
-		span.End()
-	}()
+	ctx, end := trace(ctx, client, "call", attribute.String("rpc.method", method))
+	defer end(&err)
 
 	select {
 	case <-c.done:
@@ -250,30 +236,25 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 }
 
 func (c *Conn) handleRequest(ctx context.Context, req *Request) {
-	ctx, span := tracer.Start(ctx, "rpc.handle",
-		trace.WithSpanKind(trace.SpanKindServer),
-		trace.WithAttributes(attribute.String("rpc.method", req.Method)),
-	)
-	defer span.End()
+	var err error
+	ctx, end := trace(ctx, server, "handle", attribute.String("rpc.method", req.Method))
+	defer end(&err)
 
 	h, ok := c.handlers[req.Method]
 	if !ok {
-		span.SetStatus(codes.Error, "method not found")
+		err = errors.New("method not found")
 		c.respondError(req.ID, ErrNoMethod, "method not found")
 		return
 	}
 
-	result, err := h(ctx, req)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
-	if err != nil {
+	result, herr := h(ctx, req)
+	if herr != nil {
+		err = herr
 		var acpErr *Error
-		if errors.As(err, &acpErr) {
+		if errors.As(herr, &acpErr) {
 			c.respondError(req.ID, acpErr.Code, acpErr.Message)
 		} else {
-			c.respondError(req.ID, ErrInternal, err.Error())
+			c.respondError(req.ID, ErrInternal, herr.Error())
 		}
 		return
 	}

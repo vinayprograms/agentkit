@@ -5,13 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
-
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/mcp")
 
 // Manager manages multiple MCP server connections.
 type Manager struct {
@@ -110,20 +105,14 @@ func (m *Manager) CallTool(ctx context.Context, server, tool string, args map[st
 		return nil, fmt.Errorf("tool %q is denied on server %q", tool, server)
 	}
 
-	ctx, span := tracer.Start(ctx, "mcp.call",
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("mcp.server", server),
-			attribute.String("mcp.tool", tool),
-		),
+	ctx, end := trace(ctx, "call",
+		attribute.String("mcp.server", server),
+		attribute.String("mcp.tool", tool),
 	)
-	defer span.End()
+	var err error
+	defer end(&err)
 
 	result, err := client.CallTool(ctx, tool, args)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
 	return result, err
 }
 

@@ -9,12 +9,7 @@ import (
 
 	"github.com/vinayprograms/agentkit/llm"
 	"github.com/vinayprograms/agentkit/tools"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
-
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/shellguard")
 
 // Result contains the outcome of a command security check.
 type Result struct {
@@ -56,14 +51,8 @@ func New(shell Shell, workspace string, allowedDirs, userDeniedCommands []string
 
 // Check implements tools.Guard. It extracts "command" from args and runs the security pipeline.
 func (g *Gate) Check(ctx context.Context, args tools.Args) (err error) {
-	ctx, span := tracer.Start(ctx, "shellguard.check", trace.WithSpanKind(trace.SpanKindInternal))
-	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
-		span.End()
-	}()
+	ctx, end := trace(ctx, "check")
+	defer end(&err)
 
 	command, err := args.String("command")
 	if err != nil {

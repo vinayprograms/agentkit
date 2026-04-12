@@ -6,40 +6,52 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
+	otrace "go.opentelemetry.io/otel/trace"
 )
+
+const scope = "embedding"
 
 var tracer = otel.Tracer("github.com/vinayprograms/agentkit/embedding")
 
+// trace starts a client span scoped to the embedding package.
+func trace(ctx context.Context, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {
+	ctx, span := tracer.Start(ctx, scope+"."+op,
+		otrace.WithSpanKind(otrace.SpanKindClient),
+		otrace.WithAttributes(attrs...),
+	)
+	return ctx, func(errp *error) {
+		if errp != nil && *errp != nil {
+			span.RecordError(*errp)
+			span.SetStatus(codes.Error, (*errp).Error())
+		}
+		span.End()
+	}
+}
+
+// tracedEmbedder wraps an Embedder to emit a span per Embed call.
 type tracedEmbedder struct {
 	inner    Embedder
 	provider string
 	model    string
 }
 
-func withTracing(inner Embedder, provider, model string) Embedder {
+func instrument(inner Embedder, provider, model string) Embedder {
 	if inner == nil {
 		return nil
 	}
 	return &tracedEmbedder{inner: inner, provider: provider, model: model}
 }
 
-func (t *tracedEmbedder) Embed(ctx context.Context, text string) ([]float64, error) {
-	ctx, span := tracer.Start(ctx, "embedding.embed",
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("embedding.provider", t.provider),
-			attribute.String("embedding.model", t.model),
-		),
+func (t *tracedEmbedder) Embed(ctx context.Context, text string) (vec []float64, err error) {
+	ctx, end := trace(ctx, "embed",
+		attribute.String("embedding.provider", t.provider),
+		attribute.String("embedding.model", t.model),
 	)
-	defer span.End()
+	defer end(&err)
 
-	vec, err := t.inner.Embed(ctx, text)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return vec, err
+	vec, err = t.inner.Embed(ctx, text)
+	if err == nil {
+		otrace.SpanFromContext(ctx).SetAttributes(attribute.Int("embedding.dimensions", len(vec)))
 	}
-	span.SetAttributes(attribute.Int("embedding.dimensions", len(vec)))
-	return vec, nil
+	return vec, err
 }

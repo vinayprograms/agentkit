@@ -1,4 +1,4 @@
-package memory
+package tools
 
 import (
 	"context"
@@ -9,11 +9,11 @@ import (
 	otrace "go.opentelemetry.io/otel/trace"
 )
 
-const scope = "memory"
+const scope = "tool"
 
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/memory")
+var tracer = otel.Tracer("github.com/vinayprograms/agentkit/tools")
 
-// trace starts an internal span scoped to the memory package.
+// trace starts an internal span scoped to the tools package.
 // Returns the derived context and a cleanup function to defer.
 func trace(ctx context.Context, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {
 	ctx, span := tracer.Start(ctx, scope+"."+op,

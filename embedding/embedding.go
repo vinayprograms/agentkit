@@ -34,7 +34,7 @@ func New(cfg Config) (Embedder, error) {
 	if err != nil || e == nil {
 		return e, err
 	}
-	return withTracing(e, strings.ToLower(cfg.Provider), cfg.Model), nil
+	return instrument(e, strings.ToLower(cfg.Provider), cfg.Model), nil
 }
 
 func newInner(cfg Config) (Embedder, error) {

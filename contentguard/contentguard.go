@@ -7,8 +7,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // Config holds optional configuration for the guard.
@@ -67,18 +66,12 @@ func New(stages []Stage, workflow Workflow, cfg Config) (*Guard, error) {
 
 // Check runs the verification pipeline for a tool call.
 func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any, originalGoal string) (res *Result, err error) {
-	ctx, span := tracer.Start(ctx, "contentguard.check",
-		trace.WithSpanKind(trace.SpanKindInternal),
-		trace.WithAttributes(attribute.String("tool.name", toolName)),
-	)
+	ctx, end := trace(ctx, "check", attribute.String("tool.name", toolName))
 	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		} else if res != nil {
-			span.SetAttributes(attribute.String("contentguard.verdict", string(res.Verdict)))
+		if res != nil {
+			otrace.SpanFromContext(ctx).SetAttributes(attribute.String("contentguard.verdict", string(res.Verdict)))
 		}
-		span.End()
+		end(&err)
 	}()
 
 	// Step 1: deterministic checks (built-in, non-optional)

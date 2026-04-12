@@ -183,7 +183,7 @@ func (a *Agent) handleInit(_ context.Context, _ *rpc.Request) (any, error) {
 }
 
 func (a *Agent) handleAuth(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.auth")
+	ctx, end := trace(ctx, "auth")
 	defer end(&err)
 
 	if a.cfg.Auth == nil {
@@ -201,7 +201,7 @@ func (a *Agent) handleAuth(ctx context.Context, req *rpc.Request) (res any, err 
 }
 
 func (a *Agent) handleNewSession(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.session.new")
+	ctx, end := trace(ctx, "session.new")
 	defer end(&err)
 
 	var p session.Params
@@ -225,7 +225,7 @@ func (a *Agent) handleNewSession(ctx context.Context, req *rpc.Request) (res any
 }
 
 func (a *Agent) handleLoadSession(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.session.load")
+	ctx, end := trace(ctx, "session.load")
 	defer end(&err)
 
 	if a.cfg.LoadSession == nil {
@@ -244,7 +244,7 @@ func (a *Agent) handleLoadSession(ctx context.Context, req *rpc.Request) (res an
 }
 
 func (a *Agent) handlePrompt(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.prompt",
+	ctx, end := trace(ctx, "prompt",
 		attribute.String("acp.session_id", a.session.ID),
 	)
 	defer end(&err)
@@ -262,7 +262,7 @@ func (a *Agent) handlePrompt(ctx context.Context, req *rpc.Request) (res any, er
 
 func (a *Agent) handleCancel(ctx context.Context, n *rpc.Notification) {
 	var err error
-	ctx, end := startServerSpan(ctx, "acp.agent.cancel")
+	ctx, end := trace(ctx, "cancel")
 	defer end(&err)
 
 	if a.cfg.Cancel == nil {
@@ -275,7 +275,7 @@ func (a *Agent) handleCancel(ctx context.Context, n *rpc.Notification) {
 }
 
 func (a *Agent) handleSetMode(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.set_mode")
+	ctx, end := trace(ctx, "set_mode")
 	defer end(&err)
 
 	var p config.ModeParams
@@ -286,7 +286,7 @@ func (a *Agent) handleSetMode(ctx context.Context, req *rpc.Request) (res any, e
 }
 
 func (a *Agent) handleSetOption(ctx context.Context, req *rpc.Request) (res any, err error) {
-	ctx, end := startServerSpan(ctx, "acp.agent.set_option")
+	ctx, end := trace(ctx, "set_option")
 	defer end(&err)
 
 	var p config.SetParams

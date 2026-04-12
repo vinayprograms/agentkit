@@ -82,7 +82,7 @@ func New(cfg Config) (Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	return withTracing(m, cfg.Service, cfg.Model), nil
+	return instrument(m, cfg.Service, cfg.Model), nil
 }
 
 func newModel(cfg Config) (Model, error) {

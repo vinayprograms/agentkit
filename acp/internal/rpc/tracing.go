@@ -1,4 +1,4 @@
-package host
+package rpc
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	otrace "go.opentelemetry.io/otel/trace"
 )
 
-const scope = "acp.host"
+const scope = "rpc"
 
 // Span kinds exposed to call sites — avoids leaking OTel vocabulary.
 const (
@@ -17,10 +17,10 @@ const (
 	server = otrace.SpanKindServer
 )
 
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/acp/host")
+var tracer = otel.Tracer("github.com/vinayprograms/agentkit/acp/internal/rpc")
 
-// trace starts a span scoped to acp.host. The kind argument chooses
-// client (outgoing method call) or server (incoming agent request).
+// trace starts a span scoped to the rpc package. The kind argument chooses
+// client (outgoing call) or server (incoming request) span kind.
 func trace(ctx context.Context, kind otrace.SpanKind, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {
 	ctx, span := tracer.Start(ctx, scope+"."+op,
 		otrace.WithSpanKind(kind),

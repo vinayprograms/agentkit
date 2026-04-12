@@ -120,7 +120,8 @@ func buildIndexMapping() mapping.IndexMapping {
 
 // RememberObservation stores an observation with its category and returns the ID.
 func (s *BleveStore) RememberObservation(ctx context.Context, content, category, source string) (id string, err error) {
-	_, end := startSpan(ctx, "memory.remember_observation", "bleve",
+	_, end := trace(ctx, "remember_observation",
+		attribute.String("memory.store", "bleve"),
 		attribute.String("memory.category", category),
 		attribute.String("memory.source", source),
 	)
@@ -150,7 +151,7 @@ func (s *BleveStore) RememberObservation(ctx context.Context, content, category,
 
 // RememberFIL stores multiple observations and returns their IDs.
 func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) (ids []string, err error) {
-	ctx, end := startSpan(ctx, "memory.remember_fil", "bleve", attribute.String("memory.source", source))
+	ctx, end := trace(ctx, "remember_fil", attribute.String("memory.store", "bleve"), attribute.String("memory.source", source))
 	defer end(&err)
 
 
@@ -183,7 +184,7 @@ func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lesson
 
 // RetrieveByID gets a single observation by ID.
 func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (item *ObservationItem, err error) {
-	_, end := startSpan(ctx, "memory.retrieve_by_id", "bleve")
+	_, end := trace(ctx, "retrieve_by_id", attribute.String("memory.store", "bleve"))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -221,7 +222,7 @@ func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (item *Observa
 
 // RecallByCategory performs semantic search for a specific category.
 func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category string, limit int) (results []string, err error) {
-	_, end := startSpan(ctx, "memory.recall_by_category", "bleve", attribute.String("memory.category", category))
+	_, end := trace(ctx, "recall_by_category", attribute.String("memory.store", "bleve"), attribute.String("memory.category", category))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -267,7 +268,7 @@ func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category s
 
 // RecallFIL performs semantic search and returns results grouped as Findings, Insights, Lessons.
 func (s *BleveStore) RecallFIL(ctx context.Context, queryText string, limitPerCategory int) (res *FILResult, err error) {
-	ctx, end := startSpan(ctx, "memory.recall_fil", "bleve")
+	ctx, end := trace(ctx, "recall_fil", attribute.String("memory.store", "bleve"))
 	defer end(&err)
 
 	if limitPerCategory <= 0 {
@@ -318,7 +319,7 @@ func (s *BleveStore) RecallFIL(ctx context.Context, queryText string, limitPerCa
 
 // Recall performs semantic search for relevant memories.
 func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOpts) (results []MemoryResult, err error) {
-	_, end := startSpan(ctx, "memory.recall", "bleve")
+	_, end := trace(ctx, "recall", attribute.String("memory.store", "bleve"))
 	defer end(&err)
 
 	s.mu.RLock()
@@ -427,7 +428,7 @@ func (s *BleveStore) Search(queryStr string) (map[string]string, error) {
 
 // ConsolidateSession extracts and stores insights from a session transcript.
 func (s *BleveStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) (err error) {
-	ctx, end := startSpan(ctx, "memory.consolidate_session", "bleve", attribute.String("memory.session_id", sessionID))
+	ctx, end := trace(ctx, "consolidate_session", attribute.String("memory.store", "bleve"), attribute.String("memory.session_id", sessionID))
 	defer end(&err)
 
 	if len(transcript) == 0 {
@@ -507,7 +508,7 @@ func (s *BleveStore) saveKV() error {
 // ListAll returns all observations, optionally filtered by category.
 // If category is empty, returns all observations.
 func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) (items []ObservationItem, err error) {
-	_, end := startSpan(ctx, "memory.list_all", "bleve", attribute.String("memory.category", category))
+	_, end := trace(ctx, "list_all", attribute.String("memory.store", "bleve"), attribute.String("memory.category", category))
 	defer end(&err)
 
 	s.mu.RLock()

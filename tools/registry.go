@@ -5,13 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
-
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/tools")
 
 // Entry holds a tool prepared for registration, optionally with guards.
 type Entry struct {
@@ -93,36 +88,24 @@ func (r *Registry) Has(name string) bool {
 }
 
 // Execute validates args and runs the named tool.
-func (r *Registry) Execute(ctx context.Context, name string, rawArgs map[string]any) (string, error) {
-	ctx, span := tracer.Start(ctx, "tool.execute",
-		trace.WithSpanKind(trace.SpanKindInternal),
-		trace.WithAttributes(attribute.String("tool.name", name)),
-	)
-	defer span.End()
+func (r *Registry) Execute(ctx context.Context, name string, rawArgs map[string]any) (result string, err error) {
+	ctx, end := trace(ctx, "execute", attribute.String("tool.name", name))
+	defer end(&err)
 
 	r.mu.RLock()
 	entry, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		err := fmt.Errorf("unknown tool: %s", name)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		return "", fmt.Errorf("unknown tool: %s", name)
+	}
+
+	args, verr := Validate(entry.tool.Parameters(), rawArgs)
+	if verr != nil {
+		err = fmt.Errorf("tool %s: %w", name, verr)
 		return "", err
 	}
 
-	args, err := Validate(entry.tool.Parameters(), rawArgs)
-	if err != nil {
-		err = fmt.Errorf("tool %s: %w", name, err)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return "", err
-	}
-
-	result, err := entry.tool.Execute(ctx, args)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
+	result, err = entry.tool.Execute(ctx, args)
 	return result, err
 }
 

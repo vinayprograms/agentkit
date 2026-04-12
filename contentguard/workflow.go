@@ -5,26 +5,20 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // evaluateStage wraps stage.Evaluate in a span.
-func evaluateStage(ctx context.Context, stage Stage, req Request) (*Finding, error) {
-	ctx, span := tracer.Start(ctx, "contentguard.stage",
-		trace.WithSpanKind(trace.SpanKindInternal),
-		trace.WithAttributes(attribute.String("contentguard.stage", fmt.Sprintf("%T", stage))),
-	)
-	defer span.End()
+func evaluateStage(ctx context.Context, stage Stage, req Request) (finding *Finding, err error) {
+	ctx, end := trace(ctx, "stage", attribute.String("contentguard.stage", fmt.Sprintf("%T", stage)))
+	defer end(&err)
 
-	finding, err := stage.Evaluate(ctx, req)
+	finding, err = stage.Evaluate(ctx, req)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
 		return finding, err
 	}
 	if finding != nil {
-		span.SetAttributes(attribute.String("contentguard.verdict", string(finding.Verdict)))
+		otrace.SpanFromContext(ctx).SetAttributes(attribute.String("contentguard.verdict", string(finding.Verdict)))
 	}
 	return finding, nil
 }

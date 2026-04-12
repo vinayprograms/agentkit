@@ -1,4 +1,4 @@
-package memory
+package mcp
 
 import (
 	"context"
@@ -9,15 +9,14 @@ import (
 	otrace "go.opentelemetry.io/otel/trace"
 )
 
-const scope = "memory"
+const scope = "mcp"
 
-var tracer = otel.Tracer("github.com/vinayprograms/agentkit/memory")
+var tracer = otel.Tracer("github.com/vinayprograms/agentkit/mcp")
 
-// trace starts an internal span scoped to the memory package.
-// Returns the derived context and a cleanup function to defer.
+// trace starts a client span scoped to the mcp package.
 func trace(ctx context.Context, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {
 	ctx, span := tracer.Start(ctx, scope+"."+op,
-		otrace.WithSpanKind(otrace.SpanKindInternal),
+		otrace.WithSpanKind(otrace.SpanKindClient),
 		otrace.WithAttributes(attrs...),
 	)
 	return ctx, func(errp *error) {
