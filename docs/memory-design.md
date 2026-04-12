@@ -28,7 +28,7 @@ The agent stores knowledge as it works. Later, when facing a similar task, it re
 
 **Don't use memory for:**
 - Short-lived scripts (no persistence needed)
-- Shared knowledge across agents (use `state` package)
+- Shared knowledge across agents (use a distributed store)
 - Structured data storage (use a proper database)
 
 ## Core Concepts

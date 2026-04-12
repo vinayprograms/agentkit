@@ -1,14 +1,16 @@
-# AgentKit
+# Agentkit
 
-A Go toolkit for building AI agents. No opinions about agent architecture -- just building blocks: LLM providers, tool execution, memory, message passing, and coordination primitives. Use what you need, ignore the rest.
+A Go toolkit for building AI agents. Single-agent building blocks — LLM providers, tool execution, memory, content/shell guards, and protocol support. No opinions about agent architecture; use what you need.
 
-## Quick Start
+## Install
 
 ```bash
 go get github.com/vinayprograms/agentkit
 ```
 
-The simplest agent: create an LLM provider, define tools, and run an agentic loop.
+## Quick Start
+
+The simplest agent: create an LLM, define tools, and run an agentic loop.
 
 ```go
 package main
@@ -23,156 +25,117 @@ import (
 )
 
 func main() {
-    // Create an LLM provider (supports Anthropic, OpenAI, Google, Groq, Mistral, Ollama, ...)
-    provider, _ := llm.NewProvider(llm.ProviderConfig{
-        Provider:  "anthropic",
+    model, _ := llm.New(llm.Config{
+        Service:   "anthropic",
         Model:     "claude-sonnet-4-20250514",
         APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
         MaxTokens: 4096,
     })
 
-    // Define tools the agent can use
     tools := []llm.ToolDef{{
         Name:        "current_time",
         Description: "Returns the current UTC time.",
-        Parameters:  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+        Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
     }}
 
-    // Agentic loop: send → tool calls → execute → feed back → repeat
     messages := []llm.Message{{Role: "user", Content: "What time is it?"}}
 
     for {
-        resp, _ := provider.Chat(context.Background(), llm.ChatRequest{
+        resp, _ := model.Chat(context.Background(), llm.ChatRequest{
             Messages: messages, Tools: tools, MaxTokens: 4096,
         })
 
         if len(resp.ToolCalls) == 0 {
-            fmt.Println(resp.Content) // Final answer
+            fmt.Println(resp.Content)
             break
         }
 
-        // Execute tool calls and feed results back
-        messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+        messages = append(messages, llm.Message{
+            Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls,
+        })
         for _, tc := range resp.ToolCalls {
-            result := time.Now().UTC().Format(time.RFC3339) // your tool logic here
-            messages = append(messages, llm.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+            result := time.Now().UTC().Format(time.RFC3339)
+            messages = append(messages, llm.Message{
+                Role: "tool", Content: result, ToolCallID: tc.ID,
+            })
         }
     }
 }
 ```
 
-See [examples/simple-llm-agent](examples/simple-llm-agent/) for the complete, runnable version.
+See [examples/simple-llm-agent](examples/simple-llm-agent/) for the runnable version.
 
-## Architecture
+## Packages
 
-```mermaid
-graph TB
-    subgraph Agent["Your Agent"]
-        LLM["LLM<br/>(Claude, GPT, Gemini)"]
-        Tools["Tools<br/>(builtin + MCP)"]
-        Memory["Memory<br/>(FIL + search)"]
-    end
+### Core
 
-    subgraph Coordination["Swarm Coordination"]
-        Registry["Registry<br/>who exists"]
-        Heartbeat["Heartbeat<br/>who's alive"]
-        State["State<br/>shared data"]
-        Tasks["Tasks<br/>work items"]
-        Results["Results<br/>outputs"]
-        Ratelimit["Ratelimit<br/>quotas"]
-    end
+| Package | What it does | Doc |
+|---|---|---|
+| **llm** | LLM provider abstraction (Anthropic, OpenAI, Google, Groq, Mistral, Ollama, etc.) | [llm-design.md](docs/llm-design.md) |
+| **tools** | Tool definition, validation, and execution with optional guards | — |
+| **memory** | Semantic memory with BM25 search (in-memory + Bleve backends) | [memory-design.md](docs/memory-design.md) |
+| **embedding** | Text-to-vector embeddings for semantic search | — |
+| **errors** | Structured error taxonomy with categories and retry semantics | [errors-design.md](docs/errors-design.md) |
 
-    subgraph Infrastructure["Infrastructure"]
-        Bus["Message Bus<br/>pub/sub, queues, RPC"]
-        Backend["Backend<br/>NATS / Memory"]
-    end
+### Security
 
-    Agent --> Coordination
-    Coordination --> Bus
-    Bus --> Backend
+| Package | What it does |
+|---|---|
+| **shellguard** | Shell command gating — deterministic deny list + optional LLM analysis |
+| **contentguard** | Content verification pipeline with stage-based workflows |
+
+### Runtime
+
+| Package | What it does | Doc |
+|---|---|---|
+| **credentials** | Credential lookup (file, env, merged) |
+| **policy** | TOML-based policy configuration |
+| **mcp** | Model Context Protocol client (stdio, HTTP) | [mcp-design.md](docs/mcp-design.md) |
+| **shutdown** | Graceful shutdown with phased execution | [shutdown-design.md](docs/shutdown-design.md) |
+
+### Protocol
+
+| Package | What it does | Doc |
+|---|---|---|
+| **acp/** | Agent Client Protocol — editor/IDE integration (separate module) | [acp/README.md](acp/README.md) |
+
+`acp` is a separate Go module so consumers can import ACP without pulling in the rest of agentkit. See [acp/README.md](acp/README.md).
+
+## Observability
+
+Every package that performs I/O emits OpenTelemetry spans. Consumers initialize OTel in their `main` and agentkit emits to whatever exporter is configured:
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+exp, _ := otlptracegrpc.New(ctx)
+tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+otel.SetTracerProvider(tp)
+defer tp.Shutdown(ctx)
 ```
 
-**Message Bus** is the foundation -- all agent communication flows through it.
-
-**Swarm Coordination** builds on the bus -- registry tracks agents, heartbeat detects failures, state shares data, tasks manage work.
-
-**Your Agent** uses coordination primitives plus LLM/tools/memory for actual work.
-
-## Learning Path
-
-Start with the fundamentals, then add capabilities as needed:
-
-### 1. Core (Read First)
-
-| Package | What It Does | Doc |
-|---------|--------------|-----|
-| **llm** | Call LLMs (Claude, GPT, Gemini) with unified interface | [llm-design.md](docs/llm-design.md) |
-| **bus** | Message passing between agents (pub/sub, queues, RPC) | [bus-design.md](docs/bus-design.md) |
-| **errors** | Structured errors with retry semantics | [errors-design.md](docs/errors-design.md) |
-
-### 2. Swarm Basics (Multi-Agent)
-
-| Package | What It Does | Doc |
-|---------|--------------|-----|
-| **registry** | Agent registration and capability-based discovery | [registry-design.md](docs/registry-design.md) |
-| **heartbeat** | Detect dead agents, trigger failover | [heartbeat-design.md](docs/heartbeat-design.md) |
-| **state** | Shared key-value store with distributed locks | [state-design.md](docs/state-design.md) |
-
-### 3. Task Coordination
-
-| Package | What It Does | Doc |
-|---------|--------------|-----|
-| **tasks** | Idempotent task handling with deduplication | [tasks-design.md](docs/tasks-design.md) |
-| **results** | Publish/subscribe for task results | [results-design.md](docs/results-design.md) |
-| **ratelimit** | Coordinate rate limits across swarm | [ratelimit-design.md](docs/ratelimit-design.md) |
-
-### 4. Operations
-
-| Package | What It Does | Doc |
-|---------|--------------|-----|
-| **shutdown** | Graceful shutdown with phases | [shutdown-design.md](docs/shutdown-design.md) |
-| **logging** | Structured real-time logging | [logging-design.md](docs/logging-design.md) |
-| **telemetry** | OpenTelemetry tracing | [telemetry-design.md](docs/telemetry-design.md) |
-
-### 5. Specialized
-
-| Package | What It Does | Doc |
-|---------|--------------|-----|
-| **transport** | JSON-RPC transports (stdio, WebSocket, SSE) | [transport-design.md](docs/transport-design.md) |
-| **mcp** | Connect to external tool servers | [mcp-design.md](docs/mcp-design.md) |
-| **acp** | Editor integration (VS Code, Cursor) | [acp-design.md](docs/acp-design.md) |
-| **memory** | Semantic memory with BM25 search | [memory-design.md](docs/memory-design.md) |
+Without initialization, OTel defaults to a no-op — spans silently vanish and agentkit has zero observability overhead.
 
 ## Examples
 
-Working code you can run, ordered from simple to advanced:
-
-### Single Agent
-
-| Example | What It Shows |
-|---------|---------------|
+| Example | What it shows |
+|---|---|
 | [simple-llm-agent](examples/simple-llm-agent/) | LLM provider + custom tools + agentic loop |
 | [memory-agent](examples/memory-agent/) | Persistent BM25 memory with remember/recall |
 | [structured-errors](examples/structured-errors/) | Error handling patterns |
-| [chat-transport](examples/chat-transport/) | Basic transport setup |
-
-### Multi-Agent Coordination
-
-| Example | What It Shows |
-|---------|---------------|
-| [task-queue](examples/task-queue/) | Work distribution via bus |
-| [swarm-heartbeat](examples/swarm-heartbeat/) | Agent liveness detection |
-| [idempotent-tasks](examples/idempotent-tasks/) | Safe task retries |
-| [result-publication](examples/result-publication/) | Pub/sub for results |
-| [rate-limiting](examples/rate-limiting/) | Coordinated rate limits |
 | [graceful-shutdown](examples/graceful-shutdown/) | Multi-phase shutdown |
 
 ## Design Philosophy
 
-- **Composition over frameworks** -- Use what you need, ignore the rest
-- **Backend agnostic** -- Memory implementations for testing, NATS for production
-- **Go idiomatic** -- Channels, interfaces, context propagation
-- **Explicit over magic** -- No hidden state, no auto-discovery
+- **Composition over frameworks** — use what you need, ignore the rest
+- **Consumer defines interfaces** — kit packages expose concrete behavior; interfaces live where they're used
+- **Ready-to-use construction** — no `Init()` calls, no `Set*` methods; one constructor returns a working object
+- **Backend-agnostic** — in-memory implementations for tests, real backends for production
+- **Go idiomatic** — channels, interfaces, context propagation, no magic
 
 ## License
 

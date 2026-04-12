@@ -2,7 +2,7 @@
 
 ## What This Package Does
 
-The `errors` package provides structured error types for agent swarms. Instead of plain error strings, errors carry rich information: a code identifying what went wrong, a category for retry decisions, and metadata for debugging.
+The `errors` package provides structured error types for agents. Instead of plain error strings, errors carry rich information: a code identifying what went wrong, a category for retry decisions, and metadata for debugging.
 
 ## Why It Exists
 
