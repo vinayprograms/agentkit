@@ -5,7 +5,7 @@ All notable changes to agentkit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-04-12
 
 ### Changed — kit is now single-agent focused
 
@@ -36,6 +36,9 @@ Every remaining package refactored for clarity:
 - Consumer-defined interfaces at module boundaries
 - Ready-to-use constructors (no `Init()` or `Set*` methods)
 - Pervasive OpenTelemetry instrumentation with scoped `trace()` helpers
+- Hi-res span events via scoped `event()` helpers in `shellguard`,
+  `contentguard`, and `acp/internal/rpc` — mark decision points and state
+  transitions inside existing spans without creating extra sub-spans
 
 ### Added
 
