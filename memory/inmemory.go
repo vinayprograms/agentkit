@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // InMemoryStore is an in-memory implementation of Store for testing.
@@ -28,11 +29,18 @@ func NewInMemoryStore() *InMemoryStore {
 }
 
 // RememberObservation stores an observation with its category and returns the ID.
-func (s *InMemoryStore) RememberObservation(ctx context.Context, content, category, source string) (string, error) {
+func (s *InMemoryStore) RememberObservation(ctx context.Context, content, category, source string) (id string, err error) {
+	var end func(*error)
+	ctx, end = startSpan(ctx, "memory.remember_observation", "inmemory",
+		attribute.String("memory.category", category),
+		attribute.String("memory.source", source),
+	)
+	defer end(&err)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id := uuid.New().String()
+	id = uuid.New().String()
 	now := time.Now()
 
 	mem := &Memory{
@@ -48,8 +56,10 @@ func (s *InMemoryStore) RememberObservation(ctx context.Context, content, catego
 }
 
 // RememberFIL stores multiple observations and returns their IDs.
-func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error) {
-	var ids []string
+func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) (ids []string, err error) {
+	ctx, end := startSpan(ctx, "memory.remember_fil", "inmemory", attribute.String("memory.source", source))
+	defer end(&err)
+
 
 	for _, f := range findings {
 		id, err := s.RememberObservation(ctx, f, "finding", source)
@@ -79,7 +89,10 @@ func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, les
 }
 
 // RetrieveByID gets a single observation by ID.
-func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (*ObservationItem, error) {
+func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (item *ObservationItem, err error) {
+	_, end := startSpan(ctx, "memory.retrieve_by_id", "inmemory")
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -96,7 +109,10 @@ func (s *InMemoryStore) RetrieveByID(ctx context.Context, id string) (*Observati
 }
 
 // RecallByCategory searches for memories in a specific category using simple substring match.
-func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category string, limit int) ([]string, error) {
+func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category string, limit int) (out []string, err error) {
+	_, end := startSpan(ctx, "memory.recall_by_category", "inmemory", attribute.String("memory.category", category))
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -148,7 +164,7 @@ func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category st
 	}
 
 	// Extract content
-	out := make([]string, len(results))
+	out = make([]string, len(results))
 	for i, r := range results {
 		out[i] = r.content
 	}
@@ -157,7 +173,10 @@ func (s *InMemoryStore) RecallByCategory(ctx context.Context, query, category st
 }
 
 // RecallFIL performs search and returns results grouped as FIL.
-func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCategory int) (*FILResult, error) {
+func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCategory int) (res *FILResult, err error) {
+	ctx, end := startSpan(ctx, "memory.recall_fil", "inmemory")
+	defer end(&err)
+
 	if limitPerCategory <= 0 {
 		limitPerCategory = 5
 	}
@@ -185,7 +204,10 @@ func (s *InMemoryStore) RecallFIL(ctx context.Context, query string, limitPerCat
 }
 
 // Recall searches for memories matching the query (all categories).
-func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpts) ([]MemoryResult, error) {
+func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpts) (results []MemoryResult, err error) {
+	_, end := startSpan(ctx, "memory.recall", "inmemory")
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -196,8 +218,6 @@ func (s *InMemoryStore) Recall(ctx context.Context, query string, opts RecallOpt
 	queryLower := strings.ToLower(query)
 
 	// Find memories containing query terms
-	var results []MemoryResult
-
 	for _, mem := range s.memories {
 		contentLower := strings.ToLower(mem.Content)
 		score := float32(0)
@@ -297,7 +317,10 @@ func (s *InMemoryStore) Search(query string) (map[string]string, error) {
 }
 
 // ListAll returns all observations, optionally filtered by category.
-func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int) ([]ObservationItem, error) {
+func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int) (items []ObservationItem, err error) {
+	_, end := startSpan(ctx, "memory.list_all", "inmemory", attribute.String("memory.category", category))
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -305,7 +328,7 @@ func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int)
 		limit = 1000
 	}
 
-	items := make([]ObservationItem, 0)
+	items = make([]ObservationItem, 0)
 	for _, mem := range s.memories {
 		if category != "" && mem.Category != category {
 			continue
@@ -323,7 +346,10 @@ func (s *InMemoryStore) ListAll(ctx context.Context, category string, limit int)
 }
 
 // ConsolidateSession is a no-op for in-memory store.
-func (s *InMemoryStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error {
+func (s *InMemoryStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) (err error) {
+	_, end := startSpan(ctx, "memory.consolidate_session", "inmemory", attribute.String("memory.session_id", sessionID))
+	defer end(&err)
+
 	// In-memory store doesn't persist, so consolidation is meaningless
 	return nil
 }

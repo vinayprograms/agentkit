@@ -29,6 +29,7 @@ import (
 	"github.com/vinayprograms/agentkit/acp/proto/terminal"
 	"github.com/vinayprograms/agentkit/acp/proto/tool"
 	"github.com/vinayprograms/agentkit/acp/proto/update"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // FS implements host-mediated file system access.
@@ -125,7 +126,10 @@ func (h *Host) Start(ctx context.Context, r io.Reader, w io.Writer) error {
 }
 
 // NewSession creates a new session with the agent.
-func (h *Host) NewSession(ctx context.Context, p session.Params) (session.Session, error) {
+func (h *Host) NewSession(ctx context.Context, p session.Params) (sess session.Session, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.session.new")
+	defer end(&err)
+
 	r, err := rpc.Invoke[session.Result](ctx, h.conn, rpc.MethodSessionNew, p)
 	if err != nil {
 		return session.Session{}, err
@@ -137,7 +141,10 @@ func (h *Host) NewSession(ctx context.Context, p session.Params) (session.Sessio
 }
 
 // LoadSession restores a previous session.
-func (h *Host) LoadSession(ctx context.Context, p session.LoadParams) (session.Session, error) {
+func (h *Host) LoadSession(ctx context.Context, p session.LoadParams) (sess session.Session, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.session.load")
+	defer end(&err)
+
 	r, err := rpc.Invoke[session.LoadResult](ctx, h.conn, rpc.MethodSessionLoad, p)
 	if err != nil {
 		return session.Session{}, err
@@ -149,7 +156,10 @@ func (h *Host) LoadSession(ctx context.Context, p session.LoadParams) (session.S
 }
 
 // Prompt sends content to the agent and blocks until the turn completes.
-func (h *Host) Prompt(ctx context.Context, sessionID string, blocks []content.Block) (prompt.Result, error) {
+func (h *Host) Prompt(ctx context.Context, sessionID string, blocks []content.Block) (res prompt.Result, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.prompt", attribute.String("acp.session_id", sessionID))
+	defer end(&err)
+
 	return rpc.Invoke[prompt.Result](ctx, h.conn, rpc.MethodSessionPrompt, prompt.Params{
 		SessionID: sessionID,
 		Content:   blocks,
@@ -157,7 +167,10 @@ func (h *Host) Prompt(ctx context.Context, sessionID string, blocks []content.Bl
 }
 
 // PromptCommand sends a slash command prompt turn.
-func (h *Host) PromptCommand(ctx context.Context, sessionID string, cmd config.Command) (prompt.Result, error) {
+func (h *Host) PromptCommand(ctx context.Context, sessionID string, cmd config.Command) (res prompt.Result, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.prompt_command", attribute.String("acp.session_id", sessionID))
+	defer end(&err)
+
 	return rpc.Invoke[prompt.Result](ctx, h.conn, rpc.MethodSessionPrompt, prompt.Params{
 		SessionID: sessionID,
 		Command:   &cmd,
@@ -165,17 +178,26 @@ func (h *Host) PromptCommand(ctx context.Context, sessionID string, cmd config.C
 }
 
 // Cancel sends a cancellation notification for an in-progress prompt.
-func (h *Host) Cancel(ctx context.Context, sessionID string) error {
+func (h *Host) Cancel(ctx context.Context, sessionID string) (err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.cancel", attribute.String("acp.session_id", sessionID))
+	defer end(&err)
+
 	return h.conn.Notify(ctx, rpc.MethodSessionCancel, session.Cancel{SessionID: sessionID})
 }
 
 // SetMode changes the session mode (deprecated).
-func (h *Host) SetMode(ctx context.Context, p config.ModeParams) (config.ModeResult, error) {
+func (h *Host) SetMode(ctx context.Context, p config.ModeParams) (res config.ModeResult, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.set_mode")
+	defer end(&err)
+
 	return rpc.Invoke[config.ModeResult](ctx, h.conn, rpc.MethodSetMode, p)
 }
 
 // SetOption changes a config option value.
-func (h *Host) SetOption(ctx context.Context, p config.SetParams) (config.SetResult, error) {
+func (h *Host) SetOption(ctx context.Context, p config.SetParams) (res config.SetResult, err error) {
+	ctx, end := startClientSpan(ctx, "acp.host.set_option")
+	defer end(&err)
+
 	return rpc.Invoke[config.SetResult](ctx, h.conn, rpc.MethodSetConfig, p)
 }
 
@@ -222,7 +244,10 @@ func (h *Host) activeSession() string {
 	return h.session
 }
 
-func (h *Host) handlePermission(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handlePermission(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.permission")
+	defer end(&err)
+
 	var p tool.Permission
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid permission params"}
@@ -230,7 +255,10 @@ func (h *Host) handlePermission(ctx context.Context, req *rpc.Request) (any, err
 	return h.cfg.Permission(ctx, p)
 }
 
-func (h *Host) handleReadFile(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleReadFile(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.fs.read")
+	defer end(&err)
+
 	var p fs.ReadParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid read params"}
@@ -238,7 +266,10 @@ func (h *Host) handleReadFile(ctx context.Context, req *rpc.Request) (any, error
 	return h.cfg.FS.ReadFile(ctx, h.activeSession(), p)
 }
 
-func (h *Host) handleWriteFile(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleWriteFile(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.fs.write")
+	defer end(&err)
+
 	var p fs.WriteParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid write params"}
@@ -246,7 +277,10 @@ func (h *Host) handleWriteFile(ctx context.Context, req *rpc.Request) (any, erro
 	return h.cfg.FS.WriteFile(ctx, h.activeSession(), p)
 }
 
-func (h *Host) handleTerminalCreate(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleTerminalCreate(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.terminal.create")
+	defer end(&err)
+
 	var p terminal.Create
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid terminal params"}
@@ -258,7 +292,10 @@ func (h *Host) handleTerminalCreate(ctx context.Context, req *rpc.Request) (any,
 	return terminal.Created{TerminalID: id}, nil
 }
 
-func (h *Host) handleTerminalOutput(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleTerminalOutput(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.terminal.output")
+	defer end(&err)
+
 	var p terminal.Ref
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid terminal params"}
@@ -266,7 +303,10 @@ func (h *Host) handleTerminalOutput(ctx context.Context, req *rpc.Request) (any,
 	return h.cfg.Terminal.Output(ctx, h.activeSession(), p.TerminalID)
 }
 
-func (h *Host) handleTerminalWait(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleTerminalWait(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.terminal.wait")
+	defer end(&err)
+
 	var p terminal.Ref
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid terminal params"}
@@ -274,7 +314,10 @@ func (h *Host) handleTerminalWait(ctx context.Context, req *rpc.Request) (any, e
 	return h.cfg.Terminal.Wait(ctx, h.activeSession(), p.TerminalID)
 }
 
-func (h *Host) handleTerminalKill(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleTerminalKill(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.terminal.kill")
+	defer end(&err)
+
 	var p terminal.Ref
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid terminal params"}
@@ -285,7 +328,10 @@ func (h *Host) handleTerminalKill(ctx context.Context, req *rpc.Request) (any, e
 	return struct{}{}, nil
 }
 
-func (h *Host) handleTerminalRelease(ctx context.Context, req *rpc.Request) (any, error) {
+func (h *Host) handleTerminalRelease(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.host.terminal.release")
+	defer end(&err)
+
 	var p terminal.Ref
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid terminal params"}

@@ -24,6 +24,7 @@ import (
 	"github.com/vinayprograms/agentkit/acp/proto/terminal"
 	"github.com/vinayprograms/agentkit/acp/proto/tool"
 	"github.com/vinayprograms/agentkit/acp/proto/update"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Handler is the core agent behavior. Implement this to handle prompts.
@@ -181,7 +182,10 @@ func (a *Agent) handleInit(_ context.Context, _ *rpc.Request) (any, error) {
 	}, nil
 }
 
-func (a *Agent) handleAuth(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handleAuth(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.auth")
+	defer end(&err)
+
 	if a.cfg.Auth == nil {
 		return struct{}{}, nil
 	}
@@ -196,7 +200,10 @@ func (a *Agent) handleAuth(ctx context.Context, req *rpc.Request) (any, error) {
 	return struct{}{}, nil
 }
 
-func (a *Agent) handleNewSession(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handleNewSession(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.session.new")
+	defer end(&err)
+
 	var p session.Params
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid session params"}
@@ -217,7 +224,10 @@ func (a *Agent) handleNewSession(ctx context.Context, req *rpc.Request) (any, er
 	return session.Result{Session: a.session}, nil
 }
 
-func (a *Agent) handleLoadSession(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handleLoadSession(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.session.load")
+	defer end(&err)
+
 	if a.cfg.LoadSession == nil {
 		return nil, &rpc.Error{Code: rpc.ErrInternal, Message: "session loading not supported"}
 	}
@@ -233,7 +243,12 @@ func (a *Agent) handleLoadSession(ctx context.Context, req *rpc.Request) (any, e
 	return result, nil
 }
 
-func (a *Agent) handlePrompt(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handlePrompt(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.prompt",
+		attribute.String("acp.session_id", a.session.ID),
+	)
+	defer end(&err)
+
 	var p prompt.Params
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid prompt params"}
@@ -246,6 +261,10 @@ func (a *Agent) handlePrompt(ctx context.Context, req *rpc.Request) (any, error)
 }
 
 func (a *Agent) handleCancel(ctx context.Context, n *rpc.Notification) {
+	var err error
+	ctx, end := startServerSpan(ctx, "acp.agent.cancel")
+	defer end(&err)
+
 	if a.cfg.Cancel == nil {
 		return
 	}
@@ -255,7 +274,10 @@ func (a *Agent) handleCancel(ctx context.Context, n *rpc.Notification) {
 	a.cfg.Cancel(ctx, p.SessionID)
 }
 
-func (a *Agent) handleSetMode(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handleSetMode(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.set_mode")
+	defer end(&err)
+
 	var p config.ModeParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid mode params"}
@@ -263,7 +285,10 @@ func (a *Agent) handleSetMode(ctx context.Context, req *rpc.Request) (any, error
 	return a.cfg.SetMode(ctx, p)
 }
 
-func (a *Agent) handleSetOption(ctx context.Context, req *rpc.Request) (any, error) {
+func (a *Agent) handleSetOption(ctx context.Context, req *rpc.Request) (res any, err error) {
+	ctx, end := startServerSpan(ctx, "acp.agent.set_option")
+	defer end(&err)
+
 	var p config.SetParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return nil, &rpc.Error{Code: rpc.ErrBadParams, Message: "invalid config params"}

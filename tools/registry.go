@@ -4,7 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("github.com/vinayprograms/agentkit/tools")
 
 // Entry holds a tool prepared for registration, optionally with guards.
 type Entry struct {
@@ -87,19 +94,36 @@ func (r *Registry) Has(name string) bool {
 
 // Execute validates args and runs the named tool.
 func (r *Registry) Execute(ctx context.Context, name string, rawArgs map[string]any) (string, error) {
+	ctx, span := tracer.Start(ctx, "tool.execute",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("tool.name", name)),
+	)
+	defer span.End()
+
 	r.mu.RLock()
 	entry, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		err := fmt.Errorf("unknown tool: %s", name)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 
 	args, err := Validate(entry.tool.Parameters(), rawArgs)
 	if err != nil {
-		return "", fmt.Errorf("tool %s: %w", name, err)
+		err = fmt.Errorf("tool %s: %w", name, err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 
-	return entry.tool.Execute(ctx, args)
+	result, err := entry.tool.Execute(ctx, args)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return result, err
 }
 
 // Definitions returns LLM-facing definitions for all registered tools.

@@ -10,8 +10,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("github.com/vinayprograms/agentkit/acp/internal/rpc")
 
 // Sentinel errors.
 var (
@@ -83,7 +88,19 @@ func (c *Conn) HandleNotify(method string, h NotifyHandler) error {
 // Call sends a request and blocks until a response is received, the context
 // is cancelled, or the connection closes. The caller inspects resp.Error
 // for protocol-level errors.
-func (c *Conn) Call(ctx context.Context, method string, params any) (*Response, error) {
+func (c *Conn) Call(ctx context.Context, method string, params any) (resp *Response, err error) {
+	ctx, span := tracer.Start(ctx, "rpc.call",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("rpc.method", method)),
+	)
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	select {
 	case <-c.done:
 		return nil, ErrClosed
@@ -233,13 +250,24 @@ func (c *Conn) dispatch(ctx context.Context, data []byte) {
 }
 
 func (c *Conn) handleRequest(ctx context.Context, req *Request) {
+	ctx, span := tracer.Start(ctx, "rpc.handle",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attribute.String("rpc.method", req.Method)),
+	)
+	defer span.End()
+
 	h, ok := c.handlers[req.Method]
 	if !ok {
+		span.SetStatus(codes.Error, "method not found")
 		c.respondError(req.ID, ErrNoMethod, "method not found")
 		return
 	}
 
 	result, err := h(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	if err != nil {
 		var acpErr *Error
 		if errors.As(err, &acpErr) {

@@ -16,6 +16,7 @@ import (
 	"github.com/blevesearch/bleve/v2/mapping"
 	"github.com/blevesearch/bleve/v2/search/query"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // BleveStore implements Store using Bleve for BM25 full-text search.
@@ -118,11 +119,17 @@ func buildIndexMapping() mapping.IndexMapping {
 }
 
 // RememberObservation stores an observation with its category and returns the ID.
-func (s *BleveStore) RememberObservation(ctx context.Context, content, category, source string) (string, error) {
+func (s *BleveStore) RememberObservation(ctx context.Context, content, category, source string) (id string, err error) {
+	_, end := startSpan(ctx, "memory.remember_observation", "bleve",
+		attribute.String("memory.category", category),
+		attribute.String("memory.source", source),
+	)
+	defer end(&err)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id := uuid.New().String()
+	id = uuid.New().String()
 	now := time.Now()
 
 	doc := ObservationDocument{
@@ -142,8 +149,10 @@ func (s *BleveStore) RememberObservation(ctx context.Context, content, category,
 }
 
 // RememberFIL stores multiple observations and returns their IDs.
-func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) ([]string, error) {
-	var ids []string
+func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lessons []string, source string) (ids []string, err error) {
+	ctx, end := startSpan(ctx, "memory.remember_fil", "bleve", attribute.String("memory.source", source))
+	defer end(&err)
+
 
 	for _, f := range findings {
 		id, err := s.RememberObservation(ctx, f, "finding", source)
@@ -173,7 +182,10 @@ func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lesson
 }
 
 // RetrieveByID gets a single observation by ID.
-func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (*ObservationItem, error) {
+func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (item *ObservationItem, err error) {
+	_, end := startSpan(ctx, "memory.retrieve_by_id", "bleve")
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -183,9 +195,9 @@ func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (*ObservationI
 	searchReq.Fields = []string{"content", "category"}
 	searchReq.Size = 1
 
-	results, err := s.index.Search(searchReq)
-	if err != nil {
-		return nil, err
+	results, searchErr := s.index.Search(searchReq)
+	if searchErr != nil {
+		return nil, searchErr
 	}
 
 	if results.Total == 0 {
@@ -193,7 +205,7 @@ func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (*ObservationI
 	}
 
 	hit := results.Hits[0]
-	item := &ObservationItem{
+	item = &ObservationItem{
 		ID: id,
 	}
 
@@ -208,7 +220,10 @@ func (s *BleveStore) RetrieveByID(ctx context.Context, id string) (*ObservationI
 }
 
 // RecallByCategory performs semantic search for a specific category.
-func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category string, limit int) ([]string, error) {
+func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category string, limit int) (results []string, err error) {
+	_, end := startSpan(ctx, "memory.recall_by_category", "bleve", attribute.String("memory.category", category))
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -241,7 +256,6 @@ func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category s
 	}
 
 	// Extract content from results
-	var results []string
 	for _, hit := range searchResult.Hits {
 		if content, ok := hit.Fields["content"].(string); ok {
 			results = append(results, content)
@@ -252,7 +266,10 @@ func (s *BleveStore) RecallByCategory(ctx context.Context, queryText, category s
 }
 
 // RecallFIL performs semantic search and returns results grouped as Findings, Insights, Lessons.
-func (s *BleveStore) RecallFIL(ctx context.Context, queryText string, limitPerCategory int) (*FILResult, error) {
+func (s *BleveStore) RecallFIL(ctx context.Context, queryText string, limitPerCategory int) (res *FILResult, err error) {
+	ctx, end := startSpan(ctx, "memory.recall_fil", "bleve")
+	defer end(&err)
+
 	if limitPerCategory <= 0 {
 		limitPerCategory = 5
 	}
@@ -300,7 +317,10 @@ func (s *BleveStore) RecallFIL(ctx context.Context, queryText string, limitPerCa
 }
 
 // Recall performs semantic search for relevant memories.
-func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOpts) ([]MemoryResult, error) {
+func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOpts) (results []MemoryResult, err error) {
+	_, end := startSpan(ctx, "memory.recall", "bleve")
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -324,7 +344,6 @@ func (s *BleveStore) Recall(ctx context.Context, queryText string, opts RecallOp
 	}
 
 	// Convert results
-	var results []MemoryResult
 	for _, hit := range searchResult.Hits {
 		// Convert score to 0-1 range (BM25 scores can be > 1)
 		score := float32(hit.Score)
@@ -407,7 +426,10 @@ func (s *BleveStore) Search(queryStr string) (map[string]string, error) {
 }
 
 // ConsolidateSession extracts and stores insights from a session transcript.
-func (s *BleveStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) error {
+func (s *BleveStore) ConsolidateSession(ctx context.Context, sessionID string, transcript []Message) (err error) {
+	ctx, end := startSpan(ctx, "memory.consolidate_session", "bleve", attribute.String("memory.session_id", sessionID))
+	defer end(&err)
+
 	if len(transcript) == 0 {
 		return nil
 	}
@@ -484,7 +506,10 @@ func (s *BleveStore) saveKV() error {
 
 // ListAll returns all observations, optionally filtered by category.
 // If category is empty, returns all observations.
-func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) ([]ObservationItem, error) {
+func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) (items []ObservationItem, err error) {
+	_, end := startSpan(ctx, "memory.list_all", "bleve", attribute.String("memory.category", category))
+	defer end(&err)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -511,7 +536,7 @@ func (s *BleveStore) ListAll(ctx context.Context, category string, limit int) ([
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	items := make([]ObservationItem, 0, len(result.Hits))
+	items = make([]ObservationItem, 0, len(result.Hits))
 	for _, hit := range result.Hits {
 		item := ObservationItem{ID: hit.ID}
 		if v, ok := hit.Fields["content"].(string); ok {

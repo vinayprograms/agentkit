@@ -78,6 +78,14 @@ func New(cfg Config) (Model, error) {
 		return nil, err
 	}
 
+	m, err := newModel(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return withTracing(m, cfg.Service, cfg.Model), nil
+}
+
+func newModel(cfg Config) (Model, error) {
 	switch cfg.Service {
 	case "anthropic":
 		return newAnthropic(anthropicConfig{

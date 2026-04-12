@@ -144,7 +144,7 @@ func TestNewOllamaCloudAlias(t *testing.T) {
 }
 
 func TestNewOllamaDefaultBaseURL(t *testing.T) {
-	e, err := New(Config{Provider: "ollama-local", Model: "nomic-embed-text"})
+	e, err := newInner(Config{Provider: "ollama-local", Model: "nomic-embed-text"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

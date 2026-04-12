@@ -30,6 +30,14 @@ type Embedder interface {
 // New creates an Embedder from the given configuration.
 // Returns nil if provider is "none" or empty.
 func New(cfg Config) (Embedder, error) {
+	e, err := newInner(cfg)
+	if err != nil || e == nil {
+		return e, err
+	}
+	return withTracing(e, strings.ToLower(cfg.Provider), cfg.Model), nil
+}
+
+func newInner(cfg Config) (Embedder, error) {
 	switch strings.ToLower(cfg.Provider) {
 	case "", "none":
 		return nil, nil

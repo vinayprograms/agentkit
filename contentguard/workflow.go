@@ -3,7 +3,31 @@ package contentguard
 import (
 	"context"
 	"fmt"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// evaluateStage wraps stage.Evaluate in a span.
+func evaluateStage(ctx context.Context, stage Stage, req Request) (*Finding, error) {
+	ctx, span := tracer.Start(ctx, "contentguard.stage",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("contentguard.stage", fmt.Sprintf("%T", stage))),
+	)
+	defer span.End()
+
+	finding, err := stage.Evaluate(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return finding, err
+	}
+	if finding != nil {
+		span.SetAttributes(attribute.String("contentguard.verdict", string(finding.Verdict)))
+	}
+	return finding, nil
+}
 
 // Workflow defines how stages are executed in the verification pipeline.
 type Workflow interface {
@@ -24,7 +48,7 @@ func (escalatory) Execute(ctx context.Context, stages []Stage, req Request) *Res
 	result := &Result{Verdict: Deny, ToolName: req.ToolName}
 
 	for _, stage := range stages {
-		finding, err := stage.Evaluate(ctx, req)
+		finding, err := evaluateStage(ctx, stage, req)
 		if err != nil {
 			result.Rationale = fmt.Sprintf("stage error: %v", err)
 			result.Findings = append(result.Findings, &Finding{
@@ -67,7 +91,7 @@ func (paranoid) Execute(ctx context.Context, stages []Stage, req Request) *Resul
 	result := &Result{Verdict: Allow, ToolName: req.ToolName}
 
 	for _, stage := range stages {
-		finding, err := stage.Evaluate(ctx, req)
+		finding, err := evaluateStage(ctx, stage, req)
 		if err != nil {
 			result.Verdict = Deny
 			result.Rationale = fmt.Sprintf("stage error: %v", err)
