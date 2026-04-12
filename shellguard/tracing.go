@@ -13,6 +13,12 @@ const scope = "shellguard"
 
 var tracer = otel.Tracer("github.com/vinayprograms/agentkit/shellguard")
 
+// event records a point-in-time marker on the current span.
+// Use for decision points and state transitions that don't warrant a full span.
+func event(ctx context.Context, name string, attrs ...attribute.KeyValue) {
+	otrace.SpanFromContext(ctx).AddEvent(name, otrace.WithAttributes(attrs...))
+}
+
 // trace starts an internal span scoped to the shellguard package.
 func trace(ctx context.Context, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {
 	ctx, span := tracer.Start(ctx, scope+"."+op,

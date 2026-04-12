@@ -19,6 +19,12 @@ const (
 
 var tracer = otel.Tracer("github.com/vinayprograms/agentkit/acp/internal/rpc")
 
+// event records a point-in-time marker on the current span.
+// Use for decision points and state transitions that don't warrant a full span.
+func event(ctx context.Context, name string, attrs ...attribute.KeyValue) {
+	otrace.SpanFromContext(ctx).AddEvent(name, otrace.WithAttributes(attrs...))
+}
+
 // trace starts a span scoped to the rpc package. The kind argument chooses
 // client (outgoing call) or server (incoming request) span kind.
 func trace(ctx context.Context, kind otrace.SpanKind, op string, attrs ...attribute.KeyValue) (context.Context, func(*error)) {

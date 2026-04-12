@@ -76,8 +76,10 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 
 	// Step 1: deterministic checks (built-in, non-optional)
 	deterministicFinding := g.deterministicCheck(toolName, args)
+	event(ctx, "deterministic.evaluated", attribute.String("verdict", string(deterministicFinding.Verdict)))
 
 	if deterministicFinding.Verdict == Allow {
+		event(ctx, "deterministic.short_circuit")
 		return &Result{
 			Verdict:  Allow,
 			ToolName: toolName,
@@ -87,6 +89,7 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 
 	// Step 2: delegate to workflow
 	if len(g.stages) == 0 {
+		event(ctx, "workflow.no_stages")
 		return &Result{
 			Verdict:   Deny,
 			Rationale: "no verification stages configured",
@@ -104,7 +107,9 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 		Context:       g.context,
 	}
 
+	event(ctx, "workflow.started", attribute.Int("stages.count", len(g.stages)))
 	result := g.workflow.Execute(ctx, g.stages, req)
+	event(ctx, "workflow.completed", attribute.String("verdict", string(result.Verdict)))
 
 	// Prepend deterministic finding
 	result.Findings = append([]*Finding{deterministicFinding}, result.Findings...)

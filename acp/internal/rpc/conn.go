@@ -99,6 +99,7 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (resp *Respo
 	if err != nil {
 		return nil, fmt.Errorf("rpc: marshal params: %w", err)
 	}
+	event(ctx, "marshaled", attribute.Int("bytes", len(raw)))
 
 	ch := make(chan *Response, 1)
 	c.pending.Store(id, ch)
@@ -112,13 +113,17 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (resp *Respo
 	}); err != nil {
 		return nil, err
 	}
+	event(ctx, "sent")
 
 	select {
 	case resp := <-ch:
+		event(ctx, "received", attribute.Bool("has_error", resp.Error != nil))
 		return resp, nil
 	case <-c.done:
+		event(ctx, "connection_closed")
 		return nil, ErrClosed
 	case <-ctx.Done():
+		event(ctx, "context_cancelled")
 		return nil, ctx.Err()
 	}
 }
@@ -242,11 +247,13 @@ func (c *Conn) handleRequest(ctx context.Context, req *Request) {
 
 	h, ok := c.handlers[req.Method]
 	if !ok {
+		event(ctx, "handler.not_found")
 		err = errors.New("method not found")
 		c.respondError(req.ID, ErrNoMethod, "method not found")
 		return
 	}
 
+	event(ctx, "handler.resolved")
 	result, herr := h(ctx, req)
 	if herr != nil {
 		err = herr

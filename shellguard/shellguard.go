@@ -9,6 +9,7 @@ import (
 
 	"github.com/vinayprograms/agentkit/llm"
 	"github.com/vinayprograms/agentkit/tools"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Result contains the outcome of a command security check.
@@ -67,24 +68,32 @@ func (g *Gate) check(ctx context.Context, command string) error {
 	allowed, reason := g.checkDeterministic(command)
 	g.logDecision(command, "deterministic", allowed, reason, 0, 0, 0)
 	if !allowed {
+		event(ctx, "deterministic.blocked", attribute.String("reason", reason))
 		return fmt.Errorf("blocked: %s", reason)
 	}
+	event(ctx, "deterministic.passed")
 
 	// Step 2: LLM analysis (if model configured and allowed dirs set)
-	if g.model != nil && len(g.allowedDirs) > 0 {
-		start := time.Now()
-		result, err := llmCheck(ctx, g.model, command, g.allowedDirs, g.workspace, g.securityScope)
-		durationMs := time.Since(start).Milliseconds()
-		if err != nil {
-			g.logDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
-			return fmt.Errorf("LLM check failed: %v", err)
-		}
-		g.logDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
-		if !result.Allowed {
-			return fmt.Errorf("blocked: %s", result.Reason)
-		}
+	if g.model == nil || len(g.allowedDirs) == 0 {
+		event(ctx, "llm.skipped")
+		return nil
 	}
 
+	event(ctx, "llm.started")
+	start := time.Now()
+	result, err := llmCheck(ctx, g.model, command, g.allowedDirs, g.workspace, g.securityScope)
+	durationMs := time.Since(start).Milliseconds()
+	if err != nil {
+		g.logDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
+		event(ctx, "llm.error", attribute.String("error", err.Error()))
+		return fmt.Errorf("LLM check failed: %v", err)
+	}
+	g.logDecision(command, "llm", result.Allowed, result.Reason, durationMs, result.InputTokens, result.OutputTokens)
+	if !result.Allowed {
+		event(ctx, "llm.blocked", attribute.String("reason", result.Reason))
+		return fmt.Errorf("blocked: %s", result.Reason)
+	}
+	event(ctx, "llm.allowed")
 	return nil
 }
 
