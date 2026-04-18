@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 )
@@ -56,10 +57,13 @@ func withRetry[T any](ctx context.Context, cfg RetryConfig, providerName string,
 			return zero, fmt.Errorf("%s request failed after %d retries: %w", providerName, maxRetries, err)
 		}
 
+		// Full jitter: sleep is uniform in [0, backoff) to break up
+		// thundering herds when many callers retry in lockstep.
+		sleep := time.Duration(rand.Float64() * float64(backoff))
 		select {
 		case <-ctx.Done():
 			return zero, ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(sleep):
 		}
 
 		backoff = time.Duration(float64(backoff) * backoffFactor)
