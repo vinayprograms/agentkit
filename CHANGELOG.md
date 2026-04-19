@@ -5,6 +5,21 @@ All notable changes to agentkit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-04-18
+
+### Changed
+
+- `shutdown.Shutdown` is now documented as idempotent: subsequent callers
+  observe the first caller's result. An unreachable `default` branch that
+  claimed to return `ErrAlreadyShutdown` was removed — `sync.Once` already
+  blocks concurrent callers until `done` is closed, so that branch was
+  never hit in practice. `ErrAlreadyShutdown` is retained as deprecated
+  for API compatibility.
+
+### Tests
+
+- `errors`, `shellguard`, `shutdown` raised to 100% statement coverage.
+
 ## [1.0.1] - 2026-04-18
 
 ### Fixed
