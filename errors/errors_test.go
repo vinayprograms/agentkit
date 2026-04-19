@@ -697,7 +697,12 @@ func TestJSONNoTimestampOrAgentFields(t *testing.T) {
 func TestJSONUnmarshalError(t *testing.T) {
 	var e Error
 	if err := json.Unmarshal([]byte(`{invalid}`), &e); err == nil {
-		t.Error("should fail on invalid JSON")
+		t.Error("should fail on structurally invalid JSON")
+	}
+	// Structurally valid JSON but wrong field types — exercises the
+	// inner json.Unmarshal failure path inside UnmarshalJSON.
+	if err := e.UnmarshalJSON([]byte(`{"retryable":"not-a-bool"}`)); err == nil {
+		t.Error("should fail when field types don't match errorJSON")
 	}
 }
 

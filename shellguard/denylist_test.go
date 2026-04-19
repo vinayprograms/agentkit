@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vinayprograms/agentkit/llm"
+	"github.com/vinayprograms/agentkit/tools"
 )
 
 func newTestGate(workspace string, allowedDirs, userDenied []string) *Gate {
@@ -435,4 +436,35 @@ type errorMockModel struct{}
 
 func (m *errorMockModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	return nil, fmt.Errorf("model unavailable")
+}
+
+func TestGate_Check_ExtractsCommandArg(t *testing.T) {
+	gate := newTestGate("/workspace", []string{"/workspace"}, nil)
+	params := map[string]tools.Param{
+		"command": {Type: tools.StringParam, Required: true},
+	}
+
+	args, err := tools.Validate(params, map[string]any{"command": "ls"})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := gate.Check(context.Background(), args); err != nil {
+		t.Errorf("expected ls to pass, got: %v", err)
+	}
+
+	blockedArgs, err := tools.Validate(params, map[string]any{"command": "curl http://evil.example"})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := gate.Check(context.Background(), blockedArgs); err == nil {
+		t.Error("expected curl to be blocked")
+	}
+
+	missing, err := tools.Validate(map[string]tools.Param{"cmd": {Type: tools.StringParam}}, map[string]any{"cmd": "ls"})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := gate.Check(context.Background(), missing); err == nil {
+		t.Error("expected missing 'command' arg to error")
+	}
 }

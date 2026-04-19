@@ -8,9 +8,6 @@ import (
 
 // Common errors.
 var (
-	// ErrAlreadyShutdown indicates shutdown was already initiated.
-	ErrAlreadyShutdown = errors.New("shutdown already initiated")
-
 	// ErrTimeout indicates shutdown did not complete within the timeout.
 	ErrTimeout = errors.New("shutdown timeout exceeded")
 
@@ -19,6 +16,13 @@ var (
 
 	// ErrInvalidConfig indicates invalid configuration.
 	ErrInvalidConfig = errors.New("invalid configuration")
+
+	// ErrAlreadyShutdown is retained for API compatibility but is never
+	// returned — Shutdown is idempotent and returns the first call's result
+	// to all callers.
+	//
+	// Deprecated: no longer returned by any method.
+	ErrAlreadyShutdown = errors.New("shutdown already initiated")
 )
 
 // Handler is implemented by components that need graceful shutdown.

@@ -25,8 +25,8 @@ type Sequence interface {
 	RegisterWithPhase(name string, h Handler, phase int)
 
 	// Shutdown initiates graceful shutdown, calling all handlers in phase order.
-	// Returns ErrAlreadyShutdown if already complete. The context controls
-	// the total time budget; handlers receive this same context.
+	// It is idempotent: subsequent callers observe the same result as the first.
+	// The context controls the total time budget; handlers receive this same context.
 	Shutdown(ctx context.Context) error
 
 	// ShutdownWithTimeout initiates shutdown with a timeout.
@@ -92,22 +92,15 @@ func (s *sequence) RegisterWithPhase(name string, h Handler, phase int) {
 	s.handlers = append(s.handlers, entry{name: name, handler: h, phase: phase})
 }
 
-// Shutdown initiates graceful shutdown.
+// Shutdown initiates graceful shutdown. It is idempotent: the first caller
+// runs the sequence and subsequent callers observe the same result.
 func (s *sequence) Shutdown(ctx context.Context) error {
-	var err error
 	s.shutdownOnce.Do(func() {
 		s.start = time.Now()
-		err = s.run(ctx)
-		s.shutdownErr = err
+		s.shutdownErr = s.run(ctx)
 		close(s.done)
 	})
-
-	select {
-	case <-s.done:
-		return s.shutdownErr
-	default:
-		return ErrAlreadyShutdown
-	}
+	return s.shutdownErr
 }
 
 // ShutdownWithTimeout initiates shutdown with a timeout.
