@@ -168,6 +168,14 @@ func TestResolveThinkingLevelRequestOverride(t *testing.T) {
 	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingHigh}, req); got != ThinkingOff {
 		t.Errorf("auto override on simple message should yield Off (heuristic), got %s", got)
 	}
+
+	// Tools flow through to the heuristic via req.Tools (regression guard for
+	// the signature change that folded messages/tools into ChatRequest).
+	manyTools := make([]ToolDef, 11) // > 10 trips detectHighComplexity
+	req = ChatRequest{Messages: simple, Tools: manyTools, Thinking: ThinkingAuto}
+	if got := ResolveThinkingLevel(ThinkingConfig{}, req); got != ThinkingHigh {
+		t.Errorf("auto with >10 tools should yield High via heuristic, got %s", got)
+	}
 }
 
 
