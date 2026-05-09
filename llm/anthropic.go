@@ -190,7 +190,7 @@ func thinkingLevelToAnthropicBudget(level ThinkingLevel, configBudget int64) int
 
 // applyAnthropicThinking configures extended thinking on the request params.
 func applyAnthropicThinking(cfg ThinkingConfig, req ChatRequest, params *anthropic.MessageNewParams, maxTokens *int64) {
-	level := ResolveThinkingLevel(cfg, req.Messages, req.Tools)
+	level := ResolveThinkingLevel(cfg, req)
 	if level == ThinkingOff {
 		return
 	}

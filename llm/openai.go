@@ -81,7 +81,7 @@ func (p *openAIModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	}
 
 	// Add reasoning effort for o1/o3 models
-	thinkingLevel := ResolveThinkingLevel(p.thinking, req.Messages, req.Tools)
+	thinkingLevel := ResolveThinkingLevel(p.thinking, req)
 	if thinkingLevel != ThinkingOff && isReasoningModel(p.model) {
 		var effort shared.ReasoningEffort
 		switch thinkingLevel {

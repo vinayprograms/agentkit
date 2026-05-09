@@ -136,7 +136,7 @@ func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 	}
 
 	// Determine thinking level
-	thinkingLevel := ResolveThinkingLevel(p.thinking, req.Messages, req.Tools)
+	thinkingLevel := ResolveThinkingLevel(p.thinking, req)
 	var thinkParam interface{}
 	if thinkingLevel != ThinkingOff {
 		// GPT-OSS uses string levels, others use bool

@@ -221,12 +221,17 @@ func containsMathExpression(text string) bool {
 	return false
 }
 
-// ResolveThinkingLevel resolves the thinking level for a request.
-// If config is Auto, it uses the heuristic classifier.
-func ResolveThinkingLevel(config ThinkingConfig, messages []Message, tools []ToolDef) ThinkingLevel {
-	if config.Level == ThinkingAuto || config.Level == "" {
-		return InferThinkingLevel(messages, tools)
+// ResolveThinkingLevel resolves the effective thinking level for a request.
+// Precedence: req.Thinking (per-call override) > config.Level (provider default).
+// Auto (or empty config.Level when no override is set) runs the heuristic classifier.
+func ResolveThinkingLevel(config ThinkingConfig, req ChatRequest) ThinkingLevel {
+	level := req.Thinking
+	if level == "" {
+		level = config.Level
 	}
-	return config.Level
+	if level == ThinkingAuto || level == "" {
+		return InferThinkingLevel(req.Messages, req.Tools)
+	}
+	return level
 }
 

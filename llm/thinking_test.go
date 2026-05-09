@@ -124,28 +124,49 @@ func TestInferThinkingLevel(t *testing.T) {
 }
 
 func TestResolveThinkingLevel(t *testing.T) {
-	messages := []Message{{Role: "user", Content: "Simple hello"}}
-	tools := []ToolDef{}
+	simple := ChatRequest{Messages: []Message{{Role: "user", Content: "Simple hello"}}}
 
 	// Auto mode uses classifier
-	config := ThinkingConfig{Level: ThinkingAuto}
-	result := ResolveThinkingLevel(config, messages, tools)
-	if result != ThinkingOff {
-		t.Errorf("auto mode should return Off for simple message, got %s", result)
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingAuto}, simple); got != ThinkingOff {
+		t.Errorf("auto mode should return Off for simple message, got %s", got)
 	}
 
 	// Fixed mode ignores classifier
-	config = ThinkingConfig{Level: ThinkingHigh}
-	result = ResolveThinkingLevel(config, messages, tools)
-	if result != ThinkingHigh {
-		t.Errorf("fixed mode should return High, got %s", result)
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingHigh}, simple); got != ThinkingHigh {
+		t.Errorf("fixed mode should return High, got %s", got)
 	}
 
 	// Empty level defaults to auto
-	config = ThinkingConfig{Level: ""}
-	result = ResolveThinkingLevel(config, messages, tools)
-	if result != ThinkingOff {
-		t.Errorf("empty level should default to auto, got %s", result)
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ""}, simple); got != ThinkingOff {
+		t.Errorf("empty level should default to auto, got %s", got)
+	}
+}
+
+func TestResolveThinkingLevelRequestOverride(t *testing.T) {
+	simple := []Message{{Role: "user", Content: "Simple hello"}}
+
+	// Override beats provider default (force-on a provider configured Off).
+	req := ChatRequest{Messages: simple, Thinking: ThinkingHigh}
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingOff}, req); got != ThinkingHigh {
+		t.Errorf("request override should win over provider Off, got %s", got)
+	}
+
+	// Override beats provider default (force-off a provider configured High).
+	req = ChatRequest{Messages: simple, Thinking: ThinkingOff}
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingHigh}, req); got != ThinkingOff {
+		t.Errorf("request override should win over provider High, got %s", got)
+	}
+
+	// No override falls through to provider config.
+	req = ChatRequest{Messages: simple}
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingMedium}, req); got != ThinkingMedium {
+		t.Errorf("nil override should yield provider Medium, got %s", got)
+	}
+
+	// Auto override runs the heuristic.
+	req = ChatRequest{Messages: simple, Thinking: ThinkingAuto}
+	if got := ResolveThinkingLevel(ThinkingConfig{Level: ThinkingHigh}, req); got != ThinkingOff {
+		t.Errorf("auto override on simple message should yield Off (heuristic), got %s", got)
 	}
 }
 
@@ -178,16 +199,14 @@ func TestDefaultThinkingIsAuto(t *testing.T) {
 	config := ThinkingConfig{Level: ""}
 	
 	// Simple message should get Off (heuristic decides)
-	simpleMessages := []Message{{Role: "user", Content: "Hello"}}
-	result := ResolveThinkingLevel(config, simpleMessages, nil)
-	if result != ThinkingOff {
-		t.Errorf("expected Off for simple hello with empty config, got %s", result)
+	simple := ChatRequest{Messages: []Message{{Role: "user", Content: "Hello"}}}
+	if got := ResolveThinkingLevel(config, simple); got != ThinkingOff {
+		t.Errorf("expected Off for simple hello with empty config, got %s", got)
 	}
-	
+
 	// Complex message should get High (heuristic decides)
-	complexMessages := []Message{{Role: "user", Content: "Prove that P = NP"}}
-	result = ResolveThinkingLevel(config, complexMessages, nil)
-	if result != ThinkingHigh {
-		t.Errorf("expected High for proof request with empty config, got %s", result)
+	complex := ChatRequest{Messages: []Message{{Role: "user", Content: "Prove that P = NP"}}}
+	if got := ResolveThinkingLevel(config, complex); got != ThinkingHigh {
+		t.Errorf("expected High for proof request with empty config, got %s", got)
 	}
 }
