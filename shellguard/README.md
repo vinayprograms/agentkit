@@ -28,7 +28,7 @@ Applied on every command regardless of whether an LLM model is configured:
 
 ## LLM analysis
 
-Runs only when `model != nil` and `allowedDirs` is non-empty. The model evaluates intent and context for commands that pass deterministic checks. Skip this tier for trusted environments where deterministic checks are sufficient.
+Runs when `model != nil`. The model evaluates intent and context for commands that pass deterministic checks. `allowedDirs` is fed into the prompt as context — an empty list means the LLM reasons about the command without directory constraints, not that the check is skipped. Skip this tier by passing `nil` for `model` in trusted environments where deterministic checks are sufficient.
 
 ## Security scope
 

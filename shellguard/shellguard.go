@@ -73,8 +73,9 @@ func (g *Gate) check(ctx context.Context, command string) error {
 	}
 	event(ctx, "deterministic.passed")
 
-	// Step 2: LLM analysis (if model configured and allowed dirs set)
-	if g.model == nil || len(g.allowedDirs) == 0 {
+	// Step 2: LLM analysis (if model configured).
+	// allowedDirs is context for the LLM prompt, not a gate for running it.
+	if g.model == nil {
 		event(ctx, "llm.skipped")
 		return nil
 	}
