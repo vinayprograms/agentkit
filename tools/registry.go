@@ -109,6 +109,25 @@ func (r *Registry) Execute(ctx context.Context, name string, rawArgs map[string]
 	return result, err
 }
 
+// Subset returns a new Registry containing only the entries named in names.
+// Every name must be present; an unknown name returns an error and a nil
+// registry. The returned registry shares Entry pointers with the receiver —
+// entries are immutable after registration so sharing is safe.
+func (r *Registry) Subset(names []string) (*Registry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	sub := &Registry{tools: make(map[string]*Entry, len(names))}
+	for _, name := range names {
+		entry, ok := r.tools[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown tool: %s", name)
+		}
+		sub.tools[name] = entry
+	}
+	return sub, nil
+}
+
 // Definitions returns LLM-facing definitions for all registered tools.
 func (r *Registry) Definitions() []Definition {
 	r.mu.RLock()

@@ -65,6 +65,86 @@ func TestRegistry_Definitions(t *testing.T) {
 	}
 }
 
+func TestRegistry_Subset(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+	reg.Register(New(Hostname()))
+
+	sub, err := reg.Subset([]string{"pwd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sub.Has("pwd") {
+		t.Error("expected pwd in subset")
+	}
+	if sub.Has("hostname") {
+		t.Error("hostname must not be in subset")
+	}
+	if len(sub.Definitions()) != 1 {
+		t.Errorf("expected 1 definition, got %d", len(sub.Definitions()))
+	}
+}
+
+func TestRegistry_SubsetEmpty(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+
+	sub, err := reg.Subset(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sub.Definitions()) != 0 {
+		t.Errorf("expected empty subset, got %d entries", len(sub.Definitions()))
+	}
+}
+
+func TestRegistry_SubsetAll(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+	reg.Register(New(Hostname()))
+
+	sub, err := reg.Subset([]string{"pwd", "hostname"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sub.Definitions()) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(sub.Definitions()))
+	}
+}
+
+func TestRegistry_SubsetUnknown(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+
+	sub, err := reg.Subset([]string{"pwd", "nonexistent"})
+	if err == nil {
+		t.Error("expected error for unknown tool")
+	}
+	if sub != nil {
+		t.Error("expected nil registry on error")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("expected error to name missing tool, got: %v", err)
+	}
+}
+
+func TestRegistry_SubsetSharesEntries(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New(Pwd()))
+
+	sub, err := reg.Subset([]string{"pwd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result, err := sub.Execute(context.Background(), "pwd", nil)
+	if err != nil {
+		t.Fatalf("unexpected execute error: %v", err)
+	}
+	if result == "" {
+		t.Error("expected non-empty result from subset registry")
+	}
+}
+
 func TestRegistry_Execute(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(New(Pwd()))
