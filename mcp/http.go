@@ -22,11 +22,12 @@ type httpClient struct {
 	mu       sync.Mutex
 }
 
-// HTTP creates a ready-to-use Client that connects to a remote MCP server via HTTP.
-// It performs the MCP handshake and discovers available tools.
-func HTTP(ctx context.Context, endpoint string) (Client, error) {
+// HTTP creates a ready-to-use Client that connects to a remote MCP server via
+// the Streamable HTTP transport. It performs the MCP handshake and discovers
+// available tools. Call Close when done.
+func HTTP(ctx context.Context, cfg HTTPConfig) (Client, error) {
 	c := &httpClient{
-		endpoint: endpoint,
+		endpoint: cfg.Endpoint,
 		client:   &http.Client{},
 	}
 

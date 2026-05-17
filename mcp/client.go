@@ -44,11 +44,16 @@ type Content struct {
 	Data string `json:"data,omitempty"` // base64 for images
 }
 
-// ServerConfig configures a local MCP server connection (stdio).
+// ServerConfig configures a local MCP server connection (stdio transport).
 type ServerConfig struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+}
+
+// HTTPConfig configures a remote MCP server connection (Streamable HTTP transport).
+type HTTPConfig struct {
+	Endpoint string `json:"endpoint"`
 }
 
 // --- JSON-RPC types (internal to MCP) ---

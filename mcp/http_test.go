@@ -46,7 +46,7 @@ func TestHTTPClient_CreateAndListTools(t *testing.T) {
 	})
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestHTTPClient_CallTool(t *testing.T) {
 	server := mcpServer([]Tool{{Name: "read", Description: "Read"}})
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestHTTPClient_RefreshTools(t *testing.T) {
 	server := mcpServer([]Tool{{Name: "read", Description: "Read"}})
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestHTTPClient_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := HTTP(context.Background(), server.URL)
+	_, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err == nil {
 		t.Error("expected error for 500 response")
 	}
@@ -122,14 +122,14 @@ func TestHTTPClient_RPCError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := HTTP(context.Background(), server.URL)
+	_, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err == nil {
 		t.Error("expected RPC error")
 	}
 }
 
 func TestHTTPClient_ConnectionError(t *testing.T) {
-	_, err := HTTP(context.Background(), "http://localhost:1")
+	_, err := HTTP(context.Background(), HTTPConfig{Endpoint: "http://localhost:1"})
 	if err == nil {
 		t.Error("expected connection error")
 	}
@@ -160,7 +160,7 @@ func TestHTTPClient_ConstructorFailsOnListToolsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := HTTP(context.Background(), server.URL)
+	_, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err == nil {
 		t.Fatal("expected error when tools/list returns unparseable result")
 	}
@@ -203,7 +203,7 @@ func TestHTTPClient_ListToolsJSONParseError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestHTTPClient_CallToolJSONParseError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestHTTPClient_CallToolRPCError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := HTTP(context.Background(), server.URL)
+	client, err := HTTP(context.Background(), HTTPConfig{Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("HTTP: %v", err)
 	}
