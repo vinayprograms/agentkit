@@ -6,16 +6,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type cpTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Cp creates a tool that copies files/directories within the given workspace.
-func Cp(workspace string) Tool {
-	return &cpTool{workspace: workspace}
+func Cp(workspace string, extraRoots ...string) Tool {
+	return &cpTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *cpTool) Name() string { return "cp" }
@@ -77,15 +77,7 @@ func (t *cpTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *cpTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" && !strings.HasPrefix(path, filepath.Clean(t.workspace)+string(filepath.Separator)) && path != filepath.Clean(t.workspace) {
-		return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }
 
 func copyFile(src, dst string) error {

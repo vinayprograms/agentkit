@@ -20,6 +20,31 @@ func NewExtractor(model llm.Model) *Extractor {
 	return &Extractor{model: model}
 }
 
+// defaultMaxInputChars bounds how much text is sent to the LLM. Input beyond
+// this is truncated, matching the legacy extractor's behavior.
+const defaultMaxInputChars = 4000
+
+// ExtractOption configures a single Extract call.
+type ExtractOption func(*extractOptions)
+
+type extractOptions struct {
+	source        string
+	maxInputChars int
+}
+
+// WithSource labels the text with its origin (e.g. a step name/type), giving
+// the LLM context that improves extraction quality. The label is included in
+// the prompt but never replaces the text itself.
+func WithSource(label string) ExtractOption {
+	return func(o *extractOptions) { o.source = label }
+}
+
+// WithMaxInputChars overrides the input-truncation bound (default 4000).
+// A value <= 0 disables truncation.
+func WithMaxInputChars(n int) ExtractOption {
+	return func(o *extractOptions) { o.maxInputChars = n }
+}
+
 const extractionPrompt = `You are an observation extractor. Given text output, extract:
 
 1. **Findings**: Factual discoveries (facts, data, configurations found)
@@ -34,7 +59,10 @@ Example:
 
 // Extract parses text into findings, insights, and lessons.
 // Returns nil slices if the text is too short or the LLM can't extract anything.
-func (e *Extractor) Extract(ctx context.Context, text string) (findings, insights, lessons []string, err error) {
+//
+// By default input is truncated to 4000 characters; use WithMaxInputChars to
+// change the bound and WithSource to label the text's origin for the LLM.
+func (e *Extractor) Extract(ctx context.Context, text string, opts ...ExtractOption) (findings, insights, lessons []string, err error) {
 	if e.model == nil {
 		return nil, nil, nil, nil
 	}
@@ -43,10 +71,24 @@ func (e *Extractor) Extract(ctx context.Context, text string) (findings, insight
 		return nil, nil, nil, nil
 	}
 
+	o := extractOptions{maxInputChars: defaultMaxInputChars}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	if o.maxInputChars > 0 && len(text) > o.maxInputChars {
+		text = text[:o.maxInputChars] + "\n... [truncated]"
+	}
+
+	userContent := text
+	if o.source != "" {
+		userContent = "Source: " + o.source + "\n\n" + text
+	}
+
 	resp, err := e.model.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: extractionPrompt},
-			{Role: "user", Content: text},
+			{Role: "user", Content: userContent},
 		},
 	})
 	if err != nil {

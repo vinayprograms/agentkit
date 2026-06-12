@@ -23,6 +23,7 @@ import (
 type SpawnFunc func(ctx context.Context, role, task string, outputs []string) (string, error)
 
 type spawnTool struct {
+	mu      sync.RWMutex
 	spawner SpawnFunc
 }
 
@@ -30,6 +31,38 @@ type spawnTool struct {
 // Accepts an array of agent specs. One spec = single agent. Multiple = parallel execution.
 func Spawn(spawner SpawnFunc) Tool {
 	return &spawnTool{spawner: spawner}
+}
+
+// SpawnBinder is a spawn tool whose SpawnFunc can be supplied after the tool is
+// constructed and registered. This resolves the chicken-and-egg case where the
+// natural spawner closes over the executor that owns the tool registry: build
+// the binder, register binder.Tool(), then Bind the spawner once the executor
+// exists. Calling the tool before Bind returns an error.
+type SpawnBinder struct {
+	tool *spawnTool
+}
+
+// NewSpawnBinder returns a binder whose tool is ready to register but not yet
+// wired to a spawner.
+func NewSpawnBinder() *SpawnBinder {
+	return &SpawnBinder{tool: &spawnTool{}}
+}
+
+// Tool returns the registrable spawn tool.
+func (b *SpawnBinder) Tool() Tool { return b.tool }
+
+// Bind sets (or replaces) the SpawnFunc the tool delegates to. Safe to call
+// after the tool has been registered.
+func (b *SpawnBinder) Bind(spawner SpawnFunc) {
+	b.tool.mu.Lock()
+	defer b.tool.mu.Unlock()
+	b.tool.spawner = spawner
+}
+
+func (t *spawnTool) spawnFunc() SpawnFunc {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.spawner
 }
 
 func (t *spawnTool) Name() string { return "spawn_agents" }
@@ -76,7 +109,8 @@ type agentResult struct {
 }
 
 func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
-	if t.spawner == nil {
+	spawner := t.spawnFunc()
+	if spawner == nil {
 		return "", fmt.Errorf("spawn_agents not available (no spawner configured)")
 	}
 
@@ -117,7 +151,7 @@ func (t *spawnTool) Execute(ctx context.Context, args Args) (string, error) {
 		wg.Add(1)
 		go func(idx int, s agentSpec) {
 			defer wg.Done()
-			result, err := t.spawner(ctx, s.role, s.task, s.outputs)
+			result, err := spawner(ctx, s.role, s.task, s.outputs)
 			results <- agentResult{index: idx, result: result, err: err}
 		}(i, spec)
 	}

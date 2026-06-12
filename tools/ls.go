@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -16,12 +15,13 @@ type dirEntry struct {
 }
 
 type lsTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Ls creates a tool that lists directory contents within the given workspace.
-func Ls(workspace string) Tool {
-	return &lsTool{workspace: workspace}
+func Ls(workspace string, extraRoots ...string) Tool {
+	return &lsTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *lsTool) Name() string { return "ls" }
@@ -88,16 +88,5 @@ func (t *lsTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *lsTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" {
-		ws := filepath.Clean(t.workspace)
-		if !strings.HasPrefix(path, ws+string(filepath.Separator)) && path != ws {
-			return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-		}
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

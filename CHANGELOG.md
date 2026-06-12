@@ -5,6 +5,42 @@ All notable changes to agentkit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-12
+
+### Added — gaps found during first real-repo integration
+
+All changes are additive and backward-compatible.
+
+- `credentials`: `Resolve(Lookup, provider)` plus an `OAuthResolver` interface
+  and `FileStore`/`UnionStore` `Resolve` methods, so callers can tell whether a
+  resolved credential is an OAuth token (for `llm.Config.IsOAuthToken`).
+- `credentials`: `StandardPaths`, `Load`, and `ClaudeCLICredentials` convenience
+  helpers (search-path resolution, env+file+Claude-CLI composition).
+- `credentials`: `FileStore.Save` now creates the parent directory; a
+  nonexistent path passed to `NewFileStore` yields an empty usable store.
+- `contentguard`: `Result.Related` exposes the untrusted content blocks in scope
+  for a checked call (taint propagation); `Finding.Latency` carries per-stage
+  timing; exported `ShannonEntropy` and `IsHighEntropy`.
+- `memory`: `Extractor.Extract` accepts `WithSource` and `WithMaxInputChars`
+  options (input truncation defaults to 4000 chars).
+- `tools`: `SpawnBinder` allows late binding of a `SpawnFunc` after registration;
+  `WithHTTPTimeout` option on `Fetch`/`Search`; fs tools accept additional
+  allowed roots via a variadic `extraRoots` constructor parameter.
+- `policy`: `FromTOMLWithUnknownKeys` reports unrecognized TOML keys so consumers
+  can validate them without re-parsing.
+
+### Documentation
+
+- `policy`, `tools`: documented that policy is a model only and enforcement is
+  the consumer's job, with a copy-paste `tools.Guard` example; documented
+  default-deny and the legacy keys `FromTOML` ignores.
+- `tools.Registry.Definitions`: documented that it is not policy-aware.
+- `mcp`: documented the Connect → Register → Deny lifecycle with an example.
+
+### Style
+
+- `gofmt` applied across the repository.
+
 ## [1.0.2] - 2026-04-18
 
 ### Changed

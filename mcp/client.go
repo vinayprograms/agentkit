@@ -1,5 +1,29 @@
 // Package mcp provides MCP (Model Context Protocol) client support.
 // MCP allows connecting to external tool servers over stdio or HTTP.
+//
+// # Connect → Register → Deny lifecycle
+//
+// The intended pattern is to connect a client, register it with a Manager, then
+// narrow its exposed tools with Deny. Deny is a denylist applied after the
+// server advertises its tools, so it composes naturally with a policy probe:
+// list the server's tools, decide which to exclude, and Deny the rest.
+//
+//	client, err := mcp.Stdio(ctx, cfg) // or mcp.HTTP(ctx, cfg)
+//	if err != nil {
+//		return err
+//	}
+//	if err := mgr.Register("filesystem", client); err != nil {
+//		return err
+//	}
+//
+//	// Probe the advertised tools and exclude everything the policy disallows.
+//	var deny []string
+//	for _, t := range client.Tools() {
+//		if !pol.IsToolEnabled("filesystem:" + t.Name) {
+//			deny = append(deny, t.Name)
+//		}
+//	}
+//	mgr.Deny("filesystem", deny)
 package mcp
 
 import (

@@ -17,12 +17,13 @@ type grepMatch struct {
 }
 
 type grepTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Grep creates a tool that searches file contents by regex within the given workspace.
-func Grep(workspace string) Tool {
-	return &grepTool{workspace: workspace}
+func Grep(workspace string, extraRoots ...string) Tool {
+	return &grepTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *grepTool) Name() string { return "grep" }
@@ -130,16 +131,5 @@ func grepFile(re *regexp.Regexp, path string) ([]grepMatch, error) {
 }
 
 func (t *grepTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" {
-		ws := filepath.Clean(t.workspace)
-		if !strings.HasPrefix(path, ws+string(filepath.Separator)) && path != ws {
-			return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-		}
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

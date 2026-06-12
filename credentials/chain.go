@@ -11,13 +11,20 @@ func NewUnionStore(stores ...Lookup) *UnionStore {
 
 // Return the credential from the highest-priority store that has it.
 func (u *UnionStore) Get(provider string) Credential {
+	cred, _ := u.Resolve(provider)
+	return cred
+}
+
+// Resolve returns the credential from the highest-priority store that has it,
+// along with whether that store reports it as an OAuth access token.
+func (u *UnionStore) Resolve(provider string) (Credential, bool) {
 	// Priority is determined by the order of stores in the UnionStore (last one has the highest priority).
 	for i := len(u.stores) - 1; i >= 0; i-- {
-		if cred := u.stores[i].Get(provider); cred != "" {
-			return cred
+		if cred, oauth := Resolve(u.stores[i], provider); cred != "" {
+			return cred, oauth
 		}
 	}
-	return ""
+	return "", false
 }
 
 // Return a list of all providers available across all stores, without duplicates.

@@ -129,6 +129,10 @@ func (r *Registry) Subset(names []string) (*Registry, error) {
 }
 
 // Definitions returns LLM-facing definitions for all registered tools.
+//
+// It is not policy-aware: every registered tool is returned. Filtering the set
+// the model sees (e.g. by policy) is the consumer's job — narrow the registry
+// with Subset first, or filter the returned slice before sending it to the LLM.
 func (r *Registry) Definitions() []Definition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

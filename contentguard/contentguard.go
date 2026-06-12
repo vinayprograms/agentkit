@@ -24,9 +24,9 @@ func Defaults() Config { return Config{} }
 
 // Guard verifies tool calls against ingested content through a staged pipeline.
 type Guard struct {
-	stages     []Stage
-	workflow   Workflow
-	context map[string]string
+	stages   []Stage
+	workflow Workflow
+	context  map[string]string
 
 	patterns []namedPattern
 	keywords []string
@@ -74,6 +74,11 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 		end(&err)
 	}()
 
+	// Untrusted content in scope for this call — reported on every Result so
+	// consumers can propagate taint into the resulting tool-result block.
+	untrusted := g.getUntrusted()
+	related := relatedContent(untrusted)
+
 	// Step 1: deterministic checks (built-in, non-optional)
 	deterministicFinding := g.deterministicCheck(toolName, args)
 	event(ctx, "deterministic.evaluated", attribute.String("verdict", string(deterministicFinding.Verdict)))
@@ -84,6 +89,7 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 			Verdict:  Allow,
 			ToolName: toolName,
 			Findings: []*Finding{deterministicFinding},
+			Related:  related,
 		}, nil
 	}
 
@@ -95,13 +101,14 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 			Rationale: "no verification stages configured",
 			ToolName:  toolName,
 			Findings:  []*Finding{deterministicFinding},
+			Related:   related,
 		}, nil
 	}
 
 	req := Request{
 		ToolName:      toolName,
 		ToolArgs:      args,
-		Untrusted:     g.getUntrusted(),
+		Untrusted:     untrusted,
 		OriginalGoal:  originalGoal,
 		PriorFindings: []*Finding{deterministicFinding},
 		Context:       g.context,
@@ -114,8 +121,21 @@ func (g *Guard) Check(ctx context.Context, toolName string, args map[string]any,
 	// Prepend deterministic finding
 	result.Findings = append([]*Finding{deterministicFinding}, result.Findings...)
 	result.ToolName = toolName
+	result.Related = related
 
 	return result, nil
+}
+
+// relatedContent maps tracked content to the public RelatedContent view.
+func relatedContent(content []*Content) []RelatedContent {
+	if len(content) == 0 {
+		return nil
+	}
+	related := make([]RelatedContent, len(content))
+	for i, c := range content {
+		related[i] = RelatedContent{ID: c.ID, Trust: c.Trust}
+	}
+	return related
 }
 
 // deterministicCheck performs fast pattern-based checks.

@@ -4,17 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 type mvTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Mv creates a tool that moves or renames files/directories within the given workspace.
-func Mv(workspace string) Tool {
-	return &mvTool{workspace: workspace}
+func Mv(workspace string, extraRoots ...string) Tool {
+	return &mvTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *mvTool) Name() string { return "mv" }
@@ -65,13 +64,5 @@ func (t *mvTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *mvTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" && !strings.HasPrefix(path, filepath.Clean(t.workspace)+string(filepath.Separator)) && path != filepath.Clean(t.workspace) {
-		return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

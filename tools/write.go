@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type writeTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Write creates a tool that writes content to files within the given workspace.
-func Write(workspace string) Tool {
-	return &writeTool{workspace: workspace}
+func Write(workspace string, extraRoots ...string) Tool {
+	return &writeTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *writeTool) Name() string { return "write" }
@@ -67,16 +67,5 @@ func (t *writeTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *writeTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" {
-		ws := filepath.Clean(t.workspace)
-		if !strings.HasPrefix(path, ws+string(filepath.Separator)) && path != ws {
-			return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-		}
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

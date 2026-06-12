@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +14,11 @@ import (
 type mockModel struct {
 	response string
 	err      error
+	lastReq  llm.ChatRequest
 }
 
 func (m *mockModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.lastReq = req
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -721,5 +724,53 @@ func TestParseFIL_MarkdownBlockWithPreamble(t *testing.T) {
 	f, _, _ := parseFIL(input)
 	if len(f) != 1 || f[0] != "f1" {
 		t.Errorf("findings = %v, want [f1]", f)
+	}
+}
+
+func TestExtractor_Extract_WithSource(t *testing.T) {
+	m := &mockModel{response: `{"findings":["f"]}`}
+	ext := NewExtractor(m)
+
+	_, _, _, err := ext.Extract(context.Background(),
+		"This is a sufficiently long text that exceeds fifty characters easily",
+		WithSource("research-step"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	user := m.lastReq.Messages[len(m.lastReq.Messages)-1].Content
+	if !strings.Contains(user, "Source: research-step") {
+		t.Errorf("expected source label in prompt, got %q", user)
+	}
+}
+
+func TestExtractor_Extract_Truncation(t *testing.T) {
+	m := &mockModel{response: `{"findings":["f"]}`}
+	ext := NewExtractor(m)
+
+	long := strings.Repeat("x", 5000)
+	_, _, _, err := ext.Extract(context.Background(), long, WithMaxInputChars(100))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	user := m.lastReq.Messages[len(m.lastReq.Messages)-1].Content
+	if !strings.Contains(user, "[truncated]") {
+		t.Errorf("expected truncation marker, got len %d", len(user))
+	}
+	if len(user) > 200 {
+		t.Errorf("expected truncated input, got %d chars", len(user))
+	}
+}
+
+func TestExtractor_Extract_DefaultTruncation(t *testing.T) {
+	m := &mockModel{response: `{"findings":["f"]}`}
+	ext := NewExtractor(m)
+
+	long := strings.Repeat("y", 9000)
+	if _, _, _, err := ext.Extract(context.Background(), long); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	user := m.lastReq.Messages[len(m.lastReq.Messages)-1].Content
+	if !strings.Contains(user, "[truncated]") {
+		t.Error("expected default truncation at 4000 chars")
 	}
 }

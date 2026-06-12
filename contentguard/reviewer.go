@@ -35,14 +35,15 @@ func (r *Reviewer) Evaluate(ctx context.Context, req Request) (*Finding, error) 
 			{Role: "user", Content: prompt},
 		},
 	})
-	latencyMs := time.Since(start).Milliseconds()
-	_ = latencyMs
+	latency := time.Since(start)
 
 	if err != nil {
-		return &Finding{Verdict: Deny, Rationale: fmt.Sprintf("review error: %v", err), Source: "reviewer"}, nil
+		return &Finding{Verdict: Deny, Rationale: fmt.Sprintf("review error: %v", err), Source: "reviewer", Latency: latency}, nil
 	}
 
-	return r.parseResponse(resp.Content), nil
+	finding := r.parseResponse(resp.Content)
+	finding.Latency = latency
+	return finding, nil
 }
 
 func buildResearchSystemPrompt(scope string) string {

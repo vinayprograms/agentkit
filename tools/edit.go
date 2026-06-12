@@ -4,17 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 type editTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Edit creates a tool that performs string replacement in files within the given workspace.
-func Edit(workspace string) Tool {
-	return &editTool{workspace: workspace}
+func Edit(workspace string, extraRoots ...string) Tool {
+	return &editTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *editTool) Name() string { return "edit" }
@@ -81,16 +81,5 @@ func (t *editTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *editTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" {
-		ws := filepath.Clean(t.workspace)
-		if !strings.HasPrefix(path, ws+string(filepath.Separator)) && path != ws {
-			return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-		}
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

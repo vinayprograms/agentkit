@@ -87,9 +87,9 @@ func TestPolicy_DefaultDeny(t *testing.T) {
 func TestPolicy_DenyPatterns(t *testing.T) {
 	pol := New()
 	pol.Tools["read"] = &ToolPolicy{
-		
-		Allow:   []string{"**"},
-		Deny:    []string{"/home/user/.ssh/*"},
+
+		Allow: []string{"**"},
+		Deny:  []string{"/home/user/.ssh/*"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/home/user/.ssh/id_rsa")
@@ -101,8 +101,8 @@ func TestPolicy_DenyPatterns(t *testing.T) {
 func TestPolicy_AllowPatterns(t *testing.T) {
 	pol := New()
 	pol.Tools["read"] = &ToolPolicy{
-		
-		Allow:   []string{"/workspace/**"},
+
+		Allow: []string{"/workspace/**"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/workspace/src/main.go")
@@ -144,8 +144,8 @@ allow = ["~/documents/**"]
 func TestPolicy_GlobPatterns(t *testing.T) {
 	pol := New()
 	pol.Tools["read"] = &ToolPolicy{
-		
-		Allow:   []string{"/workspace/*.go"},
+
+		Allow: []string{"/workspace/*.go"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/workspace/main.go")
@@ -162,8 +162,8 @@ func TestPolicy_GlobPatterns(t *testing.T) {
 func TestPolicy_RecursiveGlob(t *testing.T) {
 	pol := New()
 	pol.Tools["read"] = &ToolPolicy{
-		
-		Allow:   []string{"/workspace/**"},
+
+		Allow: []string{"/workspace/**"},
 	}
 
 	allowed, _ := pol.CheckPath("read", "/workspace/a/b/c/d/file.go")
@@ -181,8 +181,8 @@ func TestPolicy_RecursiveGlob(t *testing.T) {
 func TestPolicy_WebDomains(t *testing.T) {
 	pol := New()
 	pol.Tools["web_fetch"] = &ToolPolicy{
-		
-		Allow:   []string{"github.com", "*.google.com"},
+
+		Allow: []string{"github.com", "*.google.com"},
 	}
 
 	allowed, _ := pol.CheckDomain("web_fetch", "github.com")
@@ -230,8 +230,8 @@ func TestPolicy_ProtectedFiles(t *testing.T) {
 func TestPolicy_WriteBlocksProtectedFiles(t *testing.T) {
 	pol := New()
 	pol.Tools["write"] = &ToolPolicy{
-		
-		Allow:   []string{"**"},
+
+		Allow: []string{"**"},
 	}
 
 	allowed, reason := pol.CheckPath("write", "/workspace/agent.toml")
@@ -251,8 +251,8 @@ func TestPolicy_WriteBlocksProtectedFiles(t *testing.T) {
 func TestPolicy_EditBlocksProtectedFiles(t *testing.T) {
 	pol := New()
 	pol.Tools["edit"] = &ToolPolicy{
-		
-		Allow:   []string{"**"},
+
+		Allow: []string{"**"},
 	}
 
 	allowed, _ := pol.CheckPath("edit", "policy.toml")
@@ -658,5 +658,30 @@ func TestCheckPath_RecursiveGlobSuffixInPath(t *testing.T) {
 	ok, _ := pol.CheckPath("read", "/workspace/a/b/test")
 	if !ok {
 		t.Error("expected **/test to match nested path ending in test")
+	}
+}
+
+func TestFromTOMLWithUnknownKeys(t *testing.T) {
+	content := `
+default_deny = true
+rate_limit = 100
+
+[tools.read]
+allow = ["$WORKSPACE/**"]
+
+[mcp]
+enabled = true
+default_deny = false
+`
+	pol, unknown, err := FromTOMLWithUnknownKeys(content, "/work", "/home")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pol.IsToolEnabled("read") {
+		t.Error("read should be enabled")
+	}
+	joined := strings.Join(unknown, ",")
+	if !strings.Contains(joined, "rate_limit") || !strings.Contains(joined, "mcp.default_deny") {
+		t.Errorf("expected legacy keys reported, got %v", unknown)
 	}
 }

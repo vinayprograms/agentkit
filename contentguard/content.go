@@ -1,5 +1,20 @@
 // Package contentguard provides prompt injection defense through tracked content
 // and staged verification.
+//
+// # Telemetry
+//
+// Each Finding carries a Latency for the stage that produced it (populated by
+// the LLM-backed screener and reviewer stages). Result.Related lists the
+// untrusted content blocks that were in scope for a checked call, so consumers
+// can propagate taint into the resulting tool-result block.
+//
+// # User trust
+//
+// The legacy UserTrust verification knob is intentionally not carried over.
+// Trust here is origin-based (see Trust) and fixed per content block; there is
+// no global per-user trust dial. Consumers that need user-level gating should
+// implement it at the call site (e.g. by choosing which stages to run, or by
+// adjusting the Config.Context passed to stages).
 package contentguard
 
 import (

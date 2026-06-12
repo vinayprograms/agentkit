@@ -4,17 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 type mkdirTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Mkdir creates a tool that makes directories within the given workspace.
-func Mkdir(workspace string) Tool {
-	return &mkdirTool{workspace: workspace}
+func Mkdir(workspace string, extraRoots ...string) Tool {
+	return &mkdirTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *mkdirTool) Name() string { return "mkdir" }
@@ -53,13 +52,5 @@ func (t *mkdirTool) Execute(ctx context.Context, args Args) (string, error) {
 
 // resolve makes the path absolute relative to workspace and validates it stays inside.
 func (t *mkdirTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" && !strings.HasPrefix(path, filepath.Clean(t.workspace)+string(filepath.Separator)) && path != filepath.Clean(t.workspace) {
-		return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

@@ -1,7 +1,6 @@
 package credentials
 
 import (
-	"errors"
 	"os"
 	"testing"
 	"time"
@@ -10,9 +9,11 @@ import (
 )
 
 func TestMissingCredentialFile(t *testing.T) {
-	_, err := NewFileStore("nonexistent.toml")
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, os.ErrNotExist))
+	// A nonexistent path yields an empty, usable store (not an error).
+	store, err := NewFileStore("nonexistent.toml")
+	assert.NoError(t, err)
+	assert.NotNil(t, store)
+	assert.Empty(t, store.Providers())
 }
 
 func TestCredentialFileWithInsecurePermissions(t *testing.T) {

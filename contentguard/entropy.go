@@ -9,14 +9,24 @@ import (
 // lower threshold to catch it.
 const entropyThreshold = 4.8
 
-// shannonEntropy calculates the Shannon entropy of a byte slice in bits per byte.
-// Higher entropy indicates more randomness/compression/encoding.
+// ShannonEntropy reports the Shannon entropy of s in bits per byte. Higher
+// entropy indicates more randomness/compression/encoding.
 //
 // Typical values:
 //   - English text: 3.0 - 4.5 bits/byte
 //   - Source code: 4.0 - 5.0 bits/byte
 //   - Base64 encoded: 5.5 - 6.0 bits/byte
 //   - Compressed/random: 7.5 - 8.0 bits/byte
+func ShannonEntropy(s string) float64 {
+	return shannonEntropy([]byte(s))
+}
+
+// IsHighEntropy reports whether s exceeds the entropy threshold used by the
+// guard to flag potentially encoded (e.g. base64) content.
+func IsHighEntropy(s string) bool {
+	return shannonEntropy([]byte(s)) > entropyThreshold
+}
+
 func shannonEntropy(data []byte) float64 {
 	if len(data) == 0 {
 		return 0

@@ -1,4 +1,39 @@
-// Package policy provides security policy loading and enforcement.
+// Package policy provides a security-policy model: which tools are enabled and
+// which filesystem paths / domains each may touch.
+//
+// # Enforcement is the consumer's job
+//
+// This package is a model and a set of checks (CheckPath, CheckDomain,
+// IsProtectedFile, IsToolEnabled). It does NOT wire itself into the tools in
+// package tools — those tools enforce only their own workspace confinement and
+// are unaware of any Policy. A consumer that loads a Policy but never calls its
+// checks silently loses protected-file and deny-pattern enforcement.
+//
+// To enforce a policy, adapt it into a tools.Guard and attach it at
+// registration. For example, a path guard for the write tool:
+//
+//	type pathGuard struct {
+//		pol  *policy.Policy
+//		tool string
+//	}
+//
+//	func (g pathGuard) Check(ctx context.Context, args tools.Args) error {
+//		path, _ := args.String("path")
+//		if ok, reason := g.pol.CheckPath(g.tool, path); !ok {
+//			return errors.New(reason)
+//		}
+//		return nil
+//	}
+//
+//	reg.Register(tools.New(tools.Write(ws)).With(pathGuard{pol, "write"}))
+//
+// Use CheckDomain similarly for web tools.
+//
+// # Default-deny and migration
+//
+// New (and FromTOML/FromFile, which build on it) returns a deny-by-default
+// policy: a tool is enabled only if it is listed in [tools] or DefaultDeny is
+// false. See New for the legacy keys FromTOML ignores.
 package policy
 
 import (
@@ -62,7 +97,19 @@ type ContentSecurity struct {
 	Keywords []string `toml:"keywords"`
 }
 
-// New creates a secure default policy (deny by default).
+// New creates a secure default policy.
+//
+// The policy is deny-by-default: DefaultDeny is true, so a tool is enabled only
+// if it appears in the [tools] map (presence == enabled — there is no per-tool
+// "enabled" flag). A migrating consumer that does not list its tools will find
+// them all disabled.
+//
+// FromTOML ignores keys it does not recognize (consumers may define their own).
+// In particular these legacy keys are silently dropped: enabled, denylist,
+// allowlist, allow_domains, rate_limit, [mcp].default_deny, [mcp].allowed_tools,
+// and [security].extra_* . Use FromTOMLWithUnknownKeys if you need to detect and
+// validate them yourself.
+//
 // Call ExpandPatterns after loading to resolve $WORKSPACE and ~ in patterns.
 func New() *Policy {
 	return &Policy{
@@ -87,12 +134,28 @@ func FromFile(path, workspace, homeDir string) (*Policy, error) {
 // workspace and homeDir are used to expand $WORKSPACE and ~ in patterns.
 // Unrecognized keys are silently ignored.
 func FromTOML(content, workspace, homeDir string) (*Policy, error) {
+	pol, _, err := FromTOMLWithUnknownKeys(content, workspace, homeDir)
+	return pol, err
+}
+
+// FromTOMLWithUnknownKeys is like FromTOML but also reports the keys present in
+// the TOML that the Policy schema does not recognize (in dotted form, e.g.
+// "mcp.default_deny"). The policy is built regardless — the report lets a
+// consumer implement its own validation (or migration warnings) for keys this
+// package deliberately ignores, without re-parsing the TOML itself.
+func FromTOMLWithUnknownKeys(content, workspace, homeDir string) (*Policy, []string, error) {
 	pol := New()
-	if _, err := toml.Decode(content, pol); err != nil {
-		return nil, fmt.Errorf("failed to parse policy: %w", err)
+	meta, err := toml.Decode(content, pol)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse policy: %w", err)
 	}
 	pol.expandPatterns(workspace, homeDir)
-	return pol, nil
+
+	var unknown []string
+	for _, key := range meta.Undecoded() {
+		unknown = append(unknown, key.String())
+	}
+	return pol, unknown, nil
 }
 
 // expandPatterns resolves $WORKSPACE and ~ placeholders in AllowedDirs

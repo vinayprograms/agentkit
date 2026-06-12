@@ -1,6 +1,9 @@
 package contentguard
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Verdict is the outcome of a stage evaluation or the guard's final decision.
 type Verdict string
@@ -22,6 +25,11 @@ type Finding struct {
 	Verdict   Verdict
 	Rationale string // why (deny), what instead (modify), why unsure (escalate)
 	Source    string // which stage produced this
+
+	// Latency is the wall-clock time the stage spent producing this finding.
+	// Populated by LLM-backed stages (screener, reviewer); zero for the
+	// deterministic stage and custom stages that do not set it.
+	Latency time.Duration
 }
 
 // Request carries all information stages need to make a decision.
@@ -36,8 +44,20 @@ type Request struct {
 
 // Result is the guard's final answer on a tool call.
 type Result struct {
-	Verdict      Verdict
-	Rationale    string
-	ToolName     string
-	Findings []*Finding // all findings, deterministic first
+	Verdict   Verdict
+	Rationale string
+	ToolName  string
+	Findings  []*Finding // all findings, deterministic first
+
+	// Related lists the tracked content blocks that were in scope when this
+	// call was checked (all untrusted content currently in context). Consumers
+	// use it to propagate taint into the resulting tool-result block.
+	Related []RelatedContent
+}
+
+// RelatedContent identifies a tracked content block that was in scope for a
+// check, along with its trust level, enabling taint propagation.
+type RelatedContent struct {
+	ID    string
+	Trust Trust
 }

@@ -12,6 +12,31 @@ import (
 
 const defaultHTTPTimeout = 2 * time.Minute
 
+// WebOption configures web tools (Fetch, Search).
+type WebOption func(*webConfig)
+
+type webConfig struct {
+	timeout time.Duration
+}
+
+// WithHTTPTimeout sets the HTTP client timeout for web tools.
+// A non-positive value leaves the default (2 minutes) in place.
+func WithHTTPTimeout(d time.Duration) WebOption {
+	return func(c *webConfig) {
+		if d > 0 {
+			c.timeout = d
+		}
+	}
+}
+
+func webConfigFrom(opts []WebOption) webConfig {
+	c := webConfig{timeout: defaultHTTPTimeout}
+	for _, opt := range opts {
+		opt(&c)
+	}
+	return c
+}
+
 type webFetchTool struct {
 	summarizer Summarizer
 	client     *http.Client
@@ -19,10 +44,11 @@ type webFetchTool struct {
 
 // Fetch returns a tool that fetches web page content.
 // summarizer may be nil (returns full extracted text).
-func Fetch(summarizer Summarizer) Tool {
+func Fetch(summarizer Summarizer, opts ...WebOption) Tool {
+	cfg := webConfigFrom(opts)
 	return &webFetchTool{
 		summarizer: summarizer,
-		client:     &http.Client{Timeout: defaultHTTPTimeout},
+		client:     &http.Client{Timeout: cfg.timeout},
 	}
 }
 

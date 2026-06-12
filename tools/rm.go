@@ -4,17 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 type rmTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Rm creates a tool that deletes files/directories within the given workspace.
-func Rm(workspace string) Tool {
-	return &rmTool{workspace: workspace}
+func Rm(workspace string, extraRoots ...string) Tool {
+	return &rmTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *rmTool) Name() string { return "rm" }
@@ -73,13 +72,5 @@ func (t *rmTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *rmTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" && !strings.HasPrefix(path, filepath.Clean(t.workspace)+string(filepath.Separator)) && path != filepath.Clean(t.workspace) {
-		return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

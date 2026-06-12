@@ -807,9 +807,9 @@ func TestRm_EmptyDirWithoutRecursive(t *testing.T) {
 
 type errorScratchpad struct{}
 
-func (s *errorScratchpad) Get(key string) (string, error)           { return "", fmt.Errorf("get error") }
-func (s *errorScratchpad) Set(key, value string) error              { return fmt.Errorf("set error") }
-func (s *errorScratchpad) List(prefix string) ([]string, error)     { return nil, fmt.Errorf("list error") }
+func (s *errorScratchpad) Get(key string) (string, error)       { return "", fmt.Errorf("get error") }
+func (s *errorScratchpad) Set(key, value string) error          { return fmt.Errorf("set error") }
+func (s *errorScratchpad) List(prefix string) ([]string, error) { return nil, fmt.Errorf("list error") }
 func (s *errorScratchpad) Search(query string) (map[string]string, error) {
 	return nil, fmt.Errorf("search error")
 }
@@ -1029,7 +1029,7 @@ func TestWebFetch_MissingQuestionArg(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestResolveEngines_NilCreds(t *testing.T) {
-	engines := resolveEngines(nil)
+	engines := resolveEngines(nil, defaultHTTPTimeout)
 	// Should have at least DuckDuckGo as fallback
 	if len(engines) < 1 {
 		t.Error("expected at least 1 engine")
@@ -1038,7 +1038,7 @@ func TestResolveEngines_NilCreds(t *testing.T) {
 
 func TestResolveEngines_WithSearXNG(t *testing.T) {
 	creds := &mockCreds{keys: map[string]string{"searxng": "http://localhost:8080"}}
-	engines := resolveEngines(creds)
+	engines := resolveEngines(creds, defaultHTTPTimeout)
 	// Should have searxng + duckduckgo
 	if len(engines) < 2 {
 		t.Errorf("expected at least 2 engines, got %d", len(engines))
@@ -1047,7 +1047,7 @@ func TestResolveEngines_WithSearXNG(t *testing.T) {
 
 func TestResolveEngines_WithBrave(t *testing.T) {
 	creds := &mockCreds{keys: map[string]string{"brave": "test-key"}}
-	engines := resolveEngines(creds)
+	engines := resolveEngines(creds, defaultHTTPTimeout)
 	if len(engines) < 2 {
 		t.Errorf("expected at least 2 engines, got %d", len(engines))
 	}
@@ -1059,7 +1059,7 @@ func TestResolveEngines_AllProviders(t *testing.T) {
 		"brave":   "key1",
 		"tavily":  "key2",
 	}}
-	engines := resolveEngines(creds)
+	engines := resolveEngines(creds, defaultHTTPTimeout)
 	// searxng + brave + tavily + duckduckgo = 4
 	if len(engines) != 4 {
 		t.Errorf("expected 4 engines, got %d", len(engines))

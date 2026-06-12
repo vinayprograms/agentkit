@@ -161,3 +161,31 @@ func TestSpawn_NameAndDescription(t *testing.T) {
 		t.Error("expected non-empty description")
 	}
 }
+
+func TestSpawnBinder_LateBinding(t *testing.T) {
+	binder := NewSpawnBinder()
+	tool := binder.Tool()
+
+	args, _ := Validate(tool.Parameters(), map[string]any{
+		"agents": []any{
+			map[string]any{"role": "researcher", "task": "find"},
+		},
+	})
+
+	// Before Bind: returns the not-available error.
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("expected error before Bind")
+	}
+
+	binder.Bind(func(ctx context.Context, role, task string, outputs []string) (string, error) {
+		return "bound:" + role, nil
+	})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error after Bind: %v", err)
+	}
+	if out != "bound:researcher" {
+		t.Fatalf("got %q", out)
+	}
+}

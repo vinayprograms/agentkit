@@ -4,17 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 type tailTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Tail creates a tool that reads the last N lines of a file within the given workspace.
-func Tail(workspace string) Tool {
-	return &tailTool{workspace: workspace}
+func Tail(workspace string, extraRoots ...string) Tool {
+	return &tailTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *tailTool) Name() string { return "tail" }
@@ -65,13 +65,5 @@ func (t *tailTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *tailTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" && !strings.HasPrefix(path, filepath.Clean(t.workspace)+string(filepath.Separator)) && path != filepath.Clean(t.workspace) {
-		return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

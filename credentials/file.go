@@ -3,6 +3,7 @@ package credentials
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -30,18 +31,27 @@ type TomlProvider struct {
 	OAuth  *OAuthToken `toml:"oauth,omitempty"`
 }
 
-// NewFileStore creates an empty file-based credentials container.
+// NewFileStore creates a file-based credentials container.
+//
+// A nonexistent path is not an error: it yields an empty, usable store that
+// callers can populate (via SetAPIKey/SetOAuthToken) and Save. An existing
+// file with insecure permissions, or a malformed file, returns an error.
 func NewFileStore(filepath string) (FileStore, error) {
 	// Check file permissions before loading, if file exists.
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(filepath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return FileStore{}, nil
+			}
 			return nil, err
 		}
 		mode := info.Mode().Perm()
 		if mode != 0400 && mode != 0600 {
 			return nil, fmt.Errorf("credentials file has insecure permissions: %v", mode)
 		}
+	} else if _, err := os.Stat(filepath); os.IsNotExist(err) {
+		return FileStore{}, nil
 	}
 
 	// Load file
@@ -70,15 +80,22 @@ func NewFileStore(filepath string) (FileStore, error) {
 // Get resolves a credential for a provider from file data.
 // Priority: [provider.oauth] > [provider].api_key.
 func (c FileStore) Get(provider string) Credential {
+	cred, _ := c.Resolve(provider)
+	return cred
+}
+
+// Resolve returns the credential for a provider and whether it is an OAuth
+// access token. Priority: [provider.oauth] > [provider].api_key.
+func (c FileStore) Resolve(provider string) (Credential, bool) {
 	if token := c[provider].OAuth; token != nil && token.IsValid() {
-		return Credential(token.AccessToken)
+		return Credential(token.AccessToken), true
 	}
 
 	if p, ok := c[provider]; ok && p.APIKey != "" {
-		return Credential(p.APIKey)
+		return Credential(p.APIKey), false
 	}
 
-	return ""
+	return "", false
 }
 
 func (c FileStore) Providers() []string {
@@ -114,8 +131,15 @@ func (c *FileStore) SetOAuthToken(provider string, token OAuthToken) {
 	}
 }
 
-// Save writes credentials to a specific file.
+// Save writes credentials to a specific file, creating the parent directory
+// (mode 0700) if it does not exist.
 func (c *FileStore) Save(path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return fmt.Errorf("failed to create credentials directory: %w", err)
+		}
+	}
+
 	var sb strings.Builder
 
 	for provider, creds := range *c {

@@ -4,17 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 type readTool struct {
-	workspace string
+	workspace  string
+	extraRoots []string
 }
 
 // Read creates a tool that reads file contents within the given workspace.
-func Read(workspace string) Tool {
-	return &readTool{workspace: workspace}
+func Read(workspace string, extraRoots ...string) Tool {
+	return &readTool{workspace: workspace, extraRoots: extraRoots}
 }
 
 func (t *readTool) Name() string { return "read" }
@@ -53,16 +52,5 @@ func (t *readTool) Execute(ctx context.Context, args Args) (string, error) {
 }
 
 func (t *readTool) resolve(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.workspace, path)
-	}
-	path = filepath.Clean(path)
-
-	if t.workspace != "" {
-		ws := filepath.Clean(t.workspace)
-		if !strings.HasPrefix(path, ws+string(filepath.Separator)) && path != ws {
-			return "", fmt.Errorf("path %s is outside workspace %s", path, t.workspace)
-		}
-	}
-	return path, nil
+	return confine(path, t.workspace, t.extraRoots)
 }

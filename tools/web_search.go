@@ -3,8 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,15 +36,16 @@ type webSearchTool struct {
 // Engines are resolved from credentials and environment variables.
 // DuckDuckGo is always included as the final fallback.
 // On execution, engines are tried in order — if one fails, the next is tried.
-func Search(creds credentials.Lookup) Tool {
+func Search(creds credentials.Lookup, opts ...WebOption) Tool {
+	cfg := webConfigFrom(opts)
 	return &webSearchTool{
-		engines: resolveEngines(creds),
+		engines: resolveEngines(creds, cfg.timeout),
 	}
 }
 
-func resolveEngines(creds credentials.Lookup) []SearchEngine {
+func resolveEngines(creds credentials.Lookup, timeout time.Duration) []SearchEngine {
 	var engines []SearchEngine
-	client := &http.Client{Timeout: defaultHTTPTimeout}
+	client := &http.Client{Timeout: timeout}
 
 	if creds != nil {
 		if url := string(creds.Get("searxng")); url != "" {
