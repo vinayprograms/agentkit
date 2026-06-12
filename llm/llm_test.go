@@ -189,9 +189,9 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "valid anthropic config",
 			config: Config{
-				Service: "anthropic",
-				Model:    "claude-3-5-sonnet-20241022",
-				APIKey:   "test-key",
+				Service:   "anthropic",
+				Model:     "claude-3-5-sonnet-20241022",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: false,
@@ -199,9 +199,9 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "valid openai config",
 			config: Config{
-				Service: "openai",
-				Model:    "gpt-4o",
-				APIKey:   "test-key",
+				Service:   "openai",
+				Model:     "gpt-4o",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: false,
@@ -209,9 +209,9 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "valid google config",
 			config: Config{
-				Service: "google",
-				Model:    "gemini-1.5-pro",
-				APIKey:   "test-key",
+				Service:   "google",
+				Model:     "gemini-1.5-pro",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: false,
@@ -219,9 +219,9 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "valid groq config",
 			config: Config{
-				Service: "groq",
-				Model:    "llama-3.1-70b-versatile",
-				APIKey:   "test-key",
+				Service:   "groq",
+				Model:     "llama-3.1-70b-versatile",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: false,
@@ -229,9 +229,9 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "valid mistral config",
 			config: Config{
-				Service: "mistral",
-				Model:    "mistral-large-latest",
-				APIKey:   "test-key",
+				Service:   "mistral",
+				Model:     "mistral-large-latest",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: false,
@@ -247,8 +247,8 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 		{
 			name: "missing model",
 			config: Config{
-				Service: "anthropic",
-				APIKey:   "test-key",
+				Service:   "anthropic",
+				APIKey:    "test-key",
 				MaxTokens: 4096,
 			},
 			wantErr: true,
@@ -257,7 +257,7 @@ func TestProviderAdapter_ConfigValidation(t *testing.T) {
 			name: "missing api key",
 			config: Config{
 				Service: "anthropic",
-				Model:    "claude-3-5-sonnet-20241022",
+				Model:   "claude-3-5-sonnet-20241022",
 			},
 			wantErr: true,
 		},
@@ -293,7 +293,7 @@ func TestNew_AllProviders(t *testing.T) {
 	for _, p := range providers {
 		t.Run(p.name, func(t *testing.T) {
 			cfg := Config{
-				Service:  p.name,
+				Service:   p.name,
 				Model:     p.model,
 				APIKey:    "test-key-for-" + p.name,
 				MaxTokens: 4096,
@@ -313,10 +313,10 @@ func TestNew_AllProviders(t *testing.T) {
 // TestNew_UnsupportedProvider tests that unsupported providers return an error
 func TestNew_UnsupportedProvider(t *testing.T) {
 	cfg := Config{
-		Service: "unsupported-provider",
-		Model:    "some-model",
-		APIKey:   "test-key",
-				MaxTokens: 4096,
+		Service:   "unsupported-provider",
+		Model:     "some-model",
+		APIKey:    "test-key",
+		MaxTokens: 4096,
 	}
 
 	_, err := New(cfg)
@@ -381,8 +381,8 @@ func TestInferService(t *testing.T) {
 // TestNew_InferredProvider tests that provider can be inferred from model name
 func TestNew_InferredProvider(t *testing.T) {
 	tests := []struct {
-		model    string
-		wantErr  bool
+		model   string
+		wantErr bool
 	}{
 		{"claude-3-5-sonnet-20241022", false},
 		{"gpt-4o", false},
@@ -411,8 +411,8 @@ func TestNew_InferredProvider(t *testing.T) {
 func TestConfig_MaxTokensMandatory(t *testing.T) {
 	cfg := Config{
 		Service: "anthropic",
-		Model:    "claude-3-5-sonnet-20241022",
-		APIKey:   "test-key",
+		Model:   "claude-3-5-sonnet-20241022",
+		APIKey:  "test-key",
 		// MaxTokens not set - should fail validation
 	}
 
@@ -446,16 +446,16 @@ func newMock() *mockModel {
 	return &mockModel{stopReason: "end_turn"}
 }
 
-func (p *mockModel) SetResponse(content string)            { p.response = content }
+func (p *mockModel) SetResponse(content string) { p.response = content }
 func (p *mockModel) SetToolCall(name string, args map[string]interface{}) {
 	p.toolCalls = []ToolCallResponse{{ID: "tc-1", Name: name, Args: args}}
 }
-func (p *mockModel) SetToolCalls(calls []ToolCallResponse)  { p.toolCalls = calls }
-func (p *mockModel) SetTokenCounts(input, output int)       { p.inputTokens = input; p.outputTokens = output }
-func (p *mockModel) SetStopReason(reason string)            { p.stopReason = reason }
-func (p *mockModel) SetError(err error)                     { p.err = err }
-func (p *mockModel) LastRequest() *ChatRequest              { return p.lastRequest }
-func (p *mockModel) CallCount() int                         { return p.callCount }
+func (p *mockModel) SetToolCalls(calls []ToolCallResponse) { p.toolCalls = calls }
+func (p *mockModel) SetTokenCounts(input, output int)      { p.inputTokens = input; p.outputTokens = output }
+func (p *mockModel) SetStopReason(reason string)           { p.stopReason = reason }
+func (p *mockModel) SetError(err error)                    { p.err = err }
+func (p *mockModel) LastRequest() *ChatRequest             { return p.lastRequest }
+func (p *mockModel) CallCount() int                        { return p.callCount }
 
 func (p *mockModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	p.callCount++

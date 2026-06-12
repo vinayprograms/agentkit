@@ -118,8 +118,8 @@ func TestFishShell_ExtractCommand(t *testing.T) {
 		input, want string
 	}{
 		{"ls -la", "ls"},
-		{"and echo done", "echo"},  // fish "; and" → "and echo done" after split
-		{"or echo fail", "echo"},   // fish "; or" → "or echo fail" after split
+		{"and echo done", "echo"}, // fish "; and" → "and echo done" after split
+		{"or echo fail", "echo"},  // fish "; or" → "or echo fail" after split
 		{"/usr/bin/curl x", "curl"},
 		{"", ""},
 	}

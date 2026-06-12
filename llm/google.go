@@ -26,7 +26,6 @@ type googleConfig struct {
 	Retry     RetryConfig
 }
 
-
 // newGoogle creates a new Google Gemini provider using the official SDK.
 func newGoogle(cfg googleConfig) (*googleModel, error) {
 	if cfg.APIKey == "" {

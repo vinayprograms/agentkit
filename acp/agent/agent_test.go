@@ -529,5 +529,5 @@ func (m *mockTerminal) Output(_ context.Context, _, _ string) (terminal.Result, 
 func (m *mockTerminal) Wait(_ context.Context, _, _ string) (terminal.Result, error) {
 	return terminal.Result{ExitCode: 0, Output: "done"}, nil
 }
-func (m *mockTerminal) Kill(_ context.Context, _, _ string) error { return nil }
+func (m *mockTerminal) Kill(_ context.Context, _, _ string) error    { return nil }
 func (m *mockTerminal) Release(_ context.Context, _, _ string) error { return nil }

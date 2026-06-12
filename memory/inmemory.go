@@ -61,7 +61,6 @@ func (s *InMemoryStore) RememberFIL(ctx context.Context, findings, insights, les
 	ctx, end := trace(ctx, "remember_fil", attribute.String("memory.store", "inmemory"), attribute.String("memory.source", source))
 	defer end(&err)
 
-
 	for _, f := range findings {
 		id, err := s.RememberObservation(ctx, f, "finding", source)
 		if err != nil {

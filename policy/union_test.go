@@ -259,9 +259,9 @@ func TestUnion_CheckPath_MergedPolicy(t *testing.T) {
 		ProtectedFiles: DefaultProtectedFiles(),
 		Tools: map[string]*ToolPolicy{
 			"read": {
-				
-				Allow:   []string{"/workspace/**"},
-				Deny:    []string{"/workspace/.ssh/*"},
+
+				Allow: []string{"/workspace/**"},
+				Deny:  []string{"/workspace/.ssh/*"},
 			},
 		},
 	}
@@ -283,8 +283,8 @@ func TestUnion_CheckDomain_MergedPolicy(t *testing.T) {
 	pol := &Policy{
 		Tools: map[string]*ToolPolicy{
 			"web_fetch": {
-				
-				Allow:   []string{"github.com", "*.google.com"},
+
+				Allow: []string{"github.com", "*.google.com"},
 			},
 		},
 	}

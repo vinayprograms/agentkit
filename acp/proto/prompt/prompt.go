@@ -19,10 +19,10 @@ const (
 
 // Params is sent by the host to begin a prompt turn.
 type Params struct {
-	SessionID string           `json:"sessionId"`
-	Content   []content.Block  `json:"content"`
-	Command   *config.Command  `json:"command,omitempty"`
-	Meta      map[string]any   `json:"_meta,omitempty"`
+	SessionID string          `json:"sessionId"`
+	Content   []content.Block `json:"content"`
+	Command   *config.Command `json:"command,omitempty"`
+	Meta      map[string]any  `json:"_meta,omitempty"`
 }
 
 // Result is returned by the agent when the turn completes.

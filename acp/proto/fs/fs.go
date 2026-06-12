@@ -5,8 +5,8 @@ package fs
 // ReadParams is sent by the agent to read a file via the host.
 type ReadParams struct {
 	Path  string         `json:"path"`            // absolute path
-	Line  int            `json:"line,omitempty"`   // 1-based start line
-	Limit int            `json:"limit,omitempty"`  // max lines to return
+	Line  int            `json:"line,omitempty"`  // 1-based start line
+	Limit int            `json:"limit,omitempty"` // max lines to return
 	Meta  map[string]any `json:"_meta,omitempty"`
 }
 

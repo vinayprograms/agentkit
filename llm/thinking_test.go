@@ -178,7 +178,6 @@ func TestResolveThinkingLevelRequestOverride(t *testing.T) {
 	}
 }
 
-
 func TestContainsMathExpression(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -205,7 +204,7 @@ func TestContainsMathExpression(t *testing.T) {
 func TestDefaultThinkingIsAuto(t *testing.T) {
 	// When thinking level is empty string, ResolveThinkingLevel should use heuristic
 	config := ThinkingConfig{Level: ""}
-	
+
 	// Simple message should get Off (heuristic decides)
 	simple := ChatRequest{Messages: []Message{{Role: "user", Content: "Hello"}}}
 	if got := ResolveThinkingLevel(config, simple); got != ThinkingOff {

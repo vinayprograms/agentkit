@@ -33,7 +33,6 @@ type ollamaCloudConfig struct {
 	Retry     RetryConfig
 }
 
-
 // newOllamaCloud creates a new Ollama Cloud provider.
 func newOllamaCloud(cfg ollamaCloudConfig) (*ollamaCloudModel, error) {
 	if cfg.APIKey == "" {
@@ -68,10 +67,10 @@ func newOllamaCloud(cfg ollamaCloudConfig) (*ollamaCloudModel, error) {
 
 // ollamaMessage represents a message in Ollama's API format.
 type ollamaMessage struct {
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	Thinking  string             `json:"thinking,omitempty"`
-	ToolCalls []ollamaToolCall   `json:"tool_calls,omitempty"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	Thinking  string           `json:"thinking,omitempty"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 }
 
 // ollamaToolCall represents a tool call in Ollama's format.
@@ -115,11 +114,11 @@ type ollamaOptions struct {
 
 // ollamaChatResponse represents a response from Ollama's API.
 type ollamaChatResponse struct {
-	Model     string        `json:"model"`
-	Message   ollamaMessage `json:"message"`
-	Done      bool          `json:"done"`
-	DoneReason string       `json:"done_reason,omitempty"`
-	
+	Model      string        `json:"model"`
+	Message    ollamaMessage `json:"message"`
+	Done       bool          `json:"done"`
+	DoneReason string        `json:"done_reason,omitempty"`
+
 	// Token counts
 	PromptEvalCount int `json:"prompt_eval_count"`
 	EvalCount       int `json:"eval_count"`

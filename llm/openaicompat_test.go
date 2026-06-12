@@ -22,11 +22,10 @@ func TestOpenAICompatProvider_Creation(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: openAICompatConfig{
-				APIKey:       "test-key",
-				BaseURL:      "https://api.example.com/v1",
-				Model:        "model-1",
-				MaxTokens:    4096,
-
+				APIKey:    "test-key",
+				BaseURL:   "https://api.example.com/v1",
+				Model:     "model-1",
+				MaxTokens: 4096,
 			},
 			wantErr: false,
 		},
@@ -113,10 +112,9 @@ func TestOpenAICompatProvider_MockServer(t *testing.T) {
 	defer server.Close()
 
 	provider, err := newOpenAICompat("test", openAICompatConfig{
-		BaseURL:      server.URL,
-		Model:        "test-model",
-		MaxTokens:    4096,
-
+		BaseURL:   server.URL,
+		Model:     "test-model",
+		MaxTokens: 4096,
 	})
 	if err != nil {
 		t.Fatalf("failed to create provider: %v", err)

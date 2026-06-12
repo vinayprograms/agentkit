@@ -154,7 +154,6 @@ func (s *BleveStore) RememberFIL(ctx context.Context, findings, insights, lesson
 	ctx, end := trace(ctx, "remember_fil", attribute.String("memory.store", "bleve"), attribute.String("memory.source", source))
 	defer end(&err)
 
-
 	for _, f := range findings {
 		id, err := s.RememberObservation(ctx, f, "finding", source)
 		if err != nil {

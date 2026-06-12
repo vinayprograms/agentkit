@@ -22,7 +22,7 @@ type ThinkingConfig struct {
 	// Level: "auto", "off", "low", "medium", "high"
 	// Auto uses heuristic classifier to determine level per-request.
 	Level ThinkingLevel
-	
+
 	// BudgetTokens for Anthropic extended thinking (optional, 0 = provider default)
 	BudgetTokens int64
 }
@@ -33,22 +33,22 @@ func InferThinkingLevel(messages []Message, tools []ToolDef) ThinkingLevel {
 	text := extractUserContent(messages)
 	textLen := utf8.RuneCountInString(text)
 	toolCount := len(tools)
-	
+
 	// Check for high complexity indicators
 	if detectHighComplexity(text, textLen, toolCount) {
 		return ThinkingHigh
 	}
-	
+
 	// Check for medium complexity indicators
 	if detectMediumComplexity(text, textLen, toolCount) {
 		return ThinkingMedium
 	}
-	
+
 	// Check for low complexity that still benefits from some reasoning
 	if detectLowComplexity(text, textLen, toolCount) {
 		return ThinkingLow
 	}
-	
+
 	// Simple queries - no thinking needed
 	return ThinkingOff
 }
@@ -67,7 +67,7 @@ func extractUserContent(messages []Message) string {
 // detectHighComplexity checks for patterns that indicate complex reasoning needs.
 func detectHighComplexity(text string, textLen, toolCount int) bool {
 	lower := strings.ToLower(text)
-	
+
 	// Math and logic patterns
 	mathPatterns := []string{
 		"prove", "derive", "calculate", "solve for",
@@ -79,12 +79,12 @@ func detectHighComplexity(text string, textLen, toolCount int) bool {
 			return true
 		}
 	}
-	
+
 	// Contains mathematical expressions
 	if containsMathExpression(text) {
 		return true
 	}
-	
+
 	// Architecture and design patterns
 	archPatterns := []string{
 		"architect", "design system", "system design",
@@ -98,24 +98,24 @@ func detectHighComplexity(text string, textLen, toolCount int) bool {
 			return true
 		}
 	}
-	
+
 	// Very long context with constraints
 	if textLen > 3000 {
 		return true
 	}
-	
+
 	// Many tools available (complex decision space)
 	if toolCount > 10 {
 		return true
 	}
-	
+
 	return false
 }
 
 // detectMediumComplexity checks for moderate complexity patterns.
 func detectMediumComplexity(text string, textLen, toolCount int) bool {
 	lower := strings.ToLower(text)
-	
+
 	// Planning and analysis patterns
 	planPatterns := []string{
 		"plan", "strategy", "approach",
@@ -130,7 +130,7 @@ func detectMediumComplexity(text string, textLen, toolCount int) bool {
 			return true
 		}
 	}
-	
+
 	// Code-related patterns
 	codePatterns := []string{
 		"function", "class", "method",
@@ -143,24 +143,24 @@ func detectMediumComplexity(text string, textLen, toolCount int) bool {
 			return true
 		}
 	}
-	
+
 	// Moderate context length
 	if textLen > 1000 {
 		return true
 	}
-	
+
 	// Multiple tools (some reasoning about which to use)
 	if toolCount > 5 {
 		return true
 	}
-	
+
 	return false
 }
 
 // detectLowComplexity checks for low but non-trivial complexity.
 func detectLowComplexity(text string, textLen, toolCount int) bool {
 	lower := strings.ToLower(text)
-	
+
 	// Some thought required
 	lowPatterns := []string{
 		"how to", "what is the best",
@@ -174,17 +174,17 @@ func detectLowComplexity(text string, textLen, toolCount int) bool {
 			return true
 		}
 	}
-	
+
 	// Has some tools
 	if toolCount > 2 {
 		return true
 	}
-	
+
 	// Moderate length
 	if textLen > 300 {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -198,12 +198,12 @@ func containsMathExpression(text string) bool {
 	if fractionRegex.MatchString(text) {
 		return true
 	}
-	
+
 	// Check for exponents
 	if exponentRegex.MatchString(text) {
 		return true
 	}
-	
+
 	// Check for expressions with operators
 	if mathExpressionRegex.MatchString(text) {
 		// Verify it's not just comparison operators in prose
@@ -217,7 +217,7 @@ func containsMathExpression(text string) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -234,4 +234,3 @@ func ResolveThinkingLevel(config ThinkingConfig, req ChatRequest) ThinkingLevel 
 	}
 	return level
 }
-

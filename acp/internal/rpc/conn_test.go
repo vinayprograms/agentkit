@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-
 )
 
 // pipe creates a bidirectional pair of Conns connected via io.Pipe.

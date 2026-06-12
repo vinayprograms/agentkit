@@ -44,8 +44,8 @@ func TestReviewer_Unclear(t *testing.T) {
 func TestReviewer_ResearchScope(t *testing.T) {
 	r := NewReviewer(&mockLLM{response: "ALLOW"})
 	f, _ := r.Evaluate(context.Background(), Request{
-		ToolName:   "bash",
-		Context: map[string]string{"scope": "lab pentest"},
+		ToolName: "bash",
+		Context:  map[string]string{"scope": "lab pentest"},
 	})
 	if f.Verdict != Allow {
 		t.Errorf("expected allow with research scope, got %s", f.Verdict)

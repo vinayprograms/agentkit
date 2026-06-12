@@ -2,7 +2,7 @@ package rpc
 
 // JSON-RPC method names defined by the ACP spec.
 const (
-	MethodInitialize = "initialize"
+	MethodInitialize   = "initialize"
 	MethodAuthenticate = "authenticate"
 
 	MethodSessionNew    = "session/new"

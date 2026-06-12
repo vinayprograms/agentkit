@@ -56,7 +56,6 @@ var defaultBaseURLs = map[string]string{
 	"cerebras":     CerebrasBaseURL,
 }
 
-
 // newOpenAICompat creates a new OpenAI-compatible provider.
 // providerName is used for logging and to resolve default base URLs.
 func newOpenAICompat(providerName string, cfg openAICompatConfig) (*openAICompatModel, error) {

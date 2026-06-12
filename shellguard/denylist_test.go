@@ -395,7 +395,7 @@ func TestGate_OnDecision_Deterministic(t *testing.T) {
 func TestGate_OnDecision_LLM(t *testing.T) {
 	mock := &mockModel{allowedDirs: []string{"/workspace"}}
 	gate := New(Bash(), "/workspace", []string{"/workspace"}, nil, mock, "")
-	
+
 	var steps []string
 	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
 		steps = append(steps, step)

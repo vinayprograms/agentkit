@@ -29,7 +29,6 @@ type openAIConfig struct {
 	Retry     RetryConfig
 }
 
-
 // newOpenAI creates a new OpenAI provider using the official SDK.
 func newOpenAI(cfg openAIConfig) (*openAIModel, error) {
 	if cfg.APIKey == "" {

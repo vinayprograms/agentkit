@@ -320,7 +320,7 @@ func newProvider() (llm.Model, error) {
 		key := os.Getenv(p.envKey)
 		if key != "" {
 			return llm.New(llm.Config{
-				Service:  p.provider,
+				Service:   p.provider,
 				Model:     p.model,
 				APIKey:    key,
 				MaxTokens: 4096,

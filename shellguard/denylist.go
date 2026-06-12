@@ -166,4 +166,3 @@ func (g *Gate) checkSubcommandPatterns(cmd string) (blocked bool, reason string)
 
 	return false, ""
 }
-
