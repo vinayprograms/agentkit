@@ -33,16 +33,16 @@ import (
 )
 
 // Client is the interface for communicating with an MCP server.
-// Clients are ready to use after creation — Stdio() and HTTP() handle initialization.
+// Clients are ready to use after creation — Stdio() and HTTP() handle
+// initialization, including loading the server's tool list.
 type Client interface {
-	// ListTools refreshes and returns available tools from the server.
-	ListTools(ctx context.Context) ([]Tool, error)
+	// Tools returns the server's tools. The client loads them at connection
+	// and serves them from there; whether a given call hits the network or a
+	// cache is the client's own concern, not the caller's.
+	Tools() []Tool
 
 	// CallTool invokes a tool on the server.
 	CallTool(ctx context.Context, name string, args map[string]any) (*Result, error)
-
-	// Tools returns the cached tool list from the last ListTools call.
-	Tools() []Tool
 
 	// Close shuts down the connection.
 	Close() error

@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - 2026-06-12
 
+### Changed (breaking)
+
+- `mcp`: collapsed the `Client` interface's two tool-listing methods into one.
+  `ListTools(ctx) ([]Tool, error)` is removed; `Tools() []Tool` is now the sole
+  accessor — whether it serves a cache or a fresh load is the client's concern,
+  not the caller's. Constructors load the tool list at connection time as
+  before. Only affects code that called `ListTools` or implemented `Client`;
+  callers that read `Tools()`/`Manager.AllTools()` are unaffected.
+
 ### Added — gaps found during first real-repo integration
 
-All changes are additive and backward-compatible.
+The items in this section are additive and backward-compatible.
 
 - `credentials`: `Resolve(Lookup, provider)` plus an `OAuthResolver` interface
   and `FileStore`/`UnionStore` `Resolve` methods, so callers can tell whether a

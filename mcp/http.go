@@ -35,7 +35,7 @@ func HTTP(ctx context.Context, cfg HTTPConfig) (Client, error) {
 		return nil, fmt.Errorf("initialize: %w", err)
 	}
 
-	if _, err := c.ListTools(ctx); err != nil {
+	if err := c.refreshTools(ctx); err != nil {
 		return nil, fmt.Errorf("list tools: %w", err)
 	}
 
@@ -65,22 +65,22 @@ func (c *httpClient) initialize(ctx context.Context) error {
 	return nil
 }
 
-func (c *httpClient) ListTools(ctx context.Context) ([]Tool, error) {
-
+// refreshTools loads the server's tool list into the client's cache.
+func (c *httpClient) refreshTools(ctx context.Context) error {
 	result, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var list toolsListResult
 	if err := json.Unmarshal(result, &list); err != nil {
-		return nil, fmt.Errorf("failed to parse tools list: %w", err)
+		return fmt.Errorf("failed to parse tools list: %w", err)
 	}
 
 	c.mu.Lock()
 	c.tools = list.Tools
 	c.mu.Unlock()
-	return list.Tools, nil
+	return nil
 }
 
 func (c *httpClient) CallTool(ctx context.Context, name string, args map[string]any) (*Result, error) {

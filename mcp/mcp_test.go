@@ -308,10 +308,6 @@ func TestStdioClient_Integration(t *testing.T) {
 	defer client.Close()
 
 	tools := client.Tools()
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-
 	t.Logf("Found %d tools", len(tools))
 	for _, tool := range tools {
 		t.Logf("  - %s: %s", tool.Name, tool.Description)
@@ -326,10 +322,6 @@ type mockClient struct {
 	callErr    error
 	closeErr   error
 	closed     bool
-}
-
-func (m *mockClient) ListTools(ctx context.Context) ([]Tool, error) {
-	return m.tools, nil
 }
 
 func (m *mockClient) CallTool(ctx context.Context, name string, args map[string]any) (*Result, error) {

@@ -71,7 +71,7 @@ func Stdio(ctx context.Context, config ServerConfig) (Client, error) {
 		return nil, fmt.Errorf("initialize: %w", err)
 	}
 
-	if _, err := c.ListTools(ctx); err != nil {
+	if err := c.refreshTools(ctx); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("list tools: %w", err)
 	}
@@ -98,20 +98,20 @@ func (c *stdioClient) initialize(ctx context.Context) error {
 	return nil
 }
 
-func (c *stdioClient) ListTools(ctx context.Context) ([]Tool, error) {
-
+// refreshTools loads the server's tool list into the client's cache.
+func (c *stdioClient) refreshTools(ctx context.Context) error {
 	result, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var list toolsListResult
 	if err := json.Unmarshal(result, &list); err != nil {
-		return nil, fmt.Errorf("failed to parse tools list: %w", err)
+		return fmt.Errorf("failed to parse tools list: %w", err)
 	}
 
 	c.tools = list.Tools
-	return list.Tools, nil
+	return nil
 }
 
 func (c *stdioClient) CallTool(ctx context.Context, name string, args map[string]any) (*Result, error) {

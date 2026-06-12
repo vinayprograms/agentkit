@@ -39,7 +39,7 @@ func mcpServer(tools []Tool) *httptest.Server {
 	}))
 }
 
-func TestHTTPClient_CreateAndListTools(t *testing.T) {
+func TestHTTPClient_CreateAndLoadTools(t *testing.T) {
 	server := mcpServer([]Tool{
 		{Name: "read", Description: "Read a file"},
 		{Name: "write", Description: "Write a file"},
@@ -87,12 +87,11 @@ func TestHTTPClient_RefreshTools(t *testing.T) {
 	}
 	defer client.Close()
 
-	// ListTools refreshes the cache
-	tools, err := client.ListTools(context.Background())
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
+	// refreshTools re-loads the cache from the server.
+	if err := client.(*httpClient).refreshTools(context.Background()); err != nil {
+		t.Fatalf("refreshTools: %v", err)
 	}
-	if len(tools) != 1 {
+	if tools := client.Tools(); len(tools) != 1 {
 		t.Errorf("expected 1 tool, got %d", len(tools))
 	}
 }
@@ -135,7 +134,7 @@ func TestHTTPClient_ConnectionError(t *testing.T) {
 	}
 }
 
-func TestHTTPClient_ConstructorFailsOnListToolsError(t *testing.T) {
+func TestHTTPClient_ConstructorFailsOnToolsLoadError(t *testing.T) {
 	// Server returns valid initialize but invalid (non-JSON) tools/list result
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
@@ -169,7 +168,7 @@ func TestHTTPClient_ConstructorFailsOnListToolsError(t *testing.T) {
 	}
 }
 
-func TestHTTPClient_ListToolsJSONParseError(t *testing.T) {
+func TestHTTPClient_RefreshToolsJSONParseError(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
@@ -209,9 +208,9 @@ func TestHTTPClient_ListToolsJSONParseError(t *testing.T) {
 	}
 	defer client.Close()
 
-	_, err = client.ListTools(context.Background())
+	err = client.(*httpClient).refreshTools(context.Background())
 	if err == nil {
-		t.Fatal("expected JSON parse error from ListTools")
+		t.Fatal("expected JSON parse error from refreshTools")
 	}
 	if !contains(err.Error(), "failed to parse tools list") {
 		t.Errorf("expected 'failed to parse tools list', got: %v", err)
