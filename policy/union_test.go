@@ -204,7 +204,7 @@ func TestUnion_ContentSecurity_Union(t *testing.T) {
 	}
 
 	u := NewUnion(pol1, pol2)
-	merged := u.Merged()
+	merged := u.merged
 
 	if len(merged.Content.Security.Patterns) != 2 {
 		t.Fatalf("expected 2 patterns, got %d: %v", len(merged.Content.Security.Patterns), merged.Content.Security.Patterns)
@@ -222,35 +222,13 @@ func TestUnion_ContentSecurity_OneNil(t *testing.T) {
 	}
 
 	u := NewUnion(pol1, pol2)
-	merged := u.Merged()
+	merged := u.merged
 
 	if merged.Content == nil || merged.Content.Security == nil {
 		t.Fatal("expected non-nil content.security")
 	}
 	if len(merged.Content.Security.Keywords) != 1 {
 		t.Errorf("expected 1 keyword, got %d", len(merged.Content.Security.Keywords))
-	}
-}
-
-func TestUnion_Refresh(t *testing.T) {
-	pol1 := &Policy{DefaultDeny: false, Tools: make(map[string]*ToolPolicy)}
-
-	u := NewUnion(pol1)
-
-	if !u.IsToolEnabled("read") {
-		t.Error("expected read enabled before refresh")
-	}
-
-	pol1.DefaultDeny = true
-
-	if !u.IsToolEnabled("read") {
-		t.Error("expected read enabled from cache")
-	}
-
-	u.Refresh()
-
-	if u.IsToolEnabled("read") {
-		t.Error("expected read disabled after refresh")
 	}
 }
 
@@ -405,34 +383,6 @@ func TestUnion_FromFiles_DefaultDenyOverride(t *testing.T) {
 
 	if u.IsToolEnabled("read") {
 		t.Error("expected read disabled with default_deny=true from project")
-	}
-}
-
-func TestUnion_NestedUnion(t *testing.T) {
-	inner := NewUnion(&Policy{
-		DefaultDeny: true,
-		AllowedDirs: []string{"/inner"},
-		Tools: map[string]*ToolPolicy{
-			"bash": {Deny: []string{"rm"}},
-		},
-	})
-
-	outer := NewUnion(inner, &Policy{
-		AllowedDirs: []string{"/outer"},
-		Tools:       make(map[string]*ToolPolicy),
-	})
-
-	dirs := outer.GetAllowedDirs()
-	dirSet := make(map[string]bool)
-	for _, d := range dirs {
-		dirSet[d] = true
-	}
-	if !dirSet["/inner"] || !dirSet["/outer"] {
-		t.Errorf("expected both /inner and /outer in dirs, got %v", dirs)
-	}
-
-	if !outer.IsToolEnabled("bash") {
-		t.Error("expected bash enabled from inner union")
 	}
 }
 

@@ -8,15 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestUnionStore_EmptyInputs(t *testing.T) {
-	union := NewUnionStore()
+func TestChain_EmptyInputs(t *testing.T) {
+	union := NewChain()
 	key := union.Get("any")
 	assert.Equal(t, Credential(""), key, "Expected empty string for any provider when no stores are present")
 	providers := union.Providers()
 	assert.Empty(t, providers, "Expected no providers when no stores are present")
 }
 
-func TestUnionStore_GlobalAndLocalStore(t *testing.T) {
+func TestChain_GlobalAndLocalStore(t *testing.T) {
 	// Use two filestores one at /tmp and another at /tmp/local to simulate global and local stores.
 
 	// Write credentials to the global store
@@ -53,7 +53,7 @@ refresh_url = "https://oauth2.googleapis.com/token"
 	assert.NoError(t, err, "Failed to create global file store")
 	localStore, err := NewFileStore("/tmp/local/credentials.toml")
 	assert.NoError(t, err, "Failed to create local file store")
-	union := NewUnionStore(&globalStore, &localStore)
+	union := NewChain(&globalStore, &localStore)
 
 	// Test that the union store returns the local credential (higher priority) for "anthropic"
 	key := union.Get("anthropic")
@@ -68,7 +68,7 @@ refresh_url = "https://oauth2.googleapis.com/token"
 	assert.ElementsMatch(t, []string{"anthropic", "google"}, providers, "Expected Providers() to return both providers without duplicates")
 }
 
-func TestUnionStore_TwoFileAndOneEnvStore(t *testing.T) {
+func TestChain_TwoFileAndOneEnvStore(t *testing.T) {
 	// Use two filestores one at /tmp and another at /tmp/local to simulate global and local stores.
 
 	// Write credentials to the global store
@@ -111,7 +111,7 @@ refresh_url = "https://oauth2.googleapis.com/token"
 	defer os.Unsetenv("ANTHROPIC_API_KEY")
 
 	envStore := NewEnvStore()
-	union := NewUnionStore(&globalStore, &localStore, envStore)
+	union := NewChain(&globalStore, &localStore, envStore)
 
 	// Test that the union store returns the env credential (highest priority) for "anthropic"
 	key := union.Get("anthropic")

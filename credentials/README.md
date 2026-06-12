@@ -12,7 +12,7 @@ fileStore, err := credentials.NewFileStore("credentials.toml")
 envStore := credentials.NewEnvStore()
 
 // Compose with priority ordering (last store wins).
-creds := credentials.NewUnionStore(fileStore, envStore)
+creds := credentials.NewChain(fileStore, envStore)
 
 // Resolve a credential. Returns the usable token (API key or valid OAuth access token).
 token := creds.Get("anthropic")
@@ -57,10 +57,10 @@ refresh_url = "https://oauth2.googleapis.com/token"
 
 ## Priority and Composition
 
-`UnionStore` checks stores in reverse order (last added = highest priority):
+`Chain` checks stores in reverse order (last added = highest priority):
 
 ```go
-creds := credentials.NewUnionStore(
+creds := credentials.NewChain(
     globalFileStore,  // lowest priority
     localFileStore,   // overrides global
     envStore,         // highest priority

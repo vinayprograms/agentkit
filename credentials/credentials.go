@@ -5,7 +5,8 @@
 //   - FileStore: reads credentials from a TOML file (file.go)
 //   - EnvStore: reads credentials from environment variables (env.go)
 //
-// Use Chain to compose stores with priority ordering (e.g., file > env).
+// Use Chain (NewChain) to compose stores with priority ordering (e.g., file > env):
+// it tries each store in turn and returns the first credential found.
 package credentials
 
 // Credential holds a resolved credential (API key or OAuth token).

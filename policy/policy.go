@@ -110,7 +110,9 @@ type ContentSecurity struct {
 // and [security].extra_* . Use FromTOMLWithUnknownKeys if you need to detect and
 // validate them yourself.
 //
-// Call ExpandPatterns after loading to resolve $WORKSPACE and ~ in patterns.
+// The $WORKSPACE and ~ placeholders are a TOML-file convenience resolved by
+// FromFile/FromTOML at load time. A policy built directly in code should use
+// real paths (the workspace path is already available to the caller).
 func New() *Policy {
 	return &Policy{
 		DefaultDeny:    true,

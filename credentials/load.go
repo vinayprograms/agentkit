@@ -53,7 +53,7 @@ func Load(paths ...string) (lookup Lookup, file FileStore, err error) {
 		stores = append(stores, cli)
 	}
 
-	return NewUnionStore(stores...), file, nil
+	return NewChain(stores...), file, nil
 }
 
 // claudeCLIFile mirrors the structure of ~/.claude/.credentials.json.

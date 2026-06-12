@@ -48,7 +48,7 @@ func TestUnionResolvePrefersHighestPriority(t *testing.T) {
 		ExpiresAt:   time.Now().Add(time.Hour),
 	}}}
 
-	u := NewUnionStore(low, high) // last wins
+	u := NewChain(low, high) // last wins
 	cred, isOAuth := u.Resolve("anthropic")
 	assert.Equal(t, Credential("high-oauth"), cred)
 	assert.True(t, isOAuth)

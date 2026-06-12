@@ -1,94 +1,60 @@
 package policy
 
-// Union merges multiple Lookup stores with priority ordering.
-// The last store passed to NewUnion has the highest priority.
-// The merged policy is built lazily on first access and cached.
-// Call Refresh to invalidate the cache after underlying stores change.
+import "maps"
+
+// Union merges multiple policies into one, with later policies taking priority
+// on conflicts (last wins). The merge happens once, at construction.
+//
+// Union implements Lookup, so a merged policy is used for enforcement exactly
+// like a single *Policy.
 type Union struct {
-	stores []Lookup
 	merged *Policy
 }
 
-// NewUnion creates a Union from multiple Lookup stores.
-// Priority: last store wins (same convention as credentials.UnionStore).
-func NewUnion(stores ...Lookup) *Union {
-	return &Union{stores: stores}
+// NewUnion merges policies with priority ordering: the last policy passed wins
+// on conflicts. Scalar fields (DefaultDeny, MCP.Enabled) are last-wins;
+// AllowedDirs, ProtectedFiles, MCP allow-lists, and content patterns/keywords
+// are deduplicated unions; Tools are overlaid per name.
+func NewUnion(policies ...*Policy) *Union {
+	return &Union{merged: build(policies)}
 }
 
-// Refresh invalidates the cached merged policy, forcing a rebuild on the next call.
-func (u *Union) Refresh() {
-	u.merged = nil
-}
+func (u *Union) GetToolPolicy(tool string) *ToolPolicy { return u.merged.GetToolPolicy(tool) }
 
-// Merged returns the lazily-built merged policy. Exposed for consumers
-// that need direct access to the merged *Policy (e.g., BashChecker).
-func (u *Union) Merged() *Policy {
-	if u.merged == nil {
-		u.merged = u.build()
-	}
-	return u.merged
-}
+func (u *Union) IsToolEnabled(tool string) bool { return u.merged.IsToolEnabled(tool) }
 
-func (u *Union) GetToolPolicy(tool string) *ToolPolicy {
-	return u.Merged().GetToolPolicy(tool)
-}
-
-func (u *Union) IsToolEnabled(tool string) bool {
-	return u.Merged().IsToolEnabled(tool)
-}
-
-func (u *Union) CheckPath(tool, path string) (bool, string) {
-	return u.Merged().CheckPath(tool, path)
-}
+func (u *Union) CheckPath(tool, path string) (bool, string) { return u.merged.CheckPath(tool, path) }
 
 func (u *Union) CheckDomain(tool, domain string) (bool, string) {
-	return u.Merged().CheckDomain(tool, domain)
+	return u.merged.CheckDomain(tool, domain)
 }
 
 func (u *Union) CheckMCPTool(server, tool string) (bool, string, string) {
-	return u.Merged().CheckMCPTool(server, tool)
+	return u.merged.CheckMCPTool(server, tool)
 }
 
-func (u *Union) IsProtectedFile(path string) bool {
-	return u.Merged().IsProtectedFile(path)
-}
+func (u *Union) IsProtectedFile(path string) bool { return u.merged.IsProtectedFile(path) }
 
-func (u *Union) GetAllowedDirs() []string {
-	return u.Merged().GetAllowedDirs()
-}
+func (u *Union) GetAllowedDirs() []string { return u.merged.GetAllowedDirs() }
 
-// build creates a merged *Policy from all stores.
-func (u *Union) build() *Policy {
-	if len(u.stores) == 0 {
-		return New()
-	}
-
+// build folds policies into one, last-wins on conflicts.
+func build(policies []*Policy) *Policy {
 	result := New()
 
-	for _, store := range u.stores {
-		pol, ok := store.(*Policy)
-		if !ok {
-			// If the store is a *Union, get its merged policy.
-			if union, ok := store.(*Union); ok {
-				pol = union.Merged()
-			} else {
-				continue
-			}
+	for _, pol := range policies {
+		if pol == nil {
+			continue
 		}
 
 		// DefaultDeny: last-wins.
 		result.DefaultDeny = pol.DefaultDeny
 
-		// AllowedDirs: deduplicated union.
+		// AllowedDirs / ProtectedFiles: deduplicated union.
 		result.AllowedDirs = dedupeUnion(result.AllowedDirs, pol.AllowedDirs)
-
-		// ProtectedFiles: deduplicated union.
 		result.ProtectedFiles = dedupeUnion(result.ProtectedFiles, pol.ProtectedFiles)
 
 		// Tools: per-tool overlay, last-wins per tool name.
-		for name, tp := range pol.Tools {
-			result.Tools[name] = tp
-		}
+		maps.Copy(result.Tools, pol.Tools)
 
 		// MCP: Enabled last-wins, Allow deduplicated union.
 		if pol.MCP != nil {
