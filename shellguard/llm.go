@@ -62,33 +62,60 @@ Respond with ONLY a JSON object, nothing else:
 		command,
 	)
 
-	resp, err := model.Chat(ctx, llm.Prompt(prompt))
+	// Reasoning models (e.g. gpt-oss:20b) can burn their whole max_tokens
+	// budget on hidden thinking and return empty content — the LLM review
+	// is a bounded classification, not a task that benefits from
+	// deliberation, so ask for it without thinking at all.
+	req := llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: prompt}},
+		Thinking: llm.ThinkingOff,
+	}
+
+	resp, err := model.Chat(ctx, req)
 	if err != nil {
 		return &Result{Allowed: false, Reason: fmt.Sprintf("LLM check failed: %v", err)}, err
 	}
+	tokensIn, tokensOut := resp.InputTokens, resp.OutputTokens
 
 	content := strings.TrimSpace(resp.Content)
 	if content == "" {
+		// A reviewer that returns nothing is not a verdict — retry once
+		// before giving up on it.
+		resp2, err2 := model.Chat(ctx, req)
+		if err2 == nil {
+			tokensIn += resp2.InputTokens
+			tokensOut += resp2.OutputTokens
+			content = strings.TrimSpace(resp2.Content)
+		}
+	}
+	if content == "" {
+		// Still nothing after the retry: a reviewer failure is not a
+		// denial. llmCheck only runs once the deterministic stage has
+		// already allowed this command (see Gate.check), so fall back to
+		// that verdict — fail-closed DENY here would turn an unrelated
+		// model hiccup into a hard block on a command the deterministic
+		// rules already cleared (see shellguard llm.go / P0 8c).
 		return &Result{
-			Allowed:      false,
-			Reason:       "LLM returned empty response",
-			InputTokens:  resp.InputTokens,
-			OutputTokens: resp.OutputTokens,
+			Allowed:      true,
+			Reason:       "LLM reviewer returned empty response twice; falling back to deterministic ALLOW",
+			InputTokens:  tokensIn,
+			OutputTokens: tokensOut,
 		}, nil
 	}
 
 	verdict, reason := parseVerdict(content)
+	reason = truncateReason(reason)
 
 	switch verdict {
 	case "ALLOW":
-		return &Result{Allowed: true, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
+		return &Result{Allowed: true, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 	case "BLOCK":
 		if reason == "" {
 			reason = "blocked by LLM check"
 		}
-		return &Result{Allowed: false, Reason: reason, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
+		return &Result{Allowed: false, Reason: reason, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 	default:
-		return &Result{Allowed: false, Reason: content, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
+		return &Result{Allowed: false, Reason: reason, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 	}
 }
 
@@ -97,17 +124,65 @@ type verdictResponse struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// maxReasonLen bounds the verdict reason text surfaced to the caller (and
+// from there, often back into an agent's context or a session log). A
+// reasoning model's chain-of-thought leaking into resp.Content can run to
+// 900+ chars; nothing downstream needs more than a brief explanation.
+const maxReasonLen = 200
+
+func truncateReason(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxReasonLen {
+		return s
+	}
+	return s[:maxReasonLen] + "... (truncated)"
+}
+
+// balancedJSONObjects returns every top-level balanced {...} substring of
+// s, in the order they appear. A reasoning model's reply can carry
+// chain-of-thought prose before the verdict JSON, or even two JSON objects
+// (e.g. one embedded in an explanation, one as the actual answer) — this
+// lets parseVerdict try candidates from the end, where the actual verdict
+// almost always lands.
+func balancedJSONObjects(s string) []string {
+	var objs []string
+	depth := 0
+	start := -1
+	for i, r := range s {
+		switch r {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 && start >= 0 {
+					objs = append(objs, s[start:i+1])
+					start = -1
+				}
+			}
+		}
+	}
+	return objs
+}
+
 func parseVerdict(content string) (verdict, reason string) {
 	var resp verdictResponse
-	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &resp); err == nil && resp.Verdict != "" {
 		return strings.ToUpper(resp.Verdict), resp.Reason
 	}
 
-	start := strings.Index(content, "{")
-	end := strings.LastIndex(content, "}")
-	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(content[start:end+1]), &resp); err == nil {
-			return strings.ToUpper(resp.Verdict), resp.Reason
+	// Try the LAST balanced JSON object that actually parses as a verdict
+	// first: reasoning text precedes the verdict far more often than it
+	// follows it, and when two objects are present the later one is the
+	// answer.
+	objs := balancedJSONObjects(content)
+	for i := len(objs) - 1; i >= 0; i-- {
+		var r verdictResponse
+		if err := json.Unmarshal([]byte(objs[i]), &r); err == nil && r.Verdict != "" {
+			return strings.ToUpper(r.Verdict), r.Reason
 		}
 	}
 

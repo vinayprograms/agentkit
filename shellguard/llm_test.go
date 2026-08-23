@@ -2,6 +2,8 @@ package shellguard
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/vinayprograms/agentkit/llm"
@@ -25,6 +27,14 @@ func TestParseVerdict(t *testing.T) {
 		{"bold ALLOW fallback", "**ALLOW**", "ALLOW", ""},
 		{"rambling then ALLOW", "This seems safe\n\nALLOW", "ALLOW", ""},
 		{"no verdict", "I'm not sure about this command", "", "I'm not sure about this command"},
+		// Two balanced JSON objects in the response — e.g. reasoning that
+		// quotes an example verdict shape, followed by the actual verdict.
+		// The LAST one that parses as a verdict wins (P0 8d).
+		{"two JSON objects, last wins", `The rule is like {"verdict":"ALLOW"} normally, but here: {"verdict":"BLOCK","reason":"writes outside workspace"}`, "BLOCK", "writes outside workspace"},
+		{"two JSON objects, second has no verdict field", `{"verdict":"ALLOW"} and some metadata {"note":"fyi"}`, "ALLOW", ""},
+		// Long chain-of-thought prose (a reasoning model's thinking
+		// leaking into content) before the real verdict JSON.
+		{"long reasoning then JSON", strings.Repeat("Let me think about this carefully. ", 20) + `{"verdict":"BLOCK","reason":"path escapes workspace"}`, "BLOCK", "path escapes workspace"},
 	}
 
 	for _, tt := range tests {
@@ -40,24 +50,66 @@ func TestParseVerdict(t *testing.T) {
 	}
 }
 
+// A reviewer that returns nothing (a reasoning model burning its whole
+// max_tokens budget on thinking) is a reviewer failure, not a denial: the
+// deterministic stage already allowed this command before llmCheck ever
+// runs, so an unanswerable review should fall back to that ALLOW rather
+// than fail closed (P0 8c).
 func TestLLMCheck_EmptyResponse(t *testing.T) {
 	mock := &emptyResponseModel{}
 	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, "/workspace", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Allowed {
-		t.Error("empty LLM response should block")
+	if !result.Allowed {
+		t.Error("empty LLM response after retry should fall back to deterministic ALLOW, not block")
 	}
-	if result.Reason != "LLM returned empty response" {
+	if !strings.Contains(result.Reason, "empty response") {
 		t.Errorf("unexpected reason: %s", result.Reason)
+	}
+	if mock.calls != 2 {
+		t.Errorf("calls = %d, want 2 (original + one retry)", mock.calls)
 	}
 }
 
-type emptyResponseModel struct{}
+// A reviewer that is empty once but answers on the retry is used normally
+// — the retry isn't wasted.
+func TestLLMCheck_EmptyThenAnswers(t *testing.T) {
+	mock := &sequenceModel{responses: []string{"", `{"verdict":"BLOCK","reason":"writes outside workspace"}`}}
+	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, "/workspace", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Allowed {
+		t.Error("expected BLOCK from the retry's answer")
+	}
+	if result.Reason != "writes outside workspace" {
+		t.Errorf("unexpected reason: %s", result.Reason)
+	}
+	if mock.calls != 2 {
+		t.Errorf("calls = %d, want 2", mock.calls)
+	}
+}
+
+type emptyResponseModel struct{ calls int }
 
 func (m *emptyResponseModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.calls++
+	if req.Thinking != llm.ThinkingOff {
+		return nil, fmt.Errorf("expected Thinking=ThinkingOff, got %q", req.Thinking)
+	}
 	return &llm.ChatResponse{Content: ""}, nil
+}
+
+type sequenceModel struct {
+	responses []string
+	calls     int
+}
+
+func (m *sequenceModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	resp := m.responses[m.calls]
+	m.calls++
+	return &llm.ChatResponse{Content: resp}, nil
 }
 
 func TestLLMCheck_BlockWithNoReason(t *testing.T) {
@@ -184,4 +236,28 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// A verdict reason is truncated to ~200 chars before it's surfaced to the
+// caller — a reasoning model's chain-of-thought reason can otherwise run
+// to 900+ chars, which then gets logged and often fed back into an
+// agent's context (P0 8d).
+func TestLLMCheck_ReasonTruncated(t *testing.T) {
+	longReason := strings.Repeat("this write path escapes every writable directory we were given ", 10)
+	mock := &sequenceModel{responses: []string{
+		fmt.Sprintf(`{"verdict":"BLOCK","reason":%q}`, longReason),
+	}}
+	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, "/workspace", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Allowed {
+		t.Fatal("expected BLOCK")
+	}
+	if len(result.Reason) > maxReasonLen+len("... (truncated)") {
+		t.Errorf("reason not truncated: %d chars: %s", len(result.Reason), result.Reason)
+	}
+	if !strings.HasSuffix(result.Reason, "... (truncated)") {
+		t.Errorf("reason missing truncation suffix: %s", result.Reason)
+	}
 }
