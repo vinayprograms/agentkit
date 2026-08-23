@@ -13,15 +13,19 @@ import (
 
 // mockLLM implements llm.Model for testing.
 type mockLLM struct {
-	response string
-	err      error
+	response   string
+	err        error
+	stopReason string
+	thinking   string
+	lastReq    llm.ChatRequest
 }
 
-func (m *mockLLM) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *mockLLM) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.lastReq = req
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &llm.ChatResponse{Content: m.response}, nil
+	return &llm.ChatResponse{Content: m.response, StopReason: m.stopReason, Thinking: m.thinking}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -2,10 +2,25 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
+
+// summarizerMaxTokens bounds the summarizer's response. Reasoning models
+// (e.g. gpt-oss) can spend their entire budget on hidden "thinking" tokens
+// before producing any content, so this needs enough headroom above a
+// typical thinking burst that some tokens are still left for the answer.
+const summarizerMaxTokens = 4000
+
+// ErrEmptySummary is returned by Summarize when the model produced no
+// usable content — typically a reasoning model that exhausted its token
+// budget on thinking (stop_reason "length") before writing an answer.
+// Callers should treat this the same as any other summarization failure
+// (e.g. degrade to returning raw content).
+var ErrEmptySummary = errors.New("summarizer returned empty content")
 
 // Summarizer extracts information from content.
 type Summarizer interface {
@@ -42,9 +57,16 @@ Provide a concise response based only on the content above. In your response:
 - If the content doesn't contain relevant information, say so
 - Be concise but thorough`, content, question)
 
-	resp, err := s.model.Chat(ctx, llm.Prompt(prompt, llm.MaxTokens(1000)))
+	req := llm.Prompt(prompt, llm.MaxTokens(summarizerMaxTokens))
+	req.Thinking = llm.ThinkingOff // this call wants a direct answer, not reasoning traces
+
+	resp, err := s.model.Chat(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("summarization LLM call failed: %w", err)
+	}
+
+	if strings.TrimSpace(resp.Content) == "" {
+		return "", fmt.Errorf("%w (stop_reason=%q, thinking_chars=%d)", ErrEmptySummary, resp.StopReason, len(resp.Thinking))
 	}
 
 	return resp.Content, nil
