@@ -27,6 +27,7 @@ type Gate struct {
 	shell              Shell
 	allowedDirs        []string
 	userDeniedCommands []string
+	disabledTools      []string
 	workspace          string
 	model              llm.Model
 	securityScope      string
@@ -35,19 +36,64 @@ type Gate struct {
 	OnDecision func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int)
 }
 
+// Config is the input to NewGate. It is additive: every New parameter has a
+// same-named field, plus DisabledTools, which New has no way to set.
+type Config struct {
+	// Shell determines how commands are parsed (use BashShell{}, FishShell{}, or PosixShell{}).
+	Shell Shell
+	// Workspace is the cwd commands execute in.
+	Workspace string
+	// AllowedDirs are the directories the LLM stage treats as writable, and
+	// as the boundary for data reads (see llm.go's data-read vs
+	// toolchain-read distinction).
+	AllowedDirs []string
+	// UserDeniedCommands are policy-denied base command names. They are
+	// enforced deterministically (exact base-name match) and also passed to
+	// the LLM stage so it can catch a command that achieves the same effect
+	// by another route.
+	UserDeniedCommands []string
+	// DisabledTools are agent tool names (e.g. "write", "read") disabled by
+	// policy. The LLM stage uses this so bash can't be used as a side door
+	// around a disabled tool: a disabled "write"/"edit" blocks all bash
+	// writes, a disabled "read" blocks all bash data reads (even inside
+	// AllowedDirs).
+	DisabledTools []string
+	// Model is optional (nil for deterministic-only checks).
+	Model llm.Model
+	// SecurityScope is optional ("" for normal mode).
+	SecurityScope string
+}
+
+// NewGate creates a new shell command security gate from a Config. This is
+// the preferred constructor — see New's deprecation note.
+func NewGate(cfg Config) *Gate {
+	return &Gate{
+		shell:              cfg.Shell,
+		allowedDirs:        cfg.AllowedDirs,
+		userDeniedCommands: cfg.UserDeniedCommands,
+		disabledTools:      cfg.DisabledTools,
+		workspace:          cfg.Workspace,
+		model:              cfg.Model,
+		securityScope:      cfg.SecurityScope,
+	}
+}
+
 // New creates a new shell command security gate.
 // shell determines how commands are parsed (use BashShell{}, FishShell{}, or PosixShell{}).
 // model is optional (nil for deterministic-only checks).
 // securityScope is optional ("" for normal mode).
+//
+// Deprecated: use NewGate, which also accepts DisabledTools. New delegates
+// to it unchanged and is kept for existing callers.
 func New(shell Shell, workspace string, allowedDirs, userDeniedCommands []string, model llm.Model, securityScope string) *Gate {
-	return &Gate{
-		shell:              shell,
-		allowedDirs:        allowedDirs,
-		userDeniedCommands: userDeniedCommands,
-		workspace:          workspace,
-		model:              model,
-		securityScope:      securityScope,
-	}
+	return NewGate(Config{
+		Shell:              shell,
+		Workspace:          workspace,
+		AllowedDirs:        allowedDirs,
+		UserDeniedCommands: userDeniedCommands,
+		Model:              model,
+		SecurityScope:      securityScope,
+	})
 }
 
 // Check implements tools.Guard. It extracts "command" from args and runs the security pipeline.
@@ -82,7 +128,7 @@ func (g *Gate) check(ctx context.Context, command string) error {
 
 	event(ctx, "llm.started")
 	start := time.Now()
-	result, err := llmCheck(ctx, g.model, command, g.allowedDirs, g.workspace, g.securityScope)
+	result, err := llmCheck(ctx, g.model, command, g.allowedDirs, g.userDeniedCommands, g.disabledTools, g.workspace, g.securityScope)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
 		g.logDecision(command, "llm", false, fmt.Sprintf("error: %v", err), durationMs, 0, 0)
