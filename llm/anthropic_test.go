@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -202,5 +203,44 @@ func TestApplyAnthropicThinking_High(t *testing.T) {
 	// MaxTokens should be bumped to accommodate thinking budget
 	if maxTokens <= 4096 {
 		t.Errorf("expected maxTokens increased for thinking, got %d", maxTokens)
+	}
+}
+
+// =============================================================================
+// ToolChoice Tests
+// =============================================================================
+
+func TestApplyAnthropicToolChoice(t *testing.T) {
+	tests := []struct {
+		name   string
+		choice ToolChoice
+		want   string // expected JSON of the resulting params.ToolChoice, "" = untouched (omitted)
+	}{
+		{"auto is untouched", ToolChoiceAuto, ""},
+		{"required maps to any", ToolChoiceRequired, `{"type":"any"}`},
+		{"named tool", ToolChoiceTool("verdict"), `{"name":"verdict","type":"tool"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := anthropic.MessageNewParams{}
+			applyAnthropicToolChoice(tt.choice, &params)
+
+			if tt.want == "" {
+				if params.ToolChoice.OfAuto == nil && params.ToolChoice.OfAny == nil && params.ToolChoice.OfTool == nil && params.ToolChoice.OfNone == nil {
+					return
+				}
+				b, _ := json.Marshal(params.ToolChoice)
+				t.Fatalf("expected ToolChoice to be left unset, got %s", b)
+			}
+
+			got, err := json.Marshal(params.ToolChoice)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
+			}
+		})
 	}
 }

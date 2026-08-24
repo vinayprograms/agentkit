@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
+
+	"github.com/openai/openai-go"
 )
 
 // =============================================================================
@@ -80,6 +83,43 @@ func TestIsReasoningModel(t *testing.T) {
 			got := isReasoningModel(tt.model)
 			if got != tt.want {
 				t.Errorf("isReasoningModel(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// ToolChoice Tests
+// =============================================================================
+
+func TestApplyOpenAIToolChoice(t *testing.T) {
+	tests := []struct {
+		name   string
+		choice ToolChoice
+		want   string // "" = left unset (omitted from JSON)
+	}{
+		{"auto is untouched", ToolChoiceAuto, ""},
+		{"required", ToolChoiceRequired, `"required"`},
+		{"named tool", ToolChoiceTool("verdict"), `{"function":{"name":"verdict"},"type":"function"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := openai.ChatCompletionNewParams{}
+			applyOpenAIToolChoice(tt.choice, &params)
+
+			b, err := json.Marshal(params.ToolChoice)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if tt.want == "" {
+				if string(b) != "null" {
+					t.Errorf("expected ToolChoice untouched (null), got %s", b)
+				}
+				return
+			}
+			if string(b) != tt.want {
+				t.Errorf("got %s, want %s", b, tt.want)
 			}
 		})
 	}

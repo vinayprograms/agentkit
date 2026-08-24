@@ -124,6 +124,32 @@ type oaiRequest struct {
 	Tools       []oaiTool    `json:"tools,omitempty"`
 	MaxTokens   int          `json:"max_tokens,omitempty"`
 	Temperature *float64     `json:"temperature,omitempty"`
+	ToolChoice  any          `json:"tool_choice,omitempty"`
+}
+
+// oaiNamedToolChoice is the OpenAI-compatible {"type":"function","function":{"name":...}}
+// tool_choice shape.
+type oaiNamedToolChoice struct {
+	Type     string                     `json:"type"`
+	Function oaiNamedToolChoiceFunction `json:"function"`
+}
+
+type oaiNamedToolChoiceFunction struct {
+	Name string `json:"name"`
+}
+
+// toOAICompatToolChoice converts a ToolChoice to the OpenAI-compatible
+// tool_choice value. Arbitrary OpenAI-compatible servers vary in support for
+// this field; an unsupported field is expected to be ignored by well-behaved
+// servers, so callers must keep a prose fallback rather than relying on it.
+func toOAICompatToolChoice(choice ToolChoice) any {
+	if name, ok := choice.ToolName(); ok {
+		return oaiNamedToolChoice{Type: "function", Function: oaiNamedToolChoiceFunction{Name: name}}
+	}
+	if choice.IsRequired() {
+		return "required"
+	}
+	return nil
 }
 
 type oaiResponse struct {
@@ -165,6 +191,8 @@ func (p *openAICompatModel) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	if len(tools) > 0 {
 		oaiReq.Tools = tools
 	}
+
+	oaiReq.ToolChoice = toOAICompatToolChoice(req.ToolChoice)
 
 	// Make request with retry
 	resp, err := withRetry(ctx, p.retry, p.providerName, func() (*oaiResponse, error) {

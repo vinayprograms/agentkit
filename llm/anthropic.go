@@ -107,6 +107,7 @@ func (p *anthropicModel) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	}
 
 	applyAnthropicThinking(p.thinking, req, &params, &maxTokens)
+	applyAnthropicToolChoice(req.ToolChoice, &params)
 
 	return p.chatStreaming(ctx, params)
 }
@@ -169,6 +170,19 @@ func toAnthropicTools(tools []ToolDef) []anthropic.ToolUnionParam {
 		})
 	}
 	return result
+}
+
+// applyAnthropicToolChoice sets tool_choice on the request params. Anthropic
+// natively supports "any" (call some tool) and a named tool; ToolChoiceAuto
+// leaves the field unset (Anthropic's own default).
+func applyAnthropicToolChoice(choice ToolChoice, params *anthropic.MessageNewParams) {
+	if name, ok := choice.ToolName(); ok {
+		params.ToolChoice = anthropic.ToolChoiceParamOfTool(name)
+		return
+	}
+	if choice.IsRequired() {
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
+	}
 }
 
 // thinkingLevelToAnthropicBudget converts a thinking level to Anthropic budget tokens.

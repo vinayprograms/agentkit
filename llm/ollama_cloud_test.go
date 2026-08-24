@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -225,5 +226,51 @@ func TestFromOllamaResponse_ToolCalls(t *testing.T) {
 	}
 	if result.ToolCalls[0].Name != "search" {
 		t.Errorf("expected tool name 'search', got %q", result.ToolCalls[0].Name)
+	}
+}
+
+// TestOllamaCloudProvider_ToolChoiceDegradesToAuto documents that Ollama's
+// native /api/chat has no documented tool_choice / forced-tool-call field
+// (checked against https://docs.ollama.com/capabilities/tool-calling,
+// 2026-08-23). Setting req.ToolChoice must not error and must not add any
+// unrecognized field to the wire request — callers of this provider must
+// keep a prose fallback.
+func TestOllamaCloudProvider_ToolChoiceDegradesToAuto(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		resp := ollamaChatResponse{
+			Model:   "gpt-oss:120b",
+			Message: ollamaMessage{Role: "assistant", Content: "ok"},
+			Done:    true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p, err := newOllamaCloud(ollamaCloudConfig{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "gpt-oss:120b",
+	})
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	_, err = p.Chat(context.Background(), ChatRequest{
+		Messages:   []Message{{Role: "user", Content: "hi"}},
+		ToolChoice: ToolChoiceTool("verdict"),
+	})
+	if err != nil {
+		t.Fatalf("chat error: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(gotBody, &raw); err != nil {
+		t.Fatalf("unmarshal sent body: %v", err)
+	}
+	if _, present := raw["tool_choice"]; present {
+		t.Errorf("expected no tool_choice field in Ollama request, got %v", raw["tool_choice"])
 	}
 }

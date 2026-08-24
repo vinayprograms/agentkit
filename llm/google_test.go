@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/google/generative-ai-go/genai"
 )
 
 // =============================================================================
@@ -177,5 +180,41 @@ func TestToGeminiTools(t *testing.T) {
 	}
 	if result[0].Name != "search" {
 		t.Errorf("expected tool name 'search', got %q", result[0].Name)
+	}
+}
+
+// =============================================================================
+// ToolChoice Tests
+// =============================================================================
+
+func TestToGeminiToolConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		choice ToolChoice
+		want   *genai.ToolConfig
+	}{
+		{"auto returns nil", ToolChoiceAuto, nil},
+		{
+			"required maps to ANY with no allowed-names restriction",
+			ToolChoiceRequired,
+			&genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingAny}},
+		},
+		{
+			"named tool maps to ANY scoped to that name",
+			ToolChoiceTool("verdict"),
+			&genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode:                 genai.FunctionCallingAny,
+				AllowedFunctionNames: []string{"verdict"},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toGeminiToolConfig(tt.choice)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }

@@ -94,6 +94,8 @@ func (p *openAIModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		params.ReasoningEffort = effort
 	}
 
+	applyOpenAIToolChoice(req.ToolChoice, &params)
+
 	// Make request with retry
 	resp, err := withRetry(ctx, p.retry, "openai", func() (*openai.ChatCompletion, error) {
 		return p.client.Chat.Completions.New(ctx, params)
@@ -190,6 +192,23 @@ func toOpenAITools(tools []ToolDef) []openai.ChatCompletionToolParam {
 		})
 	}
 	return result
+}
+
+// applyOpenAIToolChoice sets tool_choice on the request params. OpenAI
+// natively supports "required" (call some tool) and a named function;
+// ToolChoiceAuto leaves the field unset (OpenAI's own default).
+func applyOpenAIToolChoice(choice ToolChoice, params *openai.ChatCompletionNewParams) {
+	if name, ok := choice.ToolName(); ok {
+		params.ToolChoice = openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(
+			openai.ChatCompletionNamedToolChoiceFunctionParam{Name: name},
+		)
+		return
+	}
+	if choice.IsRequired() {
+		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+		}
+	}
 }
 
 // isReasoningModel checks if the model supports reasoning effort (o1, o3 models).
