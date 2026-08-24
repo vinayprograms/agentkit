@@ -119,6 +119,16 @@ func (g *Gate) check(ctx context.Context, command string) error {
 	}
 	event(ctx, "deterministic.passed")
 
+	// Step 1.5: deterministic path pre-check. This can ONLY conclude
+	// "provably in bounds, skip the LLM" — it never blocks. Anything not
+	// provably safe falls through to the LLM exactly as before this
+	// existed. See pathprecheck.go for the full boundary this enforces.
+	if skip, reason := g.pathPrecheck(command); skip {
+		g.logDecision(command, "path-precheck", true, reason, 0, 0, 0)
+		event(ctx, "path-precheck.skipped-llm")
+		return nil
+	}
+
 	// Step 2: LLM analysis (if model configured).
 	// allowedDirs is context for the LLM prompt, not a gate for running it.
 	if g.model == nil {

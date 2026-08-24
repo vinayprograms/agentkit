@@ -369,19 +369,21 @@ func TestExtractBaseCommand_Empty(t *testing.T) {
 func TestGate_OnDecision_Deterministic(t *testing.T) {
 	gate := newTestGate("/workspace", nil, nil)
 	var called bool
-	var capturedStep string
+	var capturedSteps []string
 	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
 		called = true
-		capturedStep = step
+		capturedSteps = append(capturedSteps, step)
 	}
 
-	// Allowed command
+	// Allowed command. It's also pre-check safelisted (ls, no path args),
+	// so it fires deterministic (allow) then path-precheck (skip LLM).
+	capturedSteps = nil
 	gate.check(context.Background(), "ls -la")
 	if !called {
 		t.Error("OnDecision should be called for allowed command")
 	}
-	if capturedStep != "deterministic" {
-		t.Errorf("expected step 'deterministic', got %q", capturedStep)
+	if len(capturedSteps) == 0 || capturedSteps[0] != "deterministic" {
+		t.Errorf("expected first step 'deterministic', got %v", capturedSteps)
 	}
 
 	// Blocked command
