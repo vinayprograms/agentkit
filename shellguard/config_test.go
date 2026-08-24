@@ -37,7 +37,7 @@ func TestLLMPrompt_ContainsCoreRules(t *testing.T) {
 	mustContain := []string{
 		// data-read vs toolchain-read distinction, the whole point of the change
 		"DATA READ",
-		"TOOLCHAIN READ",
+		"TOOLCHAIN ACCESS",
 		"GOCACHE",
 		"GOROOT",
 		"go build ./...", // worked example

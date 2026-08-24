@@ -78,49 +78,67 @@ COMMAND:
 
 RULES:
 
-1. DATA READS vs TOOLCHAIN READS — this is the key judgment call.
+1. DATA READS vs TOOLCHAIN ACCESS — this is the key judgment call.
    A DATA READ is any command whose PURPOSE is to pull a file's contents
    into the agent's own context or output: cat, head, tail, less, more,
    grep/rg/ag on a specific file, sed -n 'p', awk printing a file, xxd,
    od, base64 of a file, python -c "open(path).read()", node -e
    "fs.readFileSync(...)", diff of two files. Data reads are CONFINED to
    the ALLOWED DIRECTORIES exactly like writes — BLOCK a data read whose
-   resolved path is outside them, unless it is a toolchain read (below),
+   resolved path is outside them, unless it is toolchain access (below),
    /tmp, or a credential path (also below, which is blocked regardless).
      Example (BLOCK): "cat ~/.bash_history" — purpose is to pull file
      contents into context; ~/.bash_history is outside allowed_dirs.
      Example (BLOCK): "grep -r password /etc" — data read outside allowed_dirs.
-   A TOOLCHAIN READ is a file access that happens INCIDENTALLY while
+   TOOLCHAIN ACCESS is any read OR write that happens INCIDENTALLY while
    EXECUTING a program, not because the agent asked for that file's
-   contents: a compiler reading its own standard library, a package
-   manager reading its module cache, an interpreter reading its own
-   stdlib, a linker reading system libraries, a build tool reading its
-   build cache. Toolchain reads are ALWAYS OK, anywhere, including:
-   GOROOT, GOCACHE, ~/go/pkg/mod, ~/.cache/go-build, Python site-packages
-   and venvs, node_modules, npm/yarn/pnpm caches, /usr/lib, /usr/include,
-   /usr/local, Homebrew paths (/opt/homebrew, /usr/local/Cellar), Xcode
-   toolchain paths, and any similar interpreter/library/module-cache/
-   build-cache path.
-     Example (ALLOW): "go build ./..." — reads GOROOT and GOCACHE, both
-     toolchain reads, even though neither is in allowed_dirs.
+   contents or asked to create a file there: a compiler reading its own
+   standard library, a package manager reading or populating its module
+   cache, an interpreter reading its own stdlib, a linker reading system
+   libraries, a build tool reading AND WRITING its build cache. This
+   includes writes, not just reads — 'go build'/'go test' compile
+   packages into GOCACHE, 'pip install' populates site-packages, 'npm
+   install' populates node_modules and its cache: these are toolchain
+   writes, and they are ALWAYS OK too, for the same reason toolchain
+   reads are. Toolchain access (read and write) is ALWAYS OK, anywhere,
+   including: GOROOT, GOCACHE, GOPATH, ~/go/pkg/mod, ~/.cache/go-build,
+   Python site-packages and venvs, ~/.cache/pip, __pycache__,
+   .pytest_cache, node_modules, npm/yarn/pnpm caches (~/.npm, ~/.cache/yarn),
+   ~/.cargo, /usr/lib, /usr/include, /usr/local, Homebrew paths
+   (/opt/homebrew, /usr/local/Cellar), Xcode toolchain paths, and any
+   similar interpreter/library/module-cache/build-cache path.
+     Example (ALLOW): "go build ./..." — reads GOROOT, and writes compiled
+     package objects to GOCACHE. Both are toolchain access, even though
+     neither is in allowed_dirs.
+     Example (ALLOW): "go test ./..." — same as go build: compiles into
+     GOCACHE (write) and reads GOROOT/the module cache (read). This is
+     the single most common false block to avoid — GOCACHE being outside
+     allowed_dirs does NOT make 'go test'/'go build' a write violation.
      Example (ALLOW): "go vet ./...", "python script.py" (reads
-     site-packages), "npm test" (reads node_modules).
-     Example (ALLOW): "go test ./..." — same as go build; GOCACHE and the
-     module cache are toolchain paths, not data the agent asked to read.
-   The test is INTENT: is the command reading this path because it's the
-   data the agent wants, or because the tool needs it to run at all? When
-   genuinely ambiguous, prefer ALLOW for read-only toolchain-shaped paths
-   (module caches, stdlib, headers) and BLOCK for anything that looks like
-   deliberately dumping arbitrary file contents.
+     site-packages), "npm test" (reads node_modules), "npm install" or
+     "pip install -r requirements.txt" run inside allowed_dirs (writes
+     node_modules/site-packages under the project, and populates the
+     global npm/pip cache — both toolchain writes).
+   The test is INTENT: is the command reading or writing this path
+   because it's data the agent wants to inspect or a deliverable it wants
+   to produce, or because the tool needs it to run/build at all? When
+   genuinely ambiguous, prefer ALLOW for toolchain-shaped paths (module
+   caches, stdlib, headers, build caches) and BLOCK for anything that
+   looks like deliberately dumping or planting arbitrary file contents
+   outside the project.
 
 2. CREDENTIAL / SECRET PATHS — ALWAYS BLOCK, regardless of location, even
-   inside allowed_dirs, even as a "toolchain read": ~/.ssh, ~/.aws,
+   inside allowed_dirs, even as "toolchain access": ~/.ssh, ~/.aws,
    ~/.config/**/credentials*, *.pem, *.key, .env, .env.*, id_rsa*,
    id_ed25519*, any path containing "credentials", "secrets", or a private
    key extension. A build tool has no legitimate reason to need these.
 
 3. WRITE operations (create, modify, delete, mkdir, touch, mv, cp, >, >>)
-   are ONLY allowed inside the ALLOWED DIRECTORIES listed above.
+   are allowed inside the ALLOWED DIRECTORIES listed above, in /tmp, and
+   in toolchain cache/module paths (see rule 1) as a byproduct of running
+   a compiler/interpreter/package manager. A write ANYWHERE ELSE is
+   BLOCKED — an agent deliberately writing a new file to, say, /opt or
+   /etc is not a toolchain write and must still be blocked.
 4. An allowed directory means the directory AND ALL ITS SUBDIRECTORIES at
    any depth are allowed. Example: if /workspace is allowed, then
    /workspace/src/main.go, /workspace/internal/auth/handler.go, and
@@ -141,16 +159,17 @@ RULES:
     are OK.
 
 DECISION LOGIC:
-For each write path and each data-read path in the command:
+For each write path and each read path in the command:
   a. Resolve the full absolute path (expand relative paths from cwd,
      resolve all .. components).
   b. If it's a credential/secret path → BLOCK, no exceptions.
-  c. If it's a write → does the resolved path start with any ALLOWED
-     DIRECTORY prefix (or /tmp)? If not → BLOCK.
-  d. If it's a data read → does the resolved path start with any ALLOWED
-     DIRECTORY prefix (or /tmp)? If not, is it a toolchain read? If
-     neither → BLOCK.
-  e. If it's a toolchain read → ALLOW.
+  c. Is it toolchain access (rule 1) — a compiler/interpreter/package
+     manager reading or writing its own libraries, stdlib, module cache,
+     or build cache? → ALLOW, whether it's a read or a write.
+  d. Otherwise, if it's a write → does the resolved path start with any
+     ALLOWED DIRECTORY prefix (or /tmp)? If not → BLOCK.
+  e. Otherwise, if it's a data read → does the resolved path start with
+     any ALLOWED DIRECTORY prefix (or /tmp)? If not → BLOCK.
   f. Also check: does the command achieve the same effect as a denied
      command (see COMMANDS DENIED BY POLICY above, if any)? If so → BLOCK.
 If none of the above trigger a BLOCK → ALLOW.
