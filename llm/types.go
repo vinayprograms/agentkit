@@ -24,10 +24,11 @@ type ToolCallResponse struct {
 
 // ChatRequest represents a chat request to the LLM.
 type ChatRequest struct {
-	Messages  []Message     `json:"messages"`
-	Tools     []ToolDef     `json:"tools,omitempty"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
-	Thinking  ThinkingLevel `json:"thinking,omitempty"` // Per-call override; empty = use provider default. Ignored by providers/models that don't support thinking.
+	Messages   []Message     `json:"messages"`
+	Tools      []ToolDef     `json:"tools,omitempty"`
+	MaxTokens  int           `json:"max_tokens,omitempty"`
+	Thinking   ThinkingLevel `json:"thinking,omitempty"`    // Per-call override; empty = use provider default. Ignored by providers/models that don't support thinking.
+	ToolChoice ToolChoice    `json:"tool_choice,omitempty"` // Per-call override; zero value = ToolChoiceAuto. Providers/models that can't honor it fall back to auto rather than erroring.
 }
 
 // ChatResponse represents a chat response from the LLM.

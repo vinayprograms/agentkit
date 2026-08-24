@@ -79,6 +79,9 @@ func (p *googleModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	if len(req.Tools) > 0 {
 		model.Tools = []*genai.Tool{{FunctionDeclarations: toGeminiTools(req.Tools)}}
 	}
+	if toolConfig := toGeminiToolConfig(req.ToolChoice); toolConfig != nil {
+		model.ToolConfig = toolConfig
+	}
 
 	// Build chat session with history and extract the final prompt
 	cs := model.StartChat()
@@ -137,6 +140,29 @@ func fromGeminiResponse(modelName string, resp *genai.GenerateContentResponse) *
 	}
 
 	return result
+}
+
+// toGeminiToolConfig converts a ToolChoice to Gemini's ToolConfig. Gemini
+// natively supports ANY (call some tool), optionally scoped to a named
+// function via AllowedFunctionNames; ToolChoiceAuto returns nil, leaving
+// Gemini's own AUTO default in effect.
+func toGeminiToolConfig(choice ToolChoice) *genai.ToolConfig {
+	if name, ok := choice.ToolName(); ok {
+		return &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode:                 genai.FunctionCallingAny,
+				AllowedFunctionNames: []string{name},
+			},
+		}
+	}
+	if choice.IsRequired() {
+		return &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode: genai.FunctionCallingAny,
+			},
+		}
+	}
+	return nil
 }
 
 // toGeminiHistory converts generic messages to Gemini chat history format,

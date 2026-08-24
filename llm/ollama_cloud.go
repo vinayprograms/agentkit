@@ -156,6 +156,11 @@ func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 			NumPredict: maxTokens,
 		},
 	}
+	// req.ToolChoice is intentionally not wired here: Ollama's native
+	// /api/chat has no documented tool_choice/forced-tool-call field (see
+	// https://docs.ollama.com/capabilities/tool-calling, checked 2026-08-23).
+	// Any ToolChoice degrades to Ollama's own auto behavior; callers must
+	// keep a prose fallback for this provider.
 
 	// Make request with retry
 	resp, err := withRetry(ctx, p.retry, "ollama-cloud", func() (*ollamaChatResponse, error) {
