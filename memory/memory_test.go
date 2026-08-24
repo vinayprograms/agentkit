@@ -756,7 +756,12 @@ func TestExtractor_Extract_Truncation(t *testing.T) {
 	if !strings.Contains(user, "[truncated]") {
 		t.Errorf("expected truncation marker, got len %d", len(user))
 	}
-	if len(user) > 200 {
+	// The single user message now carries the extraction system prompt plus
+	// the (truncated) input text (llm.Ask takes one prompt string, not
+	// separate system/user messages) — bound generously above the fixed
+	// prompt's own length to still prove the 5000-char input got truncated
+	// rather than sent in full.
+	if len(user) > 1000 {
 		t.Errorf("expected truncated input, got %d chars", len(user))
 	}
 }

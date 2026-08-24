@@ -57,6 +57,24 @@ Only include meaningful observations. If a category has nothing, return an empty
 Example:
 {"findings": ["The API rate limit is 100 requests per minute"], "insights": ["REST is more suitable than GraphQL"], "lessons": ["Always check rate limits before integration"]}`
 
+// extractTool is the structured-decision tool Extract asks the model to
+// call: findings/insights/lessons as explicit tool-call arguments instead
+// of a JSON object scraped out of prose (which may or may not be wrapped in
+// a ``` fence, and which a chain-of-thought preamble can defeat either way
+// — see the parseFIL doc comment and REPORT.md bug #11).
+var extractTool = llm.ToolDef{
+	Name:        "extract",
+	Description: "Report the findings, insights, and lessons extracted from the text.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"findings": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Factual discoveries"},
+			"insights": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Conclusions or decisions made"},
+			"lessons":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Learnings that should guide future work"},
+		},
+	},
+}
+
 // Extract parses text into findings, insights, and lessons.
 // Returns nil slices if the text is too short or the LLM can't extract anything.
 //
@@ -85,23 +103,77 @@ func (e *Extractor) Extract(ctx context.Context, text string, opts ...ExtractOpt
 		userContent = "Source: " + o.source + "\n\n" + text
 	}
 
-	resp, err := e.model.Chat(ctx, llm.ChatRequest{
-		Messages: []llm.Message{
-			{Role: "system", Content: extractionPrompt},
-			{Role: "user", Content: userContent},
-		},
-	})
+	d, err := llm.Ask(ctx, e.model, extractionPrompt+"\n\n"+userContent, extractTool, parseFILFallback)
 	if err != nil {
 		// Don't fail the caller if extraction fails
 		return nil, nil, nil, nil
 	}
 
-	f, i, l := parseFIL(resp.Content)
+	f, i, l := filFromDecision(d)
 	return f, i, l, nil
 }
 
+// filFromDecision converts an llm.Decision from the extract tool (or its
+// prose fallback) into findings/insights/lessons slices.
+func filFromDecision(d *llm.Decision) (findings, insights, lessons []string) {
+	if d.Args == nil {
+		return nil, nil, nil
+	}
+	return stringSlice(d.Args["findings"]), stringSlice(d.Args["insights"]), stringSlice(d.Args["lessons"])
+}
+
+// stringSlice coerces a tool-call argument value (decoded from JSON as
+// []interface{}) into a []string, skipping non-string elements.
+func stringSlice(v any) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseFILFallback adapts parseFIL to llm.ParseFallback: it's the prose
+// fallback llm.Ask uses when the model answers in text instead of calling
+// extractTool.
+func parseFILFallback(content string) (map[string]any, bool) {
+	f, i, l := parseFIL(content)
+	if f == nil && i == nil && l == nil {
+		return nil, false
+	}
+	args := map[string]any{}
+	if f != nil {
+		args["findings"] = toAnySlice(f)
+	}
+	if i != nil {
+		args["insights"] = toAnySlice(i)
+	}
+	if l != nil {
+		args["lessons"] = toAnySlice(l)
+	}
+	return args, true
+}
+
+func toAnySlice(s []string) []interface{} {
+	out := make([]interface{}, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
+}
+
 // parseFIL extracts FIL arrays from an LLM response that may contain JSON
-// wrapped in markdown code blocks.
+// wrapped in markdown code blocks. It survives as the prose fallback for
+// providers/models that can't honor ToolChoice, or that answer in text
+// anyway — the primary path is the structured extract tool call above.
 func parseFIL(content string) (findings, insights, lessons []string) {
 	content = strings.TrimSpace(content)
 
