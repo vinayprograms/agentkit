@@ -96,3 +96,15 @@ func TestReviewer_Error(t *testing.T) {
 }
 
 var _ Stage = (*Reviewer)(nil)
+
+func TestReviewer_ToolCallVerdict(t *testing.T) {
+	m := newMockWithToolCall("review", map[string]interface{}{"verdict": "modify", "rationale": "use echo safe"})
+	r := NewReviewer(m)
+	f, _ := r.Evaluate(context.Background(), Request{ToolName: "bash"})
+	if f.Verdict != Modify {
+		t.Errorf("expected modify, got %s", f.Verdict)
+	}
+	if f.Rationale != "use echo safe" {
+		t.Errorf("expected rationale from tool args, got %q", f.Rationale)
+	}
+}

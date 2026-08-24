@@ -19,6 +19,22 @@ func NewReviewer(provider llm.Model) *Reviewer {
 	return &Reviewer{provider: provider}
 }
 
+// reviewTool is the structured-decision tool Evaluate asks the model to
+// call: an explicit verdict/rationale pair instead of scraping an
+// ALLOW/DENY/MODIFY prefix out of each line of prose.
+var reviewTool = llm.ToolDef{
+	Name:        "review",
+	Description: "Report the security review verdict for the analyzed tool call.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"verdict":   map[string]any{"type": "string", "enum": []string{"allow", "deny", "modify"}, "description": "allow, deny, or modify"},
+			"rationale": map[string]any{"type": "string", "description": "evidence for deny, or the safer alternative for modify"},
+		},
+		"required": []string{"verdict"},
+	},
+}
+
 // Evaluate implements Stage.
 func (r *Reviewer) Evaluate(ctx context.Context, req Request) (*Finding, error) {
 	prompt := r.buildPrompt(req)
@@ -29,19 +45,14 @@ func (r *Reviewer) Evaluate(ctx context.Context, req Request) (*Finding, error) 
 	}
 
 	start := time.Now()
-	resp, err := r.provider.Chat(ctx, llm.ChatRequest{
-		Messages: []llm.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: prompt},
-		},
-	})
+	d, err := llm.Ask(ctx, r.provider, systemPrompt+"\n\n"+prompt, reviewTool, parseReviewFallback)
 	latency := time.Since(start)
 
 	if err != nil {
 		return &Finding{Verdict: Deny, Rationale: fmt.Sprintf("review error: %v", err), Source: "reviewer", Latency: latency}, nil
 	}
 
-	finding := r.parseResponse(resp.Content)
+	finding := findingFromReview(d)
 	finding.Latency = latency
 	return finding, nil
 }
@@ -85,32 +96,60 @@ func (r *Reviewer) buildPrompt(req Request) string {
 	return sb.String()
 }
 
-func (r *Reviewer) parseResponse(content string) *Finding {
+// findingFromReview converts an llm.Decision from the review tool (or its
+// prose fallback) into a Finding.
+func findingFromReview(d *llm.Decision) *Finding {
+	if d.Args == nil {
+		// Model answered in prose and parseReviewFallback couldn't
+		// recognize an ALLOW/DENY/MODIFY verdict in it either (including
+		// the empty-response-twice case, where d.Content == "" too).
+		return &Finding{Verdict: Deny, Rationale: "unclear response, defaulting to deny", Source: "reviewer"}
+	}
+
+	verdict, _ := d.Args["verdict"].(string)
+	rationale, _ := d.Args["rationale"].(string)
+
+	switch strings.ToLower(strings.TrimSpace(verdict)) {
+	case "allow":
+		if rationale == "" {
+			rationale = "reviewer approved"
+		}
+		return &Finding{Verdict: Allow, Rationale: rationale, Source: "reviewer"}
+	case "modify":
+		if rationale == "" {
+			rationale = "modification required"
+		}
+		return &Finding{Verdict: Modify, Rationale: rationale, Source: "reviewer"}
+	default: // "deny", or an unrecognized verdict string — fail closed.
+		if rationale == "" {
+			rationale = "reviewer denied"
+		}
+		return &Finding{Verdict: Deny, Rationale: rationale, Source: "reviewer"}
+	}
+}
+
+// parseReviewFallback is the prose fallback llm.Ask uses when the model
+// answers in text instead of calling reviewTool. It preserves the original
+// per-line ALLOW/DENY/MODIFY prefix scan.
+func parseReviewFallback(content string) (map[string]any, bool) {
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 
 	for _, line := range lines {
 		upper := strings.ToUpper(strings.TrimSpace(line))
 
-		if strings.HasPrefix(upper, "ALLOW") {
-			return &Finding{Verdict: Allow, Rationale: "reviewer approved", Source: "reviewer"}
-		}
-		if strings.HasPrefix(upper, "DENY") {
-			rationale := "reviewer denied"
+		for _, verdict := range []string{"ALLOW", "DENY", "MODIFY"} {
+			if !strings.HasPrefix(upper, verdict) {
+				continue
+			}
+			rationale := ""
 			if idx := strings.Index(line, ":"); idx != -1 {
 				rationale = strings.TrimSpace(line[idx+1:])
 			}
-			return &Finding{Verdict: Deny, Rationale: rationale, Source: "reviewer"}
-		}
-		if strings.HasPrefix(upper, "MODIFY") {
-			rationale := "modification required"
-			if idx := strings.Index(line, ":"); idx != -1 {
-				rationale = strings.TrimSpace(line[idx+1:])
-			}
-			return &Finding{Verdict: Modify, Rationale: rationale, Source: "reviewer"}
+			return map[string]any{"verdict": strings.ToLower(verdict), "rationale": rationale}, true
 		}
 	}
 
-	return &Finding{Verdict: Deny, Rationale: "unclear response, defaulting to deny", Source: "reviewer"}
+	return nil, false
 }
 
 const reviewerSystemPrompt = `You are a security supervisor protecting an AI agent from prompt injection.

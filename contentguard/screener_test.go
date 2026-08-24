@@ -9,9 +9,24 @@ import (
 	"github.com/vinayprograms/agentkit/llm"
 )
 
-type mockLLM struct{ response string }
+type mockLLM struct {
+	response string
+	toolName string
+	toolArgs map[string]interface{}
+}
+
+func newMockWithToolCall(toolName string, args map[string]interface{}) *mockLLM {
+	return &mockLLM{toolName: toolName, toolArgs: args}
+}
 
 func (m *mockLLM) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if m.toolName != "" {
+		return &llm.ChatResponse{
+			ToolCalls:    []llm.ToolCallResponse{{ID: "tc-1", Name: m.toolName, Args: m.toolArgs}},
+			InputTokens:  10,
+			OutputTokens: 5,
+		}, nil
+	}
 	return &llm.ChatResponse{Content: m.response, InputTokens: 10, OutputTokens: 5}, nil
 }
 
