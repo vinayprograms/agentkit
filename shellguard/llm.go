@@ -9,8 +9,13 @@ import (
 	"github.com/vinayprograms/agentkit/llm"
 )
 
-// llmCheck asks an LLM whether a bash command violates directory write policy.
-func llmCheck(ctx context.Context, model llm.Model, command string, allowedDirs []string, workingDir, securityScope string) (*Result, error) {
+// llmCheck asks an LLM whether a bash command violates policy: write access,
+// data-read access, or the deny list. deniedCommands and disabledTools are
+// policy context, not deterministic gates — the deterministic denylist.go
+// stage already blocked exact userDeniedCommands base-name matches before
+// llmCheck ever runs; here they're repeated so the model can also catch a
+// command that ACHIEVES THE SAME EFFECT by another route.
+func llmCheck(ctx context.Context, model llm.Model, command string, allowedDirs, deniedCommands, disabledTools []string, workingDir, securityScope string) (*Result, error) {
 	var securityContext string
 	if securityScope != "" {
 		securityContext = fmt.Sprintf(`
@@ -25,38 +30,155 @@ if the command is part of legitimate security research.
 `, securityScope)
 	}
 
-	prompt := fmt.Sprintf(`Analyze this bash command for write access violations.
+	var denyContext string
+	if len(deniedCommands) > 0 {
+		denyContext = fmt.Sprintf(`
+COMMANDS DENIED BY POLICY (these base commands are blocked outright):
 %s
+
+These are already blocked by an exact base-command-name match before this
+review runs. Your job here is the gap that check can't cover: block any
+command that ACHIEVES THE SAME EFFECT as a denied command by another route —
+a python/perl/node/ruby one-liner that shells out or does the same thing
+in-process, a shell builtin or alias, a symlink or renamed copy of the
+binary, or a base64/hex-decoded script that reconstructs the denied command.
+Judge by effect, not by literal command name.
+
+`, strings.Join(deniedCommands, "\n"))
+	}
+
+	var toolContext string
+	if len(disabledTools) > 0 {
+		toolContext = fmt.Sprintf(`
+AGENT TOOLS DISABLED BY POLICY:
+%s
+
+Bash must not be used as a side door around a disabled tool. Concretely:
+- if "write" or "edit" is disabled, BLOCK any bash command that creates,
+  modifies, deletes, or appends to a file (see WRITE rules below) — treat
+  ALL bash write operations as blocked, not just ones outside allowed_dirs.
+- if "read" is disabled, BLOCK any bash DATA READ (see the data-read vs
+  toolchain-read distinction below), even inside allowed_dirs — reading
+  file contents into the agent's context is exactly what the read tool
+  does, and disabling it means disabling it everywhere.
+
+`, strings.Join(disabledTools, "\n"))
+	}
+
+	prompt := fmt.Sprintf(`Analyze this bash command for policy violations: writes, data reads, and denied commands.
+%s%s%s
 WORKING DIRECTORY (cwd where command executes):
 %s
 
-WRITABLE DIRECTORIES (agent can ONLY write here):
+ALLOWED DIRECTORIES (agent can write here, and this is also where its data reads are confined):
 %s
 
 COMMAND:
 %s
 
 RULES:
-1. READ and EXECUTE from anywhere is OK — running compilers, interpreters, build tools, reading system libraries, and accessing toolchain paths is normal
-2. WRITE operations (create, modify, delete, mkdir, touch, mv, cp, >, >>) are ONLY allowed inside the WRITABLE DIRECTORIES listed above
-3. A writable directory means the directory AND ALL ITS SUBDIRECTORIES at any depth are writable. Example: if /workspace is writable, then /workspace/src/main.go, /workspace/internal/auth/handler.go, and /workspace/a/b/c/d.txt are ALL writable. This is non-negotiable.
-4. Relative paths resolve from WORKING DIRECTORY — check if the resolved path is inside a writable directory
-5. /tmp is always writable (temporary files and build outputs)
-6. /dev/null, /dev/zero, /dev/urandom are always writable (system devices)
-7. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc, /var, /root (unless listed above), /home, or any other path not in the writable list
-8. SECURITY: Watch for path traversal attacks. Paths containing /../ or /../../ that escape a writable directory MUST be resolved to their canonical form first. Example: /workspace/../etc/passwd resolves to /etc/passwd which is NOT inside /workspace — BLOCK it.
-9. If a security research context is provided, commands within that scope are OK
+
+1. DATA READS vs TOOLCHAIN ACCESS — this is the key judgment call.
+   A DATA READ is any command whose PURPOSE is to pull a file's contents
+   into the agent's own context or output: cat, head, tail, less, more,
+   grep/rg/ag on a specific file, sed -n 'p', awk printing a file, xxd,
+   od, base64 of a file, python -c "open(path).read()", node -e
+   "fs.readFileSync(...)", diff of two files. Data reads are CONFINED to
+   the ALLOWED DIRECTORIES exactly like writes — BLOCK a data read whose
+   resolved path is outside them, unless it is toolchain access (below),
+   /tmp, or a credential path (also below, which is blocked regardless).
+     Example (BLOCK): "cat ~/.bash_history" — purpose is to pull file
+     contents into context; ~/.bash_history is outside allowed_dirs.
+     Example (BLOCK): "grep -r password /etc" — data read outside allowed_dirs.
+   TOOLCHAIN ACCESS is any read OR write that happens INCIDENTALLY while
+   EXECUTING a program, not because the agent asked for that file's
+   contents or asked to create a file there: a compiler reading its own
+   standard library, a package manager reading or populating its module
+   cache, an interpreter reading its own stdlib, a linker reading system
+   libraries, a build tool reading AND WRITING its build cache. This
+   includes writes, not just reads — 'go build'/'go test' compile
+   packages into GOCACHE, 'pip install' populates site-packages, 'npm
+   install' populates node_modules and its cache: these are toolchain
+   writes, and they are ALWAYS OK too, for the same reason toolchain
+   reads are. Toolchain access (read and write) is ALWAYS OK, anywhere,
+   including: GOROOT, GOCACHE, GOPATH, ~/go/pkg/mod, ~/.cache/go-build,
+   Python site-packages and venvs, ~/.cache/pip, __pycache__,
+   .pytest_cache, node_modules, npm/yarn/pnpm caches (~/.npm, ~/.cache/yarn),
+   ~/.cargo, /usr/lib, /usr/include, /usr/local, Homebrew paths
+   (/opt/homebrew, /usr/local/Cellar), Xcode toolchain paths, and any
+   similar interpreter/library/module-cache/build-cache path.
+     Example (ALLOW): "go build ./..." — reads GOROOT, and writes compiled
+     package objects to GOCACHE. Both are toolchain access, even though
+     neither is in allowed_dirs.
+     Example (ALLOW): "go test ./..." — same as go build: compiles into
+     GOCACHE (write) and reads GOROOT/the module cache (read). This is
+     the single most common false block to avoid — GOCACHE being outside
+     allowed_dirs does NOT make 'go test'/'go build' a write violation.
+     Example (ALLOW): "go vet ./...", "python script.py" (reads
+     site-packages), "npm test" (reads node_modules), "npm install" or
+     "pip install -r requirements.txt" run inside allowed_dirs (writes
+     node_modules/site-packages under the project, and populates the
+     global npm/pip cache — both toolchain writes).
+   The test is INTENT: is the command reading or writing this path
+   because it's data the agent wants to inspect or a deliverable it wants
+   to produce, or because the tool needs it to run/build at all? When
+   genuinely ambiguous, prefer ALLOW for toolchain-shaped paths (module
+   caches, stdlib, headers, build caches) and BLOCK for anything that
+   looks like deliberately dumping or planting arbitrary file contents
+   outside the project.
+
+2. CREDENTIAL / SECRET PATHS — ALWAYS BLOCK, regardless of location, even
+   inside allowed_dirs, even as "toolchain access": ~/.ssh, ~/.aws,
+   ~/.config/**/credentials*, *.pem, *.key, .env, .env.*, id_rsa*,
+   id_ed25519*, any path containing "credentials", "secrets", or a private
+   key extension. A build tool has no legitimate reason to need these.
+
+3. WRITE operations (create, modify, delete, mkdir, touch, mv, cp, >, >>)
+   are allowed inside the ALLOWED DIRECTORIES listed above, in /tmp, and
+   in toolchain cache/module paths (see rule 1) as a byproduct of running
+   a compiler/interpreter/package manager. A write ANYWHERE ELSE is
+   BLOCKED — an agent deliberately writing a new file to, say, /opt or
+   /etc is not a toolchain write and must still be blocked.
+4. An allowed directory means the directory AND ALL ITS SUBDIRECTORIES at
+   any depth are allowed. Example: if /workspace is allowed, then
+   /workspace/src/main.go, /workspace/internal/auth/handler.go, and
+   /workspace/a/b/c/d.txt are ALL allowed for read and write. Non-negotiable.
+5. Relative paths resolve from WORKING DIRECTORY — check if the resolved
+   path is inside an allowed directory.
+6. /tmp is always writable and always readable (temporary files and build
+   outputs).
+7. /dev/null, /dev/zero, /dev/urandom are always writable (system devices).
+8. Writing ANYWHERE ELSE is BLOCKED — including /workdir, /opt, /etc,
+   /var, /root (unless listed above), /home, or any other path not in the
+   allowed list.
+9. SECURITY: Watch for path traversal attacks. Paths containing /../ or
+   /../../ that escape an allowed directory MUST be resolved to their
+   canonical form first. Example: /workspace/../etc/passwd resolves to
+   /etc/passwd which is NOT inside /workspace — BLOCK it.
+10. If a security research context is provided, commands within that scope
+    are OK.
 
 DECISION LOGIC:
-For each write path in the command:
-  a. Resolve the full absolute path (expand relative paths from cwd, resolve all .. components)
-  b. Check: does the resolved path start with any WRITABLE DIRECTORY prefix?
-  c. If YES for all write paths → ALLOW
-  d. If NO for any write path → BLOCK
+For each write path and each read path in the command:
+  a. Resolve the full absolute path (expand relative paths from cwd,
+     resolve all .. components).
+  b. If it's a credential/secret path → BLOCK, no exceptions.
+  c. Is it toolchain access (rule 1) — a compiler/interpreter/package
+     manager reading or writing its own libraries, stdlib, module cache,
+     or build cache? → ALLOW, whether it's a read or a write.
+  d. Otherwise, if it's a write → does the resolved path start with any
+     ALLOWED DIRECTORY prefix (or /tmp)? If not → BLOCK.
+  e. Otherwise, if it's a data read → does the resolved path start with
+     any ALLOWED DIRECTORY prefix (or /tmp)? If not → BLOCK.
+  f. Also check: does the command achieve the same effect as a denied
+     command (see COMMANDS DENIED BY POLICY above, if any)? If so → BLOCK.
+If none of the above trigger a BLOCK → ALLOW.
 
 Respond with ONLY a JSON object, nothing else:
 {"verdict":"ALLOW"} or {"verdict":"BLOCK","reason":"brief explanation"}`,
 		securityContext,
+		denyContext,
+		toolContext,
 		workingDir,
 		strings.Join(allowedDirs, "\n"),
 		command,
