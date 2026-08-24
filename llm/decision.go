@@ -24,6 +24,13 @@ type Decision struct {
 	// produced (or fell back to) prose; it's empty when the model called
 	// the tool with no accompanying text.
 	Content string
+
+	// InputTokens and OutputTokens are summed across every Chat call Ask
+	// made to reach this Decision (including the empty-response retry, if
+	// one happened), so callers can log/attribute cost without re-deriving
+	// the retry accounting themselves.
+	InputTokens  int
+	OutputTokens int
 }
 
 // ParseFallback recovers decision arguments from prose content when the
@@ -45,10 +52,13 @@ type ParseFallback func(content string) (args map[string]any, ok bool)
 // max_tokens budget on hidden thinking and return empty content. Ask asks
 // again once, with Thinking forced off (a decision is a bounded
 // classification, not a task that benefits from deliberation), before
-// giving up. If both attempts come back empty, Ask returns a nil Decision
-// and a nil error — callers must supply their own fallback for "the model
+// giving up. If both attempts come back empty, Ask returns a Decision with
+// ToolCalled=false, Args==nil, and Content=="" (still carrying the summed
+// token counts) — callers must supply their own fallback for "the model
 // said nothing at all" the way shellguard's llmCheck falls back to
-// deterministic ALLOW.
+// deterministic ALLOW. That empty-twice case is indistinguishable from an
+// unrecoverable-prose Decision except by Content=="", so check that when it
+// matters.
 func Ask(ctx context.Context, model Model, prompt string, tool ToolDef, parse ParseFallback) (*Decision, error) {
 	req := ChatRequest{
 		Messages:   []Message{{Role: "user", Content: prompt}},
@@ -57,55 +67,58 @@ func Ask(ctx context.Context, model Model, prompt string, tool ToolDef, parse Pa
 		Thinking:   ThinkingOff,
 	}
 
-	resp, err := chatRetryEmpty(ctx, model, req)
+	resp, tokensIn, tokensOut, err := chatRetryEmpty(ctx, model, req)
 	if err != nil {
 		return nil, err
 	}
 	if resp == nil {
 		// Both attempts came back empty; caller supplies its own fallback.
-		return nil, nil
+		return &Decision{InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 	}
 
 	if tc, ok := findToolCall(resp.ToolCalls, tool.Name); ok {
-		return &Decision{Args: tc.Args, ToolCalled: true, Content: resp.Content}, nil
+		return &Decision{Args: tc.Args, ToolCalled: true, Content: resp.Content, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 	}
 
 	content := strings.TrimSpace(resp.Content)
 	if parse != nil {
 		if args, ok := parse(content); ok {
-			return &Decision{Args: args, ToolCalled: false, Content: content}, nil
+			return &Decision{Args: args, ToolCalled: false, Content: content, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 		}
 	}
-	return &Decision{Args: nil, ToolCalled: false, Content: content}, nil
+	return &Decision{Args: nil, ToolCalled: false, Content: content, InputTokens: tokensIn, OutputTokens: tokensOut}, nil
 }
 
 // chatRetryEmpty calls model.Chat(ctx, req) and, if the response comes back
-// with empty content and no tool calls, retries once. Returns (nil, nil) if
-// both attempts are empty. This is the empty-response handling shellguard's
-// llmCheck implements inline; it lives here so every structured-decision
-// call site shares it instead of re-deriving it.
-func chatRetryEmpty(ctx context.Context, model Model, req ChatRequest) (*ChatResponse, error) {
+// with empty content and no tool calls, retries once. Returns (nil, 0, 0,
+// nil) if both attempts are empty; the returned token counts are always the
+// sum across every attempt made. This is the empty-response handling
+// shellguard's llmCheck implements inline; it lives here so every
+// structured-decision call site shares it instead of re-deriving it.
+func chatRetryEmpty(ctx context.Context, model Model, req ChatRequest) (*ChatResponse, int, int, error) {
 	resp, err := model.Chat(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
+	tokensIn, tokensOut := resp.InputTokens, resp.OutputTokens
 	if !isEmptyResponse(resp) {
-		return resp, nil
+		return resp, tokensIn, tokensOut, nil
 	}
 
 	resp2, err := model.Chat(ctx, req)
 	if err != nil {
-		// The first attempt at least succeeded (empty); surface the retry's
-		// error rather than silently discarding it, but let the caller
-		// decide whether "empty" or "errored on retry" matters — callers
-		// that only care about "did we get a decision" can treat either the
-		// same as chatRetryEmpty returning (nil, nil) with no fallback.
-		return nil, err
+		// The first attempt already came back empty; a failing retry is no
+		// worse than an empty one, so treat it the same way rather than
+		// surfacing an error for what the caller would handle identically
+		// either way (matches shellguard's original llmCheck behavior).
+		return nil, tokensIn, tokensOut, nil
 	}
+	tokensIn += resp2.InputTokens
+	tokensOut += resp2.OutputTokens
 	if isEmptyResponse(resp2) {
-		return nil, nil
+		return nil, tokensIn, tokensOut, nil
 	}
-	return resp2, nil
+	return resp2, tokensIn, tokensOut, nil
 }
 
 // isEmptyResponse reports whether resp carries no usable content: no tool
