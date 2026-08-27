@@ -15,7 +15,7 @@ import (
 // stage already blocked exact userDeniedCommands base-name matches before
 // llmCheck ever runs; here they're repeated so the model can also catch a
 // command that ACHIEVES THE SAME EFFECT by another route.
-func llmCheck(ctx context.Context, model llm.Model, command string, allowedDirs, deniedCommands, disabledTools []string, workingDir, securityScope string) (*Result, error) {
+func llmCheck(ctx context.Context, model llm.Model, command string, allowedDirs, deniedCommands, disabledTools []string, workingDir, securityScope string, thinking llm.ThinkingLevel) (*Result, error) {
 	var securityContext string
 	if securityScope != "" {
 		securityContext = fmt.Sprintf(`
@@ -191,7 +191,7 @@ Respond with ONLY a JSON object, nothing else:
 	// answer in prose anyway — falls back to parseVerdict. It also absorbs
 	// the empty-content/StopReason=="length" retry-once behavior this
 	// function used to implement inline.
-	d, err := llm.Ask(ctx, model, prompt, verdictTool, parseVerdictFallback)
+	d, err := llm.AskThinking(ctx, model, prompt, verdictTool, parseVerdictFallback, thinking)
 	if err != nil {
 		return &Result{Allowed: false, Reason: fmt.Sprintf("LLM check failed: %v", err)}, err
 	}

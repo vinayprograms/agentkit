@@ -41,6 +41,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -67,6 +68,55 @@ type Policy struct {
 	Tools          map[string]*ToolPolicy `toml:"tools"`
 	MCP            *MCPPolicy             `toml:"mcp"`
 	Content        *Content               `toml:"content"`
+	Shellguard     *Shellguard            `toml:"shellguard"`
+}
+
+// Shellguard tunes the shell command gate's LLM stage. Both settings are
+// deliberately the policy author's call rather than the model config's:
+// "how hard should the guard think" and "how long may it take" describe a
+// security posture, not a model preference, and a strict policy needs to
+// hold regardless of which model an operator happens to run.
+type Shellguard struct {
+	// Thinking enables reasoning in the LLM stage. Absent means off, which
+	// suits the short, shaped commands most workflows send. Turn it on when
+	// the agent writes long compound commands — pipes, chained operators,
+	// subshells — where spotting a side door is a reasoning problem.
+	//
+	// A pointer so "unset" is distinguishable from an explicit false, which
+	// matters when policies are unioned: an explicit false must be able to
+	// stand rather than being silently overridden by a default.
+	Thinking *bool `toml:"thinking"`
+	// Timeout bounds the LLM stage, as a Go duration string ("10s", "2m").
+	// Empty means no deadline. On timeout the gate falls back to the
+	// deterministic verdict it already holds and records the decision as
+	// degraded — it never blocks on the reviewer's behalf.
+	Timeout string `toml:"timeout"`
+}
+
+// ThinkingEnabled reports whether the policy asks the LLM stage to reason.
+// Absent policy or absent setting means no.
+func (p *Policy) ThinkingEnabled() bool {
+	if p == nil || p.Shellguard == nil || p.Shellguard.Thinking == nil {
+		return false
+	}
+	return *p.Shellguard.Thinking
+}
+
+// LLMTimeout returns the LLM stage deadline. Zero means no deadline. An
+// unparseable duration returns an error so a typo surfaces at load time
+// rather than silently disabling the deadline the operator asked for.
+func (p *Policy) LLMTimeout() (time.Duration, error) {
+	if p == nil || p.Shellguard == nil || p.Shellguard.Timeout == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(p.Shellguard.Timeout)
+	if err != nil {
+		return 0, fmt.Errorf("policy: shellguard.timeout %q: %w", p.Shellguard.Timeout, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("policy: shellguard.timeout %q: must not be negative", p.Shellguard.Timeout)
+	}
+	return d, nil
 }
 
 // ToolPolicy represents the policy for a specific tool.

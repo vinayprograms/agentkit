@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPolicy_LoadFromFile(t *testing.T) {
@@ -683,5 +684,79 @@ default_deny = false
 	joined := strings.Join(unknown, ",")
 	if !strings.Contains(joined, "rate_limit") || !strings.Contains(joined, "mcp.default_deny") {
 		t.Errorf("expected legacy keys reported, got %v", unknown)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestShellguard_Defaults pins the absent-policy contract: no [shellguard]
+// section means no thinking and no deadline, and asking must not panic on a
+// nil policy.
+func TestShellguard_Defaults(t *testing.T) {
+	var nilPol *Policy
+	if nilPol.ThinkingEnabled() {
+		t.Error("nil policy must not enable thinking")
+	}
+	if d, err := nilPol.LLMTimeout(); err != nil || d != 0 {
+		t.Errorf("nil policy timeout = %v, %v; want 0, nil", d, err)
+	}
+	p := New()
+	if p.ThinkingEnabled() {
+		t.Error("default policy must not enable thinking")
+	}
+	if d, err := p.LLMTimeout(); err != nil || d != 0 {
+		t.Errorf("default timeout = %v, %v; want 0, nil", d, err)
+	}
+}
+
+func TestShellguard_ThinkingAndTimeout(t *testing.T) {
+	p := New()
+	p.Shellguard = &Shellguard{Thinking: boolPtr(true), Timeout: "30s"}
+	if !p.ThinkingEnabled() {
+		t.Error("thinking = true should be reported enabled")
+	}
+	d, err := p.LLMTimeout()
+	if err != nil {
+		t.Fatalf("LLMTimeout: %v", err)
+	}
+	if d != 30*time.Second {
+		t.Errorf("timeout = %v, want 30s", d)
+	}
+}
+
+// TestShellguard_BadTimeout asserts a typo surfaces as an error rather than
+// silently disabling the deadline the operator asked for.
+func TestShellguard_BadTimeout(t *testing.T) {
+	for _, bad := range []string{"30", "abc", "-5s"} {
+		p := New()
+		p.Shellguard = &Shellguard{Timeout: bad}
+		if _, err := p.LLMTimeout(); err == nil {
+			t.Errorf("timeout %q should be rejected", bad)
+		}
+	}
+}
+
+// TestShellguard_UnionLastWins covers the merge rule, including the reason
+// Thinking is a pointer: a policy silent on thinking must not clobber an
+// explicit choice made by an earlier one.
+func TestShellguard_UnionLastWins(t *testing.T) {
+	strict := &Policy{Shellguard: &Shellguard{Thinking: boolPtr(true), Timeout: "60s"}}
+	silent := &Policy{Shellguard: &Shellguard{}}
+	quiet := &Policy{Shellguard: &Shellguard{Thinking: boolPtr(false)}}
+
+	u := NewUnion(strict, silent)
+	if !u.merged.ThinkingEnabled() {
+		t.Error("a policy silent on thinking must not reset an explicit true")
+	}
+	if u.merged.Shellguard.Timeout != "60s" {
+		t.Errorf("timeout = %q, want 60s carried through", u.merged.Shellguard.Timeout)
+	}
+
+	u2 := NewUnion(strict, quiet)
+	if u2.merged.ThinkingEnabled() {
+		t.Error("explicit false should win as the later policy")
+	}
+	if u2.merged.Shellguard.Timeout != "60s" {
+		t.Errorf("timeout = %q, want 60s preserved when later policy omits it", u2.merged.Shellguard.Timeout)
 	}
 }

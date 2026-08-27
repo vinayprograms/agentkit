@@ -60,11 +60,28 @@ type ParseFallback func(content string) (args map[string]any, ok bool)
 // unrecoverable-prose Decision except by Content=="", so check that when it
 // matters.
 func Ask(ctx context.Context, model Model, prompt string, tool ToolDef, parse ParseFallback) (*Decision, error) {
+	return AskThinking(ctx, model, prompt, tool, parse, ThinkingOff)
+}
+
+// AskThinking is Ask with the thinking level left to the caller.
+//
+// Ask forces ThinkingOff because a bounded classification does not benefit
+// from deliberation. That holds for short, shaped inputs; it does not hold
+// everywhere. A caller judging a long compound shell command — pipes,
+// chained operators, subshells — is asking a genuine reasoning question,
+// and the reviewer's answer is only as good as the reasoning behind it.
+// Such a caller passes its own level here.
+//
+// The empty-twice retry still forces thinking off regardless of level: that
+// retry exists precisely because a reasoning model can burn its whole
+// max_tokens budget on hidden thinking, so retrying with the same level
+// would repeat the failure it is meant to escape.
+func AskThinking(ctx context.Context, model Model, prompt string, tool ToolDef, parse ParseFallback, level ThinkingLevel) (*Decision, error) {
 	req := ChatRequest{
 		Messages:   []Message{{Role: "user", Content: prompt}},
 		Tools:      []ToolDef{tool},
 		ToolChoice: ToolChoiceTool(tool.Name),
-		Thinking:   ThinkingOff,
+		Thinking:   level,
 	}
 
 	resp, tokensIn, tokensOut, err := chatRetryEmpty(ctx, model, req)
@@ -105,7 +122,13 @@ func chatRetryEmpty(ctx context.Context, model Model, req ChatRequest) (*ChatRes
 		return resp, tokensIn, tokensOut, nil
 	}
 
-	resp2, err := model.Chat(ctx, req)
+	// Retry with thinking forced off: this retry exists because a reasoning
+	// model can spend its whole max_tokens budget on hidden thinking and
+	// return empty content, so repeating the request at the caller's level
+	// would just repeat that failure.
+	retry := req
+	retry.Thinking = ThinkingOff
+	resp2, err := model.Chat(ctx, retry)
 	if err != nil {
 		// The first attempt already came back empty; a failing retry is no
 		// worse than an empty one, so treat it the same way rather than
