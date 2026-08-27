@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vinayprograms/agentkit/llm"
 )
@@ -28,7 +29,7 @@ func (m *promptCapturingModel) Chat(ctx context.Context, req llm.ChatRequest) (*
 // the new data-read vs toolchain-read distinction with worked examples.
 func TestLLMPrompt_ContainsCoreRules(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "cat /etc/passwd", []string{"/workspace"}, nil, nil, "/workspace", "")
+	_, err := llmCheck(context.Background(), m, "cat /etc/passwd", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestLLMPrompt_ContainsCoreRules(t *testing.T) {
 
 func TestLLMPrompt_SecurityScopeEscapeHatchPreserved(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "nmap localhost", []string{"/workspace"}, nil, nil, "/workspace", "penetration testing of internal network")
+	_, err := llmCheck(context.Background(), m, "nmap localhost", []string{"/workspace"}, nil, nil, "/workspace", "penetration testing of internal network", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestLLMPrompt_SecurityScopeEscapeHatchPreserved(t *testing.T) {
 // route" guidance, not just enforced by the deterministic exact-match stage.
 func TestLLMPrompt_DeniedCommandsInterpolated(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, []string{"curl", "wget"}, nil, "/workspace", "")
+	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, []string{"curl", "wget"}, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestLLMPrompt_DeniedCommandsInterpolated(t *testing.T) {
 // "COMMANDS DENIED BY POLICY" section (keeps prompts clean and cheap).
 func TestLLMPrompt_NoDeniedCommands_NoDeadSection(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestLLMPrompt_NoDeniedCommands_NoDeadSection(t *testing.T) {
 // for write and read.
 func TestLLMPrompt_DisabledToolsInterpolated(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, []string{"write", "read"}, "/workspace", "")
+	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, []string{"write", "read"}, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestLLMPrompt_DisabledToolsInterpolated(t *testing.T) {
 
 func TestLLMPrompt_NoDisabledTools_NoDeadSection(t *testing.T) {
 	m := &promptCapturingModel{}
-	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	_, err := llmCheck(context.Background(), m, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,11 +216,130 @@ func TestNewGate_SetsAllFields(t *testing.T) {
 	}
 
 	// End-to-end: disabledTools reaches the LLM prompt through Check.
-	_, err := llmCheck(context.Background(), m, "ls", g.allowedDirs, g.userDeniedCommands, g.disabledTools, g.workspace, g.securityScope)
+	_, err := llmCheck(context.Background(), m, "ls", g.allowedDirs, g.userDeniedCommands, g.disabledTools, g.workspace, g.securityScope, llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(m.lastPrompt, "write") {
 		t.Error("DisabledTools from Config did not reach the LLM prompt")
 	}
+}
+
+// thinkingCapturingModel records the thinking level it was asked with and
+// always answers ALLOW.
+type thinkingCapturingModel struct {
+	levels []llm.ThinkingLevel
+}
+
+func (m *thinkingCapturingModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.levels = append(m.levels, req.Thinking)
+	return &llm.ChatResponse{Content: `{"verdict":"ALLOW"}`}, nil
+}
+
+// TestGate_Thinking_DefaultsOff pins the default: a Config that says nothing
+// about thinking gets none. Most callers send short, shaped commands, and a
+// snap verdict on those is the right trade.
+func TestGate_Thinking_DefaultsOff(t *testing.T) {
+	m := &thinkingCapturingModel{}
+	gate := NewGate(Config{Shell: Bash(), Workspace: "/workspace", AllowedDirs: []string{"/workspace"}, Model: m})
+
+	// A command the path pre-check cannot prove safe, so the LLM stage runs.
+	if err := gate.check(context.Background(), "cat ../outside.txt"); err != nil {
+		t.Fatalf("unexpected block: %v", err)
+	}
+	if len(m.levels) == 0 {
+		t.Fatal("LLM stage never ran")
+	}
+	if m.levels[0] != llm.ThinkingOff {
+		t.Errorf("default thinking = %q, want %q", m.levels[0], llm.ThinkingOff)
+	}
+}
+
+// TestGate_Thinking_Enabled asserts the Config bool actually reaches the
+// model. Judging a long compound command is a reasoning question, and a
+// policy that asks for reasoning must get it.
+func TestGate_Thinking_Enabled(t *testing.T) {
+	m := &thinkingCapturingModel{}
+	gate := NewGate(Config{Shell: Bash(), Workspace: "/workspace", AllowedDirs: []string{"/workspace"}, Model: m, Thinking: true})
+
+	if err := gate.check(context.Background(), "cat ../outside.txt"); err != nil {
+		t.Fatalf("unexpected block: %v", err)
+	}
+	if len(m.levels) == 0 {
+		t.Fatal("LLM stage never ran")
+	}
+	if m.levels[0] == llm.ThinkingOff {
+		t.Error("Thinking:true must not send ThinkingOff")
+	}
+}
+
+// slowModel blocks until ctx is done, standing in for a reviewer too slow to
+// answer within the gate's deadline.
+type slowModel struct{}
+
+func (m *slowModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestGate_LLMTimeout_FallsBackToDeterministic is the availability contract:
+// a reviewer that cannot answer in time must not be able to stall or fail
+// the caller. The LLM stage runs only on commands the deterministic stage
+// already allowed, so the gate falls back to that verdict and records the
+// decision as degraded under a step name that says the check could not run.
+func TestGate_LLMTimeout_FallsBackToDeterministic(t *testing.T) {
+	gate := NewGate(Config{
+		Shell:       Bash(),
+		Workspace:   "/workspace",
+		AllowedDirs: []string{"/workspace"},
+		Model:       &slowModel{},
+		Timeout:     20 * time.Millisecond,
+	})
+
+	var lastStep, lastReason string
+	var lastAllowed bool
+	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, in, out int) {
+		lastStep, lastAllowed, lastReason = step, allowed, reason
+	}
+
+	start := time.Now()
+	err := gate.check(context.Background(), "cat ../outside.txt")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Errorf("timeout should fall back to deterministic ALLOW, got: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("gate did not honor its deadline: took %v", elapsed)
+	}
+	if lastStep != "llm-timeout" {
+		t.Errorf("step = %q, want %q — a timeout must be distinguishable from a denial", lastStep, "llm-timeout")
+	}
+	if !lastAllowed {
+		t.Error("degraded decision should be recorded as allowed")
+	}
+	if !strings.Contains(lastReason, "falling back to deterministic ALLOW") {
+		t.Errorf("reason should record the degradation, got: %q", lastReason)
+	}
+}
+
+// TestGate_NoTimeout_NoDeadline asserts Timeout:0 leaves the caller's context
+// untouched rather than inventing a deadline of its own.
+func TestGate_NoTimeout_NoDeadline(t *testing.T) {
+	m := &deadlineCapturingModel{}
+	gate := NewGate(Config{Shell: Bash(), Workspace: "/workspace", AllowedDirs: []string{"/workspace"}, Model: m})
+
+	if err := gate.check(context.Background(), "cat ../outside.txt"); err != nil {
+		t.Fatalf("unexpected block: %v", err)
+	}
+	if m.hadDeadline {
+		t.Error("Timeout:0 must not impose a deadline")
+	}
+}
+
+type deadlineCapturingModel struct{ hadDeadline bool }
+
+func (m *deadlineCapturingModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	_, m.hadDeadline = ctx.Deadline()
+	return &llm.ChatResponse{Content: `{"verdict":"ALLOW"}`}, nil
 }

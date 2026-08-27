@@ -417,20 +417,27 @@ func TestGate_LLM_ErrorPath(t *testing.T) {
 	errorModel := &errorMockModel{}
 	gate := New(Bash(), "/workspace", []string{"/workspace"}, nil, errorModel, "")
 
-	var lastStep string
+	var lastStep, lastReason string
+	var lastAllowed bool
 	gate.OnDecision = func(command, step string, allowed bool, reason string, durationMs int64, inputTokens, outputTokens int) {
-		lastStep = step
+		lastStep, lastAllowed, lastReason = step, allowed, reason
 	}
 
-	err := gate.check(context.Background(), "some command")
-	if err == nil {
-		t.Error("expected error from LLM")
+	// A reviewer that cannot produce a verdict has not produced a denial.
+	// The LLM stage only runs on commands the deterministic stage already
+	// allowed, so the gate falls back to that verdict rather than turning a
+	// model failure into a hard block.
+	if err := gate.check(context.Background(), "some command"); err != nil {
+		t.Errorf("LLM error should fall back to deterministic ALLOW, got: %v", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), "LLM check failed") {
-		t.Errorf("expected LLM failure reason, got: %s", err.Error())
+	if lastStep != "llm-error" {
+		t.Errorf("expected last OnDecision step to be 'llm-error', got %q", lastStep)
 	}
-	if lastStep != "llm" {
-		t.Errorf("expected last OnDecision step to be 'llm', got %q", lastStep)
+	if !lastAllowed {
+		t.Error("degraded decision should be recorded as allowed")
+	}
+	if !strings.Contains(lastReason, "falling back to deterministic ALLOW") {
+		t.Errorf("reason should record the degradation, got: %q", lastReason)
 	}
 }
 

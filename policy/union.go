@@ -76,6 +76,22 @@ func build(policies []*Policy) *Policy {
 			result.Content.Security.Patterns = dedupeUnion(result.Content.Security.Patterns, pol.Content.Security.Patterns)
 			result.Content.Security.Keywords = dedupeUnion(result.Content.Security.Keywords, pol.Content.Security.Keywords)
 		}
+
+		// Shellguard: last-wins per field, and only for fields this policy
+		// actually sets. A policy that says nothing about thinking must not
+		// reset a stricter policy's explicit choice back to the default —
+		// which is why Thinking is a pointer.
+		if pol.Shellguard != nil {
+			if result.Shellguard == nil {
+				result.Shellguard = &Shellguard{}
+			}
+			if pol.Shellguard.Thinking != nil {
+				result.Shellguard.Thinking = pol.Shellguard.Thinking
+			}
+			if pol.Shellguard.Timeout != "" {
+				result.Shellguard.Timeout = pol.Shellguard.Timeout
+			}
+		}
 	}
 
 	return result

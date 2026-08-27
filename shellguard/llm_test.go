@@ -57,7 +57,7 @@ func TestParseVerdict(t *testing.T) {
 // than fail closed (P0 8c).
 func TestLLMCheck_EmptyResponse(t *testing.T) {
 	mock := &emptyResponseModel{}
-	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestLLMCheck_EmptyResponse(t *testing.T) {
 // — the retry isn't wasted.
 func TestLLMCheck_EmptyThenAnswers(t *testing.T) {
 	mock := &sequenceModel{responses: []string{"", `{"verdict":"BLOCK","reason":"writes outside workspace"}`}}
-	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func (m *sequenceModel) Chat(ctx context.Context, req llm.ChatRequest) (*llm.Cha
 
 func TestLLMCheck_BlockWithNoReason(t *testing.T) {
 	mock := &fixedResponseModel{response: `{"verdict":"BLOCK"}`}
-	result, err := llmCheck(context.Background(), mock, "rm -rf /", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "rm -rf /", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestLLMCheck_BlockWithNoReason(t *testing.T) {
 
 func TestLLMCheck_UnknownVerdict(t *testing.T) {
 	mock := &fixedResponseModel{response: "I cannot determine if this is safe"}
-	result, err := llmCheck(context.Background(), mock, "something", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "something", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestLLMCheck_WithSecurityScope(t *testing.T) {
 	// Verify security scope is included in the prompt
 	var capturedPrompt string
 	mock := &capturingModel{capturedPrompt: &capturedPrompt}
-	llmCheck(context.Background(), mock, "nmap localhost", []string{"/workspace"}, nil, nil, "/workspace", "penetration testing")
+	llmCheck(context.Background(), mock, "nmap localhost", []string{"/workspace"}, nil, nil, "/workspace", "penetration testing", llm.ThinkingOff)
 	if capturedPrompt == "" {
 		t.Fatal("prompt not captured")
 	}
@@ -152,7 +152,7 @@ func TestLLMCheck_WithSecurityScope(t *testing.T) {
 
 func TestLLMCheck_MalformedJSON(t *testing.T) {
 	mock := &fixedResponseModel{response: `{"verdict": "ALLOW", broken`}
-	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestLLMCheck_MalformedJSON(t *testing.T) {
 
 func TestLLMCheck_WrongJSONStructure(t *testing.T) {
 	mock := &fixedResponseModel{response: `{"answer": "yes", "safe": true}`}
-	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestLLMCheck_WrongJSONStructure(t *testing.T) {
 
 func TestLLMCheck_HTMLResponse(t *testing.T) {
 	mock := &fixedResponseModel{response: `<html><body>Error 503</body></html>`}
-	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "ls", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestLLMCheck_HTMLResponse(t *testing.T) {
 
 func TestLLMCheck_LLMRefusal(t *testing.T) {
 	mock := &fixedResponseModel{response: "I'm sorry, I cannot evaluate shell commands for security purposes."}
-	result, err := llmCheck(context.Background(), mock, "rm -rf /", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "rm -rf /", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestLLMCheck_LLMRefusal(t *testing.T) {
 
 func TestLLMCheck_Allow(t *testing.T) {
 	mock := &fixedResponseModel{response: `{"verdict":"ALLOW"}`}
-	result, err := llmCheck(context.Background(), mock, "ls /workspace", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "ls /workspace", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestLLMCheck_ReasonTruncated(t *testing.T) {
 	mock := &sequenceModel{responses: []string{
 		fmt.Sprintf(`{"verdict":"BLOCK","reason":%q}`, longReason),
 	}}
-	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, nil, nil, "/workspace", "")
+	result, err := llmCheck(context.Background(), mock, "rm -rf /etc", []string{"/workspace"}, nil, nil, "/workspace", "", llm.ThinkingOff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
