@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -126,6 +127,36 @@ type ollamaChatResponse struct {
 
 // Chat implements the Provider interface.
 func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	ollamaReq := p.buildRequest(req)
+
+	// Make request with retry
+	resp, err := withRetry(ctx, p.retry, "ollama-cloud", func() (*ollamaChatResponse, error) {
+		return p.doRequest(ctx, ollamaReq)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return fromOllamaResponse(resp), nil
+}
+
+// Stream implements Streamer for the Ollama Cloud provider using the native
+// /api/chat NDJSON streaming mode.
+func (p *ollamaCloudModel) Stream(ctx context.Context, req ChatRequest, on func(StreamEvent) error) (*ChatResponse, error) {
+	ollamaReq := p.buildRequest(req)
+	ollamaReq.Stream = true
+
+	wrapped, delivered := deliveryTracker(on)
+
+	return withStreamRetry(ctx, p.retry, "ollama-cloud", delivered, func() (*ChatResponse, error) {
+		return p.doStreamingRequest(ctx, ollamaReq, wrapped)
+	})
+}
+
+// buildRequest converts a ChatRequest into an Ollama chat request, shared by
+// Chat and Stream. Stream is left false; callers that want streaming set it
+// after calling this.
+func (p *ollamaCloudModel) buildRequest(req ChatRequest) ollamaChatRequest {
 	messages := toOllamaMessages(req.Messages)
 	tools := toOllamaTools(req.Tools)
 
@@ -146,7 +177,12 @@ func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 		}
 	}
 
-	ollamaReq := ollamaChatRequest{
+	// req.ToolChoice is intentionally not wired here: Ollama's native
+	// /api/chat has no documented tool_choice/forced-tool-call field (see
+	// https://docs.ollama.com/capabilities/tool-calling, checked 2026-08-23).
+	// Any ToolChoice degrades to Ollama's own auto behavior; callers must
+	// keep a prose fallback for this provider.
+	return ollamaChatRequest{
 		Model:    p.model,
 		Messages: messages,
 		Tools:    tools,
@@ -156,21 +192,6 @@ func (p *ollamaCloudModel) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 			NumPredict: maxTokens,
 		},
 	}
-	// req.ToolChoice is intentionally not wired here: Ollama's native
-	// /api/chat has no documented tool_choice/forced-tool-call field (see
-	// https://docs.ollama.com/capabilities/tool-calling, checked 2026-08-23).
-	// Any ToolChoice degrades to Ollama's own auto behavior; callers must
-	// keep a prose fallback for this provider.
-
-	// Make request with retry
-	resp, err := withRetry(ctx, p.retry, "ollama-cloud", func() (*ollamaChatResponse, error) {
-		return p.doRequest(ctx, ollamaReq)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return fromOllamaResponse(resp), nil
 }
 
 func fromOllamaResponse(resp *ollamaChatResponse) *ChatResponse {
@@ -219,14 +240,7 @@ func (p *ollamaCloudModel) doRequest(ctx context.Context, req ollamaChatRequest)
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		// Check for specific error types
-		if httpResp.StatusCode == 429 {
-			return nil, fmt.Errorf("rate limit exceeded: %s", string(respBody))
-		}
-		if httpResp.StatusCode == 402 {
-			return nil, fmt.Errorf("payment required: %s", string(respBody))
-		}
-		return nil, fmt.Errorf("ollama API error (status %d): %s", httpResp.StatusCode, string(respBody))
+		return nil, ollamaStatusError(httpResp.StatusCode, respBody)
 	}
 
 	var resp ollamaChatResponse
@@ -235,6 +249,108 @@ func (p *ollamaCloudModel) doRequest(ctx context.Context, req ollamaChatRequest)
 	}
 
 	return &resp, nil
+}
+
+// ollamaStatusError classifies a non-200 Ollama HTTP response the same way
+// for both the plain and streaming request paths.
+func ollamaStatusError(status int, body []byte) error {
+	if status == 429 {
+		return fmt.Errorf("rate limit exceeded: %s", string(body))
+	}
+	if status == 402 {
+		return fmt.Errorf("payment required: %s", string(body))
+	}
+	return fmt.Errorf("ollama API error (status %d): %s", status, string(body))
+}
+
+// doStreamingRequest executes a single streaming request against Ollama's
+// native NDJSON /api/chat mode: one JSON object per line, message.content
+// and message.thinking carrying incremental fragments, and the final line
+// (done=true) carrying the finish reason and eval counts.
+func (p *ollamaCloudModel) doStreamingRequest(ctx context.Context, req ollamaChatRequest, on func(StreamEvent) error) (*ChatResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	httpResp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		return nil, ollamaStatusError(httpResp.StatusCode, respBody)
+	}
+
+	result := &ChatResponse{}
+	scanner := bufio.NewScanner(httpResp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+
+		var chunk ollamaChatResponse
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			return nil, fmt.Errorf("failed to parse stream chunk: %w", err)
+		}
+
+		if chunk.Model != "" {
+			result.Model = chunk.Model
+		}
+
+		if chunk.Message.Content != "" {
+			result.Content += chunk.Message.Content
+			if on != nil {
+				if err := on(StreamEvent{Type: StreamContent, Text: chunk.Message.Content}); err != nil {
+					return nil, errStreamCallback(err)
+				}
+			}
+		}
+
+		if chunk.Message.Thinking != "" {
+			result.Thinking += chunk.Message.Thinking
+			if on != nil {
+				if err := on(StreamEvent{Type: StreamThinking, Text: chunk.Message.Thinking}); err != nil {
+					return nil, errStreamCallback(err)
+				}
+			}
+		}
+
+		// Tool calls are never surfaced as stream events; Ollama sends
+		// them whole (not as incremental fragments), so buffer as-is.
+		for i, tc := range chunk.Message.ToolCalls {
+			result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
+				ID:   fmt.Sprintf("call_%d", i),
+				Name: tc.Function.Name,
+				Args: tc.Function.Arguments,
+			})
+		}
+
+		if chunk.Done {
+			result.StopReason = chunk.DoneReason
+			result.InputTokens = chunk.PromptEvalCount
+			result.OutputTokens = chunk.EvalCount
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("stream read error: %w", err)
+	}
+
+	return result, nil
 }
 
 // toOllamaMessages converts generic messages to Ollama format.

@@ -56,3 +56,25 @@ func (t *tracedModel) Chat(ctx context.Context, req ChatRequest) (resp *ChatResp
 	}
 	return resp, err
 }
+
+// Stream implements Streamer for every model constructed via New: it
+// delegates to the inner model's own Stream when available, or to the
+// Chat-based fallback otherwise (the same capability pattern as the
+// package-level Stream helper). Exactly one "stream" span and one set of
+// token-count attributes are recorded per call, not per delta.
+func (t *tracedModel) Stream(ctx context.Context, req ChatRequest, on func(StreamEvent) error) (resp *ChatResponse, err error) {
+	ctx, end := trace(ctx, "stream",
+		attribute.String("llm.provider", t.provider),
+		attribute.String("llm.model", t.model),
+	)
+	defer end(&err)
+
+	resp, err = Stream(ctx, t.inner, req, on)
+	if err == nil && resp != nil {
+		otrace.SpanFromContext(ctx).SetAttributes(
+			attribute.Int("llm.tokens.input", resp.InputTokens),
+			attribute.Int("llm.tokens.output", resp.OutputTokens),
+		)
+	}
+	return resp, err
+}

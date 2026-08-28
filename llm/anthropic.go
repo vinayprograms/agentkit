@@ -78,6 +78,26 @@ func newAnthropic(cfg anthropicConfig) (*anthropicModel, error) {
 
 // Chat implements the Provider interface.
 func (p *anthropicModel) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	params := p.buildParams(req)
+	return p.chatStreaming(ctx, params)
+}
+
+// Stream implements Streamer for the Anthropic provider. The underlying SSE
+// loop is the same one Chat uses (Anthropic requires streaming for extended
+// thinking); the only difference is that text/thinking deltas are also
+// delivered to on as they arrive.
+func (p *anthropicModel) Stream(ctx context.Context, req ChatRequest, on func(StreamEvent) error) (*ChatResponse, error) {
+	params := p.buildParams(req)
+	wrapped, delivered := deliveryTracker(on)
+
+	return withStreamRetry(ctx, p.retry, "anthropic", delivered, func() (*ChatResponse, error) {
+		return p.doStreamingRequest(ctx, params, wrapped)
+	})
+}
+
+// buildParams converts a ChatRequest into Anthropic SDK request params,
+// shared by Chat and Stream.
+func (p *anthropicModel) buildParams(req ChatRequest) anthropic.MessageNewParams {
 	systemPrompt, messages := toAnthropicMessages(req.Messages)
 	tools := toAnthropicTools(req.Tools)
 
@@ -109,7 +129,7 @@ func (p *anthropicModel) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	applyAnthropicThinking(p.thinking, req, &params, &maxTokens)
 	applyAnthropicToolChoice(req.ToolChoice, &params)
 
-	return p.chatStreaming(ctx, params)
+	return params
 }
 
 // toAnthropicMessages converts generic messages to Anthropic format,
@@ -231,101 +251,134 @@ func (p *anthropicModel) chatStreaming(
 	params anthropic.MessageNewParams,
 ) (*ChatResponse, error) {
 	return withRetry(ctx, p.retry, "anthropic", func() (*ChatResponse, error) {
-		return p.doStreamingRequest(ctx, params)
+		return p.doStreamingRequest(ctx, params, nil)
 	})
 }
 
-// doStreamingRequest executes a single streaming request.
+// anthropicBlockState tracks one in-progress content block by index while
+// consuming the SSE event sequence.
+type anthropicBlockState struct {
+	blockType   string // "text", "thinking", "tool_use"
+	toolID      string
+	toolName    string
+	textBuilder strings.Builder
+}
+
+// processAnthropicStreamEvent applies one SDK stream event to the running
+// response state, mutating result and blocks in place. When on is non-nil,
+// text and thinking deltas are also delivered to it as they arrive;
+// tool-use deltas are never surfaced, only buffered into blocks and
+// finalized into result.ToolCalls at content_block_stop. It is factored out
+// of doStreamingRequest so it can be unit-tested with synthetic SDK events,
+// without a network connection.
+func processAnthropicStreamEvent(
+	event anthropic.MessageStreamEventUnion,
+	blocks map[int64]*anthropicBlockState,
+	result *ChatResponse,
+	on func(StreamEvent) error,
+) error {
+	switch event.Type {
+	case "message_start":
+		msg := event.AsMessageStart()
+		result.Model = string(msg.Message.Model)
+		result.InputTokens = int(msg.Message.Usage.InputTokens)
+		result.CacheCreationInputTokens = int(msg.Message.Usage.CacheCreationInputTokens)
+		result.CacheReadInputTokens = int(msg.Message.Usage.CacheReadInputTokens)
+
+	case "content_block_start":
+		evt := event.AsContentBlockStart()
+		cb := evt.ContentBlock
+		state := &anthropicBlockState{blockType: cb.Type}
+
+		switch cb.Type {
+		case "tool_use":
+			state.toolID = cb.ID
+			state.toolName = cb.Name
+		}
+
+		blocks[evt.Index] = state
+
+	case "content_block_delta":
+		evt := event.AsContentBlockDelta()
+		state, ok := blocks[evt.Index]
+		if !ok {
+			return nil
+		}
+
+		delta := evt.Delta
+		switch delta.Type {
+		case "text_delta":
+			state.textBuilder.WriteString(delta.Text)
+			if delta.Text != "" && on != nil {
+				if err := on(StreamEvent{Type: StreamContent, Text: delta.Text}); err != nil {
+					return errStreamCallback(err)
+				}
+			}
+		case "thinking_delta":
+			state.textBuilder.WriteString(delta.Thinking)
+			if delta.Thinking != "" && on != nil {
+				if err := on(StreamEvent{Type: StreamThinking, Text: delta.Thinking}); err != nil {
+					return errStreamCallback(err)
+				}
+			}
+		case "input_json_delta":
+			// Tool-call argument fragments are buffered only; never
+			// surfaced as stream events (see Streamer doc comment).
+			state.textBuilder.WriteString(delta.PartialJSON)
+		}
+
+	case "content_block_stop":
+		evt := event.AsContentBlockStop()
+		state, ok := blocks[evt.Index]
+		if !ok {
+			return nil
+		}
+
+		text := state.textBuilder.String()
+		switch state.blockType {
+		case "text":
+			result.Content += text
+		case "thinking":
+			result.Thinking += text
+		case "tool_use":
+			var args map[string]interface{}
+			if text != "" {
+				if err := json.Unmarshal([]byte(text), &args); err != nil {
+					return fmt.Errorf("failed to parse tool call arguments for %s: %w", state.toolName, err)
+				}
+			}
+			result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
+				ID:   state.toolID,
+				Name: state.toolName,
+				Args: args,
+			})
+		}
+
+	case "message_delta":
+		evt := event.AsMessageDelta()
+		result.StopReason = string(evt.Delta.StopReason)
+		result.OutputTokens = int(evt.Usage.OutputTokens)
+	}
+	return nil
+}
+
+// doStreamingRequest executes a single streaming request. on is nil for the
+// plain Chat path (no deltas to deliver) and non-nil for Stream.
 func (p *anthropicModel) doStreamingRequest(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
+	on func(StreamEvent) error,
 ) (*ChatResponse, error) {
 	stream := p.client.Messages.NewStreaming(ctx, params)
 	defer stream.Close()
 
 	result := &ChatResponse{}
-
-	// Track content blocks by index
-	type blockState struct {
-		blockType   string // "text", "thinking", "tool_use"
-		toolID      string
-		toolName    string
-		textBuilder strings.Builder
-	}
-	blocks := make(map[int64]*blockState)
+	blocks := make(map[int64]*anthropicBlockState)
 
 	for stream.Next() {
 		event := stream.Current()
-
-		switch event.Type {
-		case "message_start":
-			msg := event.AsMessageStart()
-			result.Model = string(msg.Message.Model)
-			result.InputTokens = int(msg.Message.Usage.InputTokens)
-			result.CacheCreationInputTokens = int(msg.Message.Usage.CacheCreationInputTokens)
-			result.CacheReadInputTokens = int(msg.Message.Usage.CacheReadInputTokens)
-
-		case "content_block_start":
-			evt := event.AsContentBlockStart()
-			cb := evt.ContentBlock
-			state := &blockState{blockType: cb.Type}
-
-			switch cb.Type {
-			case "tool_use":
-				state.toolID = cb.ID
-				state.toolName = cb.Name
-			}
-
-			blocks[evt.Index] = state
-
-		case "content_block_delta":
-			evt := event.AsContentBlockDelta()
-			state, ok := blocks[evt.Index]
-			if !ok {
-				continue
-			}
-
-			delta := evt.Delta
-			switch delta.Type {
-			case "text_delta":
-				state.textBuilder.WriteString(delta.Text)
-			case "thinking_delta":
-				state.textBuilder.WriteString(delta.Thinking)
-			case "input_json_delta":
-				state.textBuilder.WriteString(delta.PartialJSON)
-			}
-
-		case "content_block_stop":
-			evt := event.AsContentBlockStop()
-			state, ok := blocks[evt.Index]
-			if !ok {
-				continue
-			}
-
-			text := state.textBuilder.String()
-			switch state.blockType {
-			case "text":
-				result.Content += text
-			case "thinking":
-				result.Thinking += text
-			case "tool_use":
-				var args map[string]interface{}
-				if text != "" {
-					if err := json.Unmarshal([]byte(text), &args); err != nil {
-						return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", state.toolName, err)
-					}
-				}
-				result.ToolCalls = append(result.ToolCalls, ToolCallResponse{
-					ID:   state.toolID,
-					Name: state.toolName,
-					Args: args,
-				})
-			}
-
-		case "message_delta":
-			evt := event.AsMessageDelta()
-			result.StopReason = string(evt.Delta.StopReason)
-			result.OutputTokens = int(evt.Usage.OutputTokens)
+		if err := processAnthropicStreamEvent(event, blocks, result, on); err != nil {
+			return nil, err
 		}
 	}
 
