@@ -5,6 +5,28 @@ All notable changes to agentkit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-08-28
+
+### Added
+
+- `llm`: streaming chat. A new optional capability interface `Streamer` —
+  `Stream(ctx, req, on func(StreamEvent) error) (*ChatResponse, error)` —
+  delivers typed deltas (`StreamContent`, `StreamThinking`) through the
+  callback and still returns the same aggregated `*ChatResponse` that
+  `Chat` would, so callers may ignore deltas entirely. The package-level
+  `llm.Stream(ctx, m, req, on)` helper works with any `Model`, falling
+  back to one-shot `Chat` (synthesizing thinking-then-content events) for
+  providers without native streaming.
+- `llm`: native streaming implemented for `anthropic`, `ollama-cloud`,
+  and the `openai-compat` family (groq, mistral, xai, openrouter,
+  ollama/ollama-local, lmstudio, cerebras, litellm). `openai` and
+  `google` use the one-shot fallback for now.
+- Contract notes: the callback is invoked synchronously and only with
+  non-empty text; a callback error aborts the stream and is returned
+  wrapped; tool-call deltas are never surfaced as events (they arrive in
+  the final response); retries stop being legal the moment the first
+  delta has been delivered, so streamed text is never double-delivered.
+
 ## [1.2.0] - 2026-06-12
 
 ### Changed (breaking)
